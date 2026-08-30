@@ -9,9 +9,7 @@ import { HighlightMatch } from '../common/HighlightMatch';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
 import { InfoPopover } from '../common/InfoPopover';
 import { exportHistoryToExcel } from '../../services';
-import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
-import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { UserBadge } from '../common/UserBadge';
 import { usePermission } from '../../hooks/usePermission';
 import { SheetColumnFilter } from '../common/SheetColumnFilters';
@@ -23,7 +21,7 @@ import { buildConingReceiveLabelData, buildHoloReceiveLabelData } from '../../ut
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 
 export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWrite = false }) {
-    const { db, process, refreshProcessData, refreshModuleData, patchDb, subscribeInvalidation } = useInventory();
+    const { db, process, refreshProcessData, refreshModuleData, emitInvalidation, subscribeInvalidation } = useInventory();
     const { canDelete: canDeleteInbound } = usePermission('inbound');
     const canDeleteCutterPurchase = canDelete && canDeleteInbound;
     const [activeTab, setActiveTab] = useState('history');
@@ -50,7 +48,6 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     const scrollRootRef = useRef(null);
     const lastV2RefreshAtRef = useRef(0);
 
-    const workerNameById = useMemo(() => new Map((db.workers || []).map(w => [w.id, w.name])), [db.workers]);
     const boxById = useMemo(() => new Map((db.boxes || []).map(b => [b.id, b])), [db.boxes]);
     const bobbinById = useMemo(() => new Map((db.bobbins || []).map(b => [b.id, b])), [db.bobbins]);
     const rollTypeById = useMemo(() => new Map((db.rollTypes || []).map(r => [r.id, r])), [db.rollTypes]);
@@ -66,9 +63,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
     const getConingMachineName = (row) => {
         if (row.machineNo) return row.machineNo;
         if (row.machineName) return row.machineName;
-        // Legacy fallback for rows that did not come from the v2 history endpoint.
-        if (row.issueId) {
-            const issue = db.issue_to_coning_machine?.find(i => i.id === row.issueId);
+        if (row.issue) {
+            const issue = row.issue;
+            if (issue?.machine?.name) return issue.machine.name;
             if (issue && issue.machineId) {
                 const machine = db.machines?.find(m => m.id === issue.machineId);
                 return machine ? machine.name : '—';
@@ -236,74 +233,87 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         });
     };
 
+    const receivePieceIds = (row) => {
+        if (Array.isArray(row?.computedPieceIds) && row.computedPieceIds.length > 0) return row.computedPieceIds;
+        if (Array.isArray(row?.pieceIdsList) && row.pieceIdsList.length > 0) return row.pieceIdsList;
+        return row?.pieceId ? [row.pieceId] : [];
+    };
+
     const resolveHoloPieceOptions = (row) => {
         if (!row) return [];
-        const ids = [];
-        if (Array.isArray(row.computedPieceIds)) ids.push(...row.computedPieceIds);
-        if (Array.isArray(row.pieceIdsList)) ids.push(...row.pieceIdsList);
-        if (row.pieceId) ids.push(row.pieceId);
-        return buildPieceOptions(ids);
+        return buildPieceOptions(receivePieceIds(row));
     };
 
     const resolveConingIssue = (row) => {
-        if (!row?.issueId) return row?.issue || null;
-        return db.issue_to_coning_machine?.find(i => i.id === row.issueId) || row.issue || null;
+        return row?.issue || null;
     };
 
-    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
-    const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
+    const resolveReceiveIssue = (row) => row?.issue || null;
 
-    // Legacy rows (db.receive_from_*) generally don't have flattened v2 fields and may not include `issue.*` relations.
-    // Precompute issue-level names once to keep legacy filtering fast and correct.
-    const legacyIssueNamesByIssueId = useMemo(() => {
-        const map = new Map();
-        const itemNameById = new Map((db.items || []).map((i) => [i.id, i.name || '']));
-        const cutNameById = new Map((db.cuts || []).map((c) => [c.id, c.name || '']));
-        const yarnNameById = new Map((db.yarns || []).map((y) => [y.id, y.name || '']));
-        const twistNameById = new Map((db.twists || []).map((t) => [t.id, t.name || '']));
-
-        const fillDirect = (issue, base = {}) => {
-            if (!issue) return base;
-            return {
-                itemName: base.itemName || (issue.itemId ? itemNameById.get(issue.itemId) : '') || '',
-                cutName: base.cutName || (issue.cutId ? cutNameById.get(issue.cutId) : '') || '',
-                yarnName: base.yarnName || (issue.yarnId ? yarnNameById.get(issue.yarnId) : '') || '',
-                twistName: base.twistName || (issue.twistId ? twistNameById.get(issue.twistId) : '') || '',
-            };
+    const resolveReceiveNames = (row, stage = process) => {
+        const issue = resolveReceiveIssue(row, stage);
+        return {
+            issue,
+            itemName: row?.itemName || issue?.itemName || issue?.item?.name || (issue?.itemId ? db.items?.find(i => i.id === issue.itemId)?.name : '') || '',
+            cutName: row?.cutName || issue?.cut?.name || (issue?.cutId ? db.cuts?.find(c => c.id === issue.cutId)?.name : '') || '',
+            yarnName: row?.yarnName || issue?.yarn?.name || (issue?.yarnId ? db.yarns?.find(y => y.id === issue.yarnId)?.name : '') || '',
+            twistName: row?.twistName || issue?.twist?.name || (issue?.twistId ? db.twists?.find(t => t.id === issue.twistId)?.name : '') || '',
         };
+    };
 
-        if (process === 'holo') {
-            for (const issue of db.issue_to_holo_machine || []) {
-                if (!issue?.id) continue;
-                let names = {};
-                try {
-                    const resolved = holoTraceContext ? resolveHoloTrace(issue, holoTraceContext) : null;
-                    names = {
-                        cutName: resolved?.cutName || '',
-                        yarnName: resolved?.yarnName || '',
-                        twistName: resolved?.twistName || '',
-                    };
-                } catch { }
-                map.set(issue.id, fillDirect(issue, names));
-            }
-        } else if (process === 'coning') {
-            for (const issue of db.issue_to_coning_machine || []) {
-                if (!issue?.id) continue;
-                let names = {};
-                try {
-                    const resolved = traceContext ? resolveConingTrace(issue, traceContext) : null;
-                    names = {
-                        cutName: resolved?.cutName || '',
-                        yarnName: resolved?.yarnName || '',
-                        twistName: resolved?.twistName || '',
-                    };
-                } catch { }
-                map.set(issue.id, fillDirect(issue, names));
-            }
-        }
+    const buildRowScopedHoloLabelData = (row) => {
+        const names = resolveReceiveNames(row, 'holo');
+        const data = buildHoloReceiveLabelData({
+            db,
+            row,
+            holoTraceContext: {
+                cutterRowById: new Map(),
+                cutsById: new Map((db.cuts || []).map(c => [c.id, c])),
+                yarnsById: new Map((db.yarns || []).map(y => [y.id, y])),
+                twistsById: new Map((db.twists || []).map(t => [t.id, t])),
+            },
+        });
+        return {
+            ...data,
+            itemName: names.itemName || data.itemName,
+            cut: names.cutName || data.cut,
+            yarnName: names.yarnName || data.yarnName,
+            twist: names.twistName || data.twist,
+            shift: row?.shift || names.issue?.shift || data.shift,
+            lotNo: row?.lotNo || names.issue?.lotLabel || names.issue?.lotNo || data.lotNo,
+        };
+    };
 
-        return map;
-    }, [db.items, db.cuts, db.yarns, db.twists, db.issue_to_holo_machine, db.issue_to_coning_machine, process, traceContext, holoTraceContext]);
+    const buildRowScopedConingLabelData = (row) => {
+        const names = resolveReceiveNames(row, 'coning');
+        const data = buildConingReceiveLabelData({
+            db,
+            row,
+            coningTraceContext: {
+                holoRowsById: new Map(),
+                coningRowsById: new Map(),
+                holoIssueById: new Map(),
+                coningIssueById: new Map(),
+                cutterRowById: new Map(),
+                cutsById: new Map((db.cuts || []).map(c => [c.id, c])),
+                yarnsById: new Map((db.yarns || []).map(y => [y.id, y])),
+                twistsById: new Map((db.twists || []).map(t => [t.id, t])),
+                rollTypesById: new Map((db.rollTypes || db.roll_types || []).map(r => [r.id, r])),
+            },
+        });
+        return {
+            ...data,
+            itemName: names.itemName || data.itemName,
+            cut: names.cutName || data.cut,
+            yarnName: names.yarnName || data.yarnName,
+            twist: names.twistName || data.twist,
+            rollType: row?.rollTypeName || data.rollType,
+            coneType: row?.coneTypeName || data.coneType,
+            wrapperName: row?.wrapperName || data.wrapperName,
+            shift: row?.shift || names.issue?.shift || data.shift,
+            lotNo: row?.lotNo || names.issue?.lotLabel || names.issue?.lotNo || data.lotNo,
+        };
+    };
 
     const filterColumns = useMemo(() => {
         const base = [
@@ -318,7 +328,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             return [
                 ...base,
                 { id: 'piece', label: 'Piece', kind: 'values', getValue: (r) => r.pieceId || '' },
-                { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => r.machineNo || '' },
+                { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => r.machineNo || r.machineName || r.machine?.name || '' },
                 { id: 'employee', label: 'Employee', kind: 'values', getValue: (r) => r.operator?.name || r.employee || '' },
                 { id: 'netWt', label: 'Net Wt (kg)', kind: 'number', getValue: (r) => r.netWt || 0 },
                 { id: 'bobbinQty', label: 'Bobbin Qty', kind: 'number', getValue: (r) => r.bobbinQuantity || 0 },
@@ -347,32 +357,33 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         if (process === 'holo') {
             return [
                 ...base,
-                { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.computedPieceIds) ? r.computedPieceIds.join(', ') : (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : (r.pieceId || ''))) },
+                { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => receivePieceIds(r).join(', ') },
                 { id: 'rolls', label: 'Rolls', kind: 'number', getValue: (r) => r.rollCount || 0 },
                 { id: 'weight', label: 'Weight (kg)', kind: 'number', getValue: (r) => r.rollWeight || calcNetFromGrossTare(r) || 0 },
-                { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => r.machineNo || '' },
+                { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => r.machineNo || r.machineName || r.machine?.name || '' },
                 { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => r.operator?.name || '' },
                 { id: 'helper', label: 'Helper', kind: 'values', getValue: (r) => r.helper?.name || '' },
                 {
-                    id: 'item', label: 'Item', kind: 'values', getValue: (r) => (r.itemName || legacyIssueNamesByIssueId.get(r.issueId)?.itemName || '')
+                    id: 'item', label: 'Item', kind: 'values', getValue: (r) => resolveReceiveNames(r, 'holo').itemName
                 },
                 {
-                    id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (r.cutName || legacyIssueNamesByIssueId.get(r.issueId)?.cutName || '')
+                    id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => resolveReceiveNames(r, 'holo').cutName
                 },
                 {
-                    id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => (r.yarnName || legacyIssueNamesByIssueId.get(r.issueId)?.yarnName || '')
+                    id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => resolveReceiveNames(r, 'holo').yarnName
                 },
                 {
-                    id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (r.twistName || legacyIssueNamesByIssueId.get(r.issueId)?.twistName || '')
+                    id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => resolveReceiveNames(r, 'holo').twistName
                 },
             ];
         }
 
         return [
             ...base,
-            { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => (Array.isArray(r.computedPieceIds) ? r.computedPieceIds.join(', ') : (Array.isArray(r.pieceIdsList) ? r.pieceIdsList.join(', ') : '')) },
+            { id: 'piece', label: 'Piece', kind: 'text', getValue: (r) => receivePieceIds(r).join(', ') },
             {
                 id: 'coneType', label: 'Cone Type', kind: 'values', getValue: (r) => {
+                    if (r.coneTypeName) return r.coneTypeName;
                     const issue = resolveConingIssue(r);
                     const coneType = resolveConingConeType(issue);
                     return coneType?.name || '';
@@ -380,6 +391,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             },
             {
                 id: 'perCone', label: 'Per Cone (g)', kind: 'number', getValue: (r) => {
+                    if (r.perConeTargetG != null) return r.perConeTargetG;
                     const issue = resolveConingIssue(r);
                     return issue?.requiredPerConeNetWeight || 0;
                 }
@@ -398,19 +410,19 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             { id: 'machine', label: 'Machine', kind: 'values', getValue: (r) => getConingMachineName(r) || '' },
             { id: 'operator', label: 'Operator', kind: 'values', getValue: (r) => r.operator?.name || '' },
             {
-                id: 'item', label: 'Item', kind: 'values', getValue: (r) => (r.itemName || legacyIssueNamesByIssueId.get(r.issueId)?.itemName || '')
+                id: 'item', label: 'Item', kind: 'values', getValue: (r) => resolveReceiveNames(r, 'coning').itemName
             },
             {
-                id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => (r.cutName || legacyIssueNamesByIssueId.get(r.issueId)?.cutName || '')
+                id: 'cut', label: 'Cut', kind: 'values', getValue: (r) => resolveReceiveNames(r, 'coning').cutName
             },
             {
-                id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => (r.yarnName || legacyIssueNamesByIssueId.get(r.issueId)?.yarnName || '')
+                id: 'yarn', label: 'Yarn', kind: 'values', getValue: (r) => resolveReceiveNames(r, 'coning').yarnName
             },
             {
-                id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => (r.twistName || legacyIssueNamesByIssueId.get(r.issueId)?.twistName || '')
+                id: 'twist', label: 'Twist', kind: 'values', getValue: (r) => resolveReceiveNames(r, 'coning').twistName
             },
         ];
-    }, [process, db, traceContext, holoTraceContext, getConingMachineName, resolveConingIssue, legacyIssueNamesByIssueId]);
+    }, [process, db]);
 
     const showHistory = process !== 'cutter' || activeTab === 'history';
     const showChallans = process === 'cutter' && activeTab === 'challan';
@@ -464,6 +476,13 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         lastV2RefreshAtRef.current = now;
         v2List.refresh();
     };
+    const invalidateReceiveMutation = (source, rowId) => {
+        emitInvalidation([
+            INVENTORY_INVALIDATION_KEYS.receiveHistory(process),
+            INVENTORY_INVALIDATION_KEYS.issueOnMachine(process),
+            INVENTORY_INVALIDATION_KEYS.issueHistory(process),
+        ], { source, rowId });
+    };
 
     useEffect(() => {
         const key = INVENTORY_INVALIDATION_KEYS.receiveHistory(process);
@@ -495,20 +514,30 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         return { netWt: 0, bobbinQty: 0, rolls: 0, cones: Number(s.cones || 0), weight: Number(s.weight || 0) };
     }, [v2List.summary, process, showHistory]);
 
-    const [v2FacetsById, setV2FacetsById] = useState({});
-    useEffect(() => {
-        setV2FacetsById({});
-    }, [process]);
+    const [v2FacetsByCacheKey, setV2FacetsByCacheKey] = useState({});
+    const facetCacheKeyFor = (field) => JSON.stringify({
+        process,
+        field,
+        search: debouncedSearchTerm,
+        dateFrom: v2DateFrom,
+        dateTo: v2DateTo,
+        // The opened field is deliberately excluded because its own selected values
+        // do not constrain the options shown in that menu.
+        filters: (v2Filters || []).filter((filter) => filter?.field !== field),
+    });
 
     useEffect(() => {
         if (!showHistory) return;
         if (!openFilterId) return;
         const col = filterColumns.find(c => c.id === openFilterId);
         if (!col || col.kind !== 'values') return;
+        const cacheKey = facetCacheKeyFor(openFilterId);
+        if (Array.isArray(v2FacetsByCacheKey[cacheKey])) return;
         let cancelled = false;
         (async () => {
             try {
                 const res = await v2.getV2ReceiveHistoryFacets(process, {
+                    field: openFilterId,
                     search: debouncedSearchTerm,
                     dateFrom: v2DateFrom,
                     dateTo: v2DateTo,
@@ -517,56 +546,21 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 });
                 const next = res?.facets?.[openFilterId];
                 if (!cancelled && Array.isArray(next)) {
-                    setV2FacetsById((prev) => ({ ...(prev || {}), [openFilterId]: next }));
+                    setV2FacetsByCacheKey((prev) => ({ ...(prev || {}), [cacheKey]: next }));
                 }
             } catch (_) { }
         })();
         return () => { cancelled = true; };
-    }, [showHistory, openFilterId, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
-
-    // Prefetch the most-used value facets so opening the filter doesn't briefly show "No data".
-    useEffect(() => {
-        if (!showHistory) return;
-        let cancelled = false;
-        const fields = process === 'cutter' ? ['item', 'cut', 'machine', 'employee', 'shift'] : ['item', 'cut', 'yarn', 'twist', 'shift', ...(process === 'coning' ? ['coneType'] : [])];
-        (async () => {
-            try {
-                const res = await Promise.all(fields.map(async (field) => {
-                    if (Array.isArray(v2FacetsById?.[field])) return null;
-                    const col = filterColumns.find(c => c.id === field);
-                    if (!col || col.kind !== 'values') return null;
-                    const out = await v2.getV2ReceiveHistoryFacets(process, {
-                        search: debouncedSearchTerm,
-                        dateFrom: v2DateFrom,
-                        dateTo: v2DateTo,
-                        filters: JSON.stringify(v2Filters || []),
-                        excludeField: field,
-                    });
-                    return { field, values: out?.facets?.[field] };
-                }));
-                if (cancelled) return;
-                const patch = {};
-                for (const item of res) {
-                    if (!item) continue;
-                    if (Array.isArray(item.values)) patch[item.field] = item.values;
-                }
-                if (Object.keys(patch).length) {
-                    setV2FacetsById((prev) => ({ ...(prev || {}), ...patch }));
-                }
-            } catch (_) { }
-        })();
-        return () => { cancelled = true; };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [showHistory, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns]);
+    }, [showHistory, openFilterId, process, debouncedSearchTerm, v2DateFrom, v2DateTo, v2Filters, filterColumns, v2FacetsByCacheKey]);
 
     const columnFor = (id) => {
         const col = filterColumns.find(c => c.id === id);
         if (!col) return col;
         if (col.kind !== 'values') return col;
-        const facetOptions = v2FacetsById?.[id];
+        const facetOptions = v2FacetsByCacheKey[facetCacheKeyFor(id)];
         // While the server facet request is in flight, keep the values from
         // the loaded page instead of replacing them with an empty list.
-        return Array.isArray(facetOptions) && facetOptions.length > 0 ? { ...col, facetOptions } : col;
+        return Array.isArray(facetOptions) ? { ...col, facetOptions } : col;
     };
 
     function resolveConingConeType(issue) {
@@ -775,10 +769,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 };
             } else if (process === 'holo') {
                 stageKey = LABEL_STAGE_KEYS.HOLO_RECEIVE;
-                data = buildHoloReceiveLabelData({ db, row, holoTraceContext });
+                data = buildRowScopedHoloLabelData(row);
             } else if (process === 'coning') {
                 stageKey = LABEL_STAGE_KEYS.CONING_RECEIVE;
-                data = buildConingReceiveLabelData({ db, row, coningTraceContext: traceContext });
+                data = buildRowScopedConingLabelData(row);
             }
 
 
@@ -813,7 +807,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             }
 
             const stageKey = LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL;
-            const data = buildConingReceiveLabelData({ db, row, coningTraceContext: traceContext });
+            const data = buildRowScopedConingLabelData(row);
             const template = await loadTemplate(stageKey);
             if (!template) {
                 alert('No small sticker template found. Please configure it in Label Designer (Receive from machine (coning)_small sticker).');
@@ -863,7 +857,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
             }
 
             // Try to find the related issue to fallback for machine/operator/helper
-            const issue = db.issue_to_holo_machine?.find(i => i.id === row.issueId);
+            const issue = resolveReceiveIssue(row, 'holo');
 
             setReceiveDraft({
                 date: formatInputDate(row.date || row.createdAt),
@@ -902,7 +896,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 boxId: row.boxId || row.box?.id || '',
                 coneCount: row.coneCount != null ? String(row.coneCount) : '',
                 grossWeight,
-                machineNo: row.machineNo || row.machine?.name || '',
+                machineNo: row.machineNo || row.machineName || row.machine?.name || '',
                 operatorId: row.operatorId || row.operator?.id || '',
                 helperId: row.helperId || row.helper?.id || '',
                 notes: row.notes || '',
@@ -981,57 +975,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 if (!editingReceiveRow.pieceId && receiveDraft.pieceId) {
                     payload.pieceId = receiveDraft.pieceId;
                 }
-                const res = await api.updateHoloReceiveRow(editingReceiveRow.id, payload);
-                const updatedRow = res?.row || null;
-                if (updatedRow) {
-                    const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
-                    const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
-
-                    const prevWeight = Number.isFinite(Number(editingReceiveRow.rollWeight))
-                        ? Number(editingReceiveRow.rollWeight)
-                        : calcNetFromGrossTare(editingReceiveRow);
-                    const nextWeight = Number.isFinite(Number(updatedRow.rollWeight))
-                        ? Number(updatedRow.rollWeight)
-                        : calcNetFromGrossTare(updatedRow);
-                    const prevRolls = Number(editingReceiveRow.rollCount || 0);
-                    const nextRolls = Number(updatedRow.rollCount || 0);
-                    const deltaNetWeight = nextWeight - prevWeight;
-                    const deltaRolls = nextRolls - prevRolls;
-
-                    const pieceId = updatedRow.pieceId || editingReceiveRow.pieceId || null;
-                    if (pieceId) {
-                        const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-                        const nextTotal = {
-                            ...baseTotal,
-                            totalNetWeight: Number(baseTotal.totalNetWeight || 0) + deltaNetWeight,
-                            totalRolls: Number(baseTotal.totalRolls || 0) + deltaRolls,
-                        };
-                        const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
-
-                        const nextRows = existingRows.map((r) => {
-                            if (r.id !== updatedRow.id) return r;
-                            return {
-                                ...r,
-                                ...updatedRow,
-                                pieceId,
-                                box: updatedRow.boxId ? (boxById.get(updatedRow.boxId) || null) : null,
-                                rollType: updatedRow.rollTypeId ? (rollTypeById.get(updatedRow.rollTypeId) || null) : null,
-                                operator: updatedRow.operatorId ? { id: updatedRow.operatorId, name: workerNameById.get(updatedRow.operatorId) || '' } : null,
-                                helper: updatedRow.helperId ? { id: updatedRow.helperId, name: workerNameById.get(updatedRow.helperId) || '' } : null,
-                            };
-                        });
-
-                        patchDb({
-                            receive_from_holo_machine_rows: nextRows,
-                            receive_from_holo_machine_piece_totals: nextTotals,
-                        });
-                        refreshV2List();
-                    } else {
-                        refreshV2List();
-                    }
-                } else {
-                    refreshV2List();
-                }
+                await api.updateHoloReceiveRow(editingReceiveRow.id, payload);
+                invalidateReceiveMutation('updateHoloReceiveRow', editingReceiveRow.id);
             } else if (process === 'coning') {
                 const payload = {
                     date: receiveDraft.date || null,
@@ -1043,51 +988,8 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     helperId: receiveDraft.helperId,
                     notes: receiveDraft.notes,
                 };
-                const res = await api.updateConingReceiveRow(editingReceiveRow.id, payload);
-                const updatedRow = res?.row || null;
-                if (updatedRow) {
-                    const existingRows = Array.isArray(db.receive_from_coning_machine_rows) ? db.receive_from_coning_machine_rows : [];
-                    const existingTotals = Array.isArray(db.receive_from_coning_machine_piece_totals) ? db.receive_from_coning_machine_piece_totals : [];
-
-                    const prevWeight = Number.isFinite(Number(editingReceiveRow.netWeight))
-                        ? Number(editingReceiveRow.netWeight)
-                        : calcNetFromGrossTare(editingReceiveRow);
-                    const nextWeight = Number.isFinite(Number(updatedRow.netWeight))
-                        ? Number(updatedRow.netWeight)
-                        : calcNetFromGrossTare(updatedRow);
-                    const prevCones = Number(editingReceiveRow.coneCount || 0);
-                    const nextCones = Number(updatedRow.coneCount || 0);
-                    const deltaNetWeight = nextWeight - prevWeight;
-                    const deltaCones = nextCones - prevCones;
-
-                    const pieceId = updatedRow.issueId || editingReceiveRow.issueId;
-                    const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalCones: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-                    const nextTotal = {
-                        ...baseTotal,
-                        totalNetWeight: Number(baseTotal.totalNetWeight || 0) + deltaNetWeight,
-                        totalCones: Number(baseTotal.totalCones || 0) + deltaCones,
-                    };
-                    const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
-
-                    const nextRows = existingRows.map((r) => {
-                        if (r.id !== updatedRow.id) return r;
-                        return {
-                            ...r,
-                            ...updatedRow,
-                            box: updatedRow.boxId ? (boxById.get(updatedRow.boxId) || null) : null,
-                            operator: updatedRow.operatorId ? { id: updatedRow.operatorId, name: workerNameById.get(updatedRow.operatorId) || '' } : null,
-                            helper: updatedRow.helperId ? { id: updatedRow.helperId, name: workerNameById.get(updatedRow.helperId) || '' } : null,
-                        };
-                    });
-
-                    patchDb({
-                        receive_from_coning_machine_rows: nextRows,
-                        receive_from_coning_machine_piece_totals: nextTotals,
-                    });
-                    refreshV2List();
-                } else {
-                    refreshV2List();
-                }
+                await api.updateConingReceiveRow(editingReceiveRow.id, payload);
+                invalidateReceiveMutation('updateConingReceiveRow', editingReceiveRow.id);
             }
 
             closeReceiveEditor();
@@ -1128,51 +1030,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                 const pieceOptions = resolveHoloPieceOptions(row);
                 const pieceId = row.pieceId || (pieceOptions.length === 1 ? pieceOptions[0].id : null);
                 await api.deleteHoloReceiveRow(row.id, pieceId ? { pieceId } : undefined);
-
-                const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
-                const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
-                const prevWeight = Number.isFinite(Number(row.rollWeight)) ? Number(row.rollWeight) : calcNetFromGrossTare(row);
-                const prevRolls = Number(row.rollCount || 0);
-                const resolvedPieceId = pieceId || row.pieceId || null;
-
-                if (resolvedPieceId) {
-                    const baseTotal = existingTotals.find(t => t.pieceId === resolvedPieceId) || { pieceId: resolvedPieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-                    const nextTotal = {
-                        ...baseTotal,
-                        totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
-                        totalRolls: Number(baseTotal.totalRolls || 0) - prevRolls,
-                    };
-                    const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== resolvedPieceId)];
-                    const nextRows = existingRows.filter(r => r.id !== row.id);
-                    patchDb({
-                        receive_from_holo_machine_rows: nextRows,
-                        receive_from_holo_machine_piece_totals: nextTotals,
-                    });
-                    refreshV2List();
-                } else {
-                    refreshV2List();
-                }
+                invalidateReceiveMutation('deleteHoloReceiveRow', row.id);
             } else {
                 await api.deleteConingReceiveRow(row.id);
-
-                const existingRows = Array.isArray(db.receive_from_coning_machine_rows) ? db.receive_from_coning_machine_rows : [];
-                const existingTotals = Array.isArray(db.receive_from_coning_machine_piece_totals) ? db.receive_from_coning_machine_piece_totals : [];
-                const prevWeight = Number.isFinite(Number(row.netWeight)) ? Number(row.netWeight) : calcNetFromGrossTare(row);
-                const prevCones = Number(row.coneCount || 0);
-                const pieceId = row.issueId;
-                const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalCones: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-                const nextTotal = {
-                    ...baseTotal,
-                    totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
-                    totalCones: Number(baseTotal.totalCones || 0) - prevCones,
-                };
-                const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
-                const nextRows = existingRows.filter(r => r.id !== row.id);
-                patchDb({
-                    receive_from_coning_machine_rows: nextRows,
-                    receive_from_coning_machine_piece_totals: nextTotals,
-                });
-                refreshV2List();
+                invalidateReceiveMutation('deleteConingReceiveRow', row.id);
             }
         } catch (err) {
             if (err.status === 409 && err.details?.error === 'piece_id_required') {
@@ -1197,24 +1058,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         try {
             await api.deleteHoloReceiveRow(deletePrompt.row.id, { pieceId: deletePrompt.pieceId });
             const row = deletePrompt.row;
-            const pieceId = deletePrompt.pieceId;
-            const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
-            const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
-            const prevWeight = Number.isFinite(Number(row.rollWeight)) ? Number(row.rollWeight) : calcNetFromGrossTare(row);
-            const prevRolls = Number(row.rollCount || 0);
-            const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-            const nextTotal = {
-                ...baseTotal,
-                totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
-                totalRolls: Number(baseTotal.totalRolls || 0) - prevRolls,
-            };
-            const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
-            const nextRows = existingRows.filter(r => r.id !== row.id);
-            patchDb({
-                receive_from_holo_machine_rows: nextRows,
-                receive_from_holo_machine_piece_totals: nextTotals,
-            });
-            refreshV2List();
+            invalidateReceiveMutation('deleteHoloReceiveRow', row.id);
             setDeletePrompt(null);
         } catch (err) {
             alert(err.message || 'Failed to delete receive row');
@@ -1787,7 +1631,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         if (!confirmed) return;
         try {
             await api.deleteCutterPurchaseLot(lotNo);
-            await refreshProcessData(process || 'cutter');
+            await refreshProcessData('cutter');
             await refreshModuleData('inbound');
             refreshV2List();
         } catch (err) {
@@ -1814,32 +1658,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         setHoloRevertBusy(true);
         try {
             await api.revertHoloWastageRow({ rowId: holoRevertTarget.id, reason, note });
-            const row = holoRevertTarget;
-            const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
-            const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
-            const prevWeight = Number.isFinite(Number(row.rollWeight)) ? Number(row.rollWeight) : calcNetFromGrossTare(row);
-            const prevRolls = Number(row.rollCount || 0);
-            const pieceId = row.pieceId || null;
-            // Always remove the reverted row from local state so the user gets immediate feedback,
-            // regardless of whether pieceId was set or v2 is enabled.
-            const nextRows = existingRows.filter(r => r.id !== row.id);
-            if (pieceId) {
-                const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalRolls: 0, totalNetWeight: 0, wastageNetWeight: 0 };
-                const nextTotal = {
-                    ...baseTotal,
-                    totalNetWeight: Number(baseTotal.totalNetWeight || 0) - prevWeight,
-                    totalRolls: Number(baseTotal.totalRolls || 0) - prevRolls,
-                };
-                const nextTotals = [nextTotal, ...existingTotals.filter(t => t.pieceId !== pieceId)];
-                patchDb({
-                    receive_from_holo_machine_rows: nextRows,
-                    receive_from_holo_machine_piece_totals: nextTotals,
-                });
-                refreshV2List();
-            } else {
-                patchDb({ receive_from_holo_machine_rows: nextRows });
-                refreshV2List();
-            }
+            invalidateReceiveMutation('revertHoloWastageRow', holoRevertTarget.id);
             setHoloRevertTarget(null);
         } catch (err) {
             alert(err.message || 'Failed to revert wastage row');
@@ -1960,7 +1779,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         const tare = roundTo3Decimals(boxWeight + coneWeight * coneCount);
         const net = roundTo3Decimals(grossWeight - tare);
         return { tare, net, coneTypeName: coneType?.name || '—', coneWeight };
-    }, [process, receiveDraft, editingReceiveRow, db.boxes, db.issue_to_coning_machine, db.cone_types]);
+    }, [process, receiveDraft, editingReceiveRow, db.boxes, db.cone_types]);
 
     const handleExportHistory = async () => {
         let sourceRows;
@@ -2027,7 +1846,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     cut: row.cutName || row.issue?.cut?.name || '—',
                     yarn: row.yarnName || row.issue?.yarn?.name || '—',
                     twist: row.twistName || row.issue?.twist?.name || '—',
-                    piece: (row.computedPieceIds || row.pieceIdsList || []).join(', ') || '—',
+                    piece: receivePieceIds(row).join(', ') || '—',
                     barcode: row.barcode || '—',
                     rolls: row.rollCount || 0,
                     weight: formatKg(row.rollWeight ?? row.netWeight ?? row.grossWeight),
@@ -2056,10 +1875,10 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
         } else {
             // Coning - resolve cut/yarn from referenced source rows
             exportData = sourceRows.map(row => {
-                const coningIssue = row.issue || (db.issue_to_coning_machine?.find(i => i.id === row.issueId) || null);
+                const coningIssue = row.issue || null;
                 const item = row.itemName || coningIssue?.item?.name || (coningIssue?.itemId ? db.items?.find(i => i.id === coningIssue.itemId)?.name : '');
                 const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
-                const perConeNet = Number(coningIssue?.requiredPerConeNetWeight);
+                const perConeNet = Number(row.perConeTargetG ?? coningIssue?.requiredPerConeNetWeight);
                 const actualPerConeNet = formatActualPerCone(row.netWeight ?? row.grossWeight, row.coneCount);
                 return {
                     date: formatDateDDMMYYYY(row.date || row.createdAt),
@@ -2068,9 +1887,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                     cut: row.cutName || coningIssue?.cut?.name || '—',
                     yarn: row.yarnName || coningIssue?.yarn?.name || '—',
                     twist: row.twistName || coningIssue?.twist?.name || '—',
-                    piece: (row.computedPieceIds || row.pieceIdsList || []).join(', ') || '—',
+                    piece: receivePieceIds(row).join(', ') || '—',
                     barcode: row.barcode || '—',
-                    coneType: coneType?.name || '—',
+                    coneType: row.coneTypeName || coneType?.name || '—',
                     perConeNetG: Number.isFinite(perConeNet) && perConeNet > 0 ? perConeNet : '',
                     actualPerConeG: actualPerConeNet,
                     box: row.box?.name || '—',
@@ -2547,32 +2366,24 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                         </TableRow>
                                                     );
                                                 } else if (process === 'holo') {
-                                                    // Prefer flattened v2 fields (fast, immediate). Fall back to legacy trace only if needed.
-                                                    const issue = (!r.itemName || !r.cutName || !r.yarnName || !r.twistName)
-                                                        ? db.issue_to_holo_machine?.find(i => i.id === r.issueId)
-                                                        : null;
-                                                    const item = issue ? db.items?.find(i => i.id === issue?.itemId) : null;
-                                                    const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : null;
-                                                    const itemName = r.itemName || item?.name || '—';
-                                                    const cutName = r.cutName || resolved?.cutName || '—';
-                                                    const yarnName = r.yarnName || resolved?.yarnName || '—';
-                                                    const twistName = r.twistName || resolved?.twistName || '—';
+                                                    const names = resolveReceiveNames(r, 'holo');
+                                                    const pieceIds = receivePieceIds(r);
                                                     const dateDisplay = formatDateDDMMYYYY(r.date || r.createdAt) || '—';
                                                     return (
                                                         <TableRow key={r.id}>
                                                             <TableCell className="whitespace-nowrap"><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={r.shift || r.issue?.shift || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><CellText text={itemName} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={cutName} query={searchTerm} /></TableCell>
-                                                            <TableCell className="whitespace-nowrap"><HighlightMatch text={yarnName} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={twistName} query={searchTerm} /></TableCell>
-                                                            <TableCell className="max-w-[120px] truncate" title={(r.computedPieceIds || r.pieceIdsList || []).join(', ')}>
-                                                                <HighlightMatch text={(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'} query={searchTerm} />
+                                                            <TableCell><HighlightMatch text={r.shift || names.issue?.shift || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><CellText text={names.itemName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={names.cutName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="whitespace-nowrap"><HighlightMatch text={names.yarnName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={names.twistName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="max-w-[120px] truncate" title={pieceIds.join(', ')}>
+                                                                <HighlightMatch text={pieceIds.join(', ') || '—'} query={searchTerm} />
                                                             </TableCell>
                                                             <TableCell className="font-mono text-xs whitespace-nowrap"><HighlightMatch text={r.barcode || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell className="text-right tabular-nums">{r.rollCount || 1}</TableCell>
                                                             <TableCell className="text-right tabular-nums whitespace-nowrap font-medium">{formatKg(r.rollWeight ?? r.grossWeight)}</TableCell>
-                                                            <TableCell><CellText text={r.machineNo || r.machine?.name || '—'} query={searchTerm} max="sm" /></TableCell>
+                                                            <TableCell><CellText text={r.machineNo || r.machineName || r.machine?.name || '—'} query={searchTerm} max="sm" /></TableCell>
                                                             <TableCell><HighlightMatch text={r.operator?.name || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={r.helper?.name || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.note || r.notes}><HighlightMatch text={r.note || r.notes || '—'} query={searchTerm} /></TableCell>
@@ -2583,16 +2394,9 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                         </TableRow>
                                                     );
                                                 } else if (process === 'coning') {
-                                                    // Prefer flattened v2 fields (fast, immediate). Fall back to legacy trace only if needed.
-                                                    const coningIssue = (!r.itemName || !r.cutName || !r.yarnName || !r.twistName || !r.coneTypeName || r.perConeTargetG == null)
-                                                        ? db.issue_to_coning_machine?.find(i => i.id === r.issueId)
-                                                        : null;
-                                                    const item = coningIssue ? db.items?.find(i => i.id === coningIssue?.itemId) : null;
-                                                    const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : null;
-                                                    const itemName = r.itemName || item?.name || '—';
-                                                    const cutName = r.cutName || resolved?.cutName || '—';
-                                                    const yarnName = r.yarnName || resolved?.yarnName || '—';
-                                                    const twistName = r.twistName || resolved?.twistName || '—';
+                                                    const names = resolveReceiveNames(r, 'coning');
+                                                    const coningIssue = names.issue;
+                                                    const pieceIds = receivePieceIds(r);
                                                     const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
                                                     const coneTypeName = r.coneTypeName || coneType?.name || '—';
                                                     const perConeNet = r.perConeTargetG ?? coningIssue?.requiredPerConeNetWeight;
@@ -2602,12 +2406,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                         <TableRow key={r.id}>
                                                             <TableCell className="whitespace-nowrap"><HighlightMatch text={dateDisplay} query={searchTerm} /></TableCell>
                                                             <TableCell><HighlightMatch text={r.shift || coningIssue?.shift || '—'} query={searchTerm} /></TableCell>
-                                                            <TableCell><CellText text={itemName} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={cutName} query={searchTerm} /></TableCell>
-                                                            <TableCell className="whitespace-nowrap"><HighlightMatch text={yarnName} query={searchTerm} /></TableCell>
-                                                            <TableCell><HighlightMatch text={twistName} query={searchTerm} /></TableCell>
-                                                            <TableCell className="max-w-[120px] truncate" title={(r.computedPieceIds || r.pieceIdsList || []).join(', ')}>
-                                                                <HighlightMatch text={(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'} query={searchTerm} />
+                                                            <TableCell><CellText text={names.itemName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={names.cutName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="whitespace-nowrap"><HighlightMatch text={names.yarnName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell><HighlightMatch text={names.twistName || '—'} query={searchTerm} /></TableCell>
+                                                            <TableCell className="max-w-[120px] truncate" title={pieceIds.join(', ')}>
+                                                                <HighlightMatch text={pieceIds.join(', ') || '—'} query={searchTerm} />
                                                             </TableCell>
                                                             <TableCell className="font-mono text-xs whitespace-nowrap"><HighlightMatch text={r.barcode || '—'} query={searchTerm} /></TableCell>
                                                             <TableCell><CellText text={coneTypeName} query={searchTerm} max="sm" /></TableCell>
@@ -2714,23 +2518,22 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                             </div>
                                         );
                                     } else if (process === 'holo') {
-                                        const issue = db.issue_to_holo_machine?.find(i => i.id === r.issueId);
-                                        const item = db.items?.find(i => i.id === issue?.itemId);
-                                        const resolved = issue ? resolveHoloTrace(issue, holoTraceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                                        const names = resolveReceiveNames(r, 'holo');
+                                        const pieceIds = receivePieceIds(r);
                                         return (
                                             <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
                                                 <div className="p-4">
                                                     <div className="flex justify-between items-start gap-2">
                                                         <div className="min-w-0 flex-1">
                                                             <p className="font-mono text-xs text-primary">{r.barcode || '—'}</p>
-                                                            <p className="font-medium mt-1">{item?.name || '—'}</p>
-                                                            <p className="text-xs text-muted-foreground mt-1">Cut: {resolved.cutName || '—'}</p>
-                                                            <p className="text-xs text-muted-foreground mt-1">Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}</p>
-                                                            <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.computedPieceIds || r.pieceIdsList || []).join(', ')}>
-                                                                Piece: {(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'}
+                                                            <p className="font-medium mt-1">{names.itemName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Cut: {names.cutName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Yarn: {names.yarnName || '—'} • Twist: {names.twistName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1 truncate" title={pieceIds.join(', ')}>
+                                                                Piece: {pieceIds.join(', ') || '—'}
                                                             </p>
                                                             <p className="text-xs text-muted-foreground mt-1">
-                                                                {dateDisplay}{r.shift || r.issue?.shift ? ` (${r.shift || r.issue?.shift})` : ''} • {r.operator?.name || '—'}
+                                                                {dateDisplay}{r.shift || names.issue?.shift ? ` (${r.shift || names.issue?.shift})` : ''} • {r.operator?.name || '—'}
                                                             </p>
                                                         </div>
                                                         <div className="text-right">
@@ -2739,7 +2542,7 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                         </div>
                                                     </div>
                                                     <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                                                        <span>Mac: {r.machineNo || r.machine?.name || '—'}</span>
+                                                        <span>Mac: {r.machineNo || r.machineName || r.machine?.name || '—'}</span>
                                                         {r.helper?.name && <span>Helper: {r.helper.name}</span>}
                                                     </div>
                                                 </div>
@@ -2749,11 +2552,12 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                             </div>
                                         );
                                     } else if (process === 'coning') {
-                                        const coningIssue = db.issue_to_coning_machine?.find(i => i.id === r.issueId);
-                                        const item = db.items?.find(i => i.id === coningIssue?.itemId);
-                                        const resolved = coningIssue ? resolveConingTrace(coningIssue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—' };
+                                        const names = resolveReceiveNames(r, 'coning');
+                                        const coningIssue = names.issue;
+                                        const pieceIds = receivePieceIds(r);
                                         const coneType = coningIssue ? resolveConingConeType(coningIssue) : null;
-                                        const perConeNet = coningIssue?.requiredPerConeNetWeight;
+                                        const coneTypeName = r.coneTypeName || coneType?.name || '—';
+                                        const perConeNet = r.perConeTargetG ?? coningIssue?.requiredPerConeNetWeight;
                                         const actualPerCone = formatActualPerCone(r.netWeight ?? r.grossWeight, r.coneCount);
                                         return (
                                             <div key={r.id} className="border rounded-lg bg-card shadow-sm overflow-hidden">
@@ -2761,17 +2565,17 @@ export function ReceiveHistoryTable({ canEdit = false, canDelete = false, canWri
                                                     <div className="flex justify-between items-start gap-2">
                                                         <div className="min-w-0 flex-1">
                                                             <p className="font-mono text-xs text-primary">{r.barcode || '—'}</p>
-                                                            <p className="font-medium mt-1">{item?.name || '—'}</p>
-                                                            <p className="text-xs text-muted-foreground mt-1">Cut: {resolved.cutName || '—'}</p>
-                                                            <p className="text-xs text-muted-foreground mt-1">Yarn: {resolved.yarnName || '—'} • Twist: {resolved.twistName || '—'}</p>
+                                                            <p className="font-medium mt-1">{names.itemName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Cut: {names.cutName || '—'}</p>
+                                                            <p className="text-xs text-muted-foreground mt-1">Yarn: {names.yarnName || '—'} • Twist: {names.twistName || '—'}</p>
                                                             <p className="text-xs text-muted-foreground mt-1">
-                                                                Cone: {coneType?.name || '—'} • Per Cone: {formatPerConeNet(perConeNet)}
+                                                                Cone: {coneTypeName} • Per Cone: {formatPerConeNet(perConeNet)}
                                                             </p>
                                                             <p className="text-xs text-muted-foreground mt-1">
                                                                 Actual: {actualPerCone}
                                                             </p>
-                                                            <p className="text-xs text-muted-foreground mt-1 truncate" title={(r.computedPieceIds || r.pieceIdsList || []).join(', ')}>
-                                                                Piece: {(r.computedPieceIds || r.pieceIdsList || []).join(', ') || '—'}
+                                                            <p className="text-xs text-muted-foreground mt-1 truncate" title={pieceIds.join(', ')}>
+                                                                Piece: {pieceIds.join(', ') || '—'}
                                                             </p>
                                                             <p className="text-xs text-muted-foreground mt-1">
                                                                 {dateDisplay}{r.shift || coningIssue?.shift ? ` (${r.shift || coningIssue?.shift})` : ''} • {r.operator?.name || '—'}

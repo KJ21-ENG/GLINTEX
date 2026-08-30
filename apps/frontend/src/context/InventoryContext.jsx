@@ -441,7 +441,12 @@ export const InventoryProvider = ({ children }) => {
     createIssueTakeBack: async (process, issueId, payload) => {
       const stage = process || 'cutter';
       const res = await api.createIssueTakeBack(stage, issueId, payload);
-      await refreshProcessData(stage);
+      // Cutter still relies on its process snapshot. Holo and Coning screens are
+      // backed by bounded v2 lists and issue-scoped lookups, so invalidating those
+      // lists is sufficient and avoids re-downloading their full process history.
+      if (stage === 'cutter') {
+        await refreshProcessData(stage);
+      }
       emitInvalidation([
         INVENTORY_INVALIDATION_KEYS.issueOnMachine(stage),
         INVENTORY_INVALIDATION_KEYS.issueHistory(stage),
@@ -451,9 +456,9 @@ export const InventoryProvider = ({ children }) => {
     reverseIssueTakeBack: async (takeBackId, payload = {}) => {
       const res = await api.reverseIssueTakeBack(takeBackId, payload);
       const stage = res?.issue_take_back?.stage || payload?.stage || process;
-      if (stage) {
+      if (stage === 'cutter') {
         await refreshProcessData(stage);
-      } else {
+      } else if (!stage) {
         await refreshDb();
       }
       if (stage) {

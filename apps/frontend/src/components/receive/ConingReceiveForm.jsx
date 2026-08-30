@@ -6,7 +6,7 @@ import { CatchWeightButton } from '../common/CatchWeightButton';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Checkbox } from '../ui';
 import { formatDateDDMMYYYY, formatKg, todayISO, uid } from '../../utils';
 import * as api from '../../api';
-import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
+import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
@@ -19,8 +19,47 @@ import {
     RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG,
 } from './ResizableIssueSummary';
 
+const asArray = (value) => (Array.isArray(value) ? value : []);
+
+const parseIssueRefs = (value) => {
+    if (Array.isArray(value)) return value;
+    if (typeof value !== 'string') return [];
+    try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
+};
+
+const getConingSources = (issue) => {
+    if (asArray(issue?.sources).length > 0) return issue.sources;
+    return asArray(issue?.crates);
+};
+
+const getResponseBalance = (response) => response?.issueBalance || response?.issue_balance || response?.balance || null;
+
+const getResponsePieceTotal = (response) => response?.pieceTotal || response?.piece_total || null;
+
+const queueConingReceivePrint = (labels) => {
+    if (!Array.isArray(labels) || labels.length === 0) return;
+    setTimeout(() => {
+        void (async () => {
+            const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
+            if (!template || !window.confirm('Print stickers for these receives?')) return;
+            await printStageTemplatesBatch(
+                LABEL_STAGE_KEYS.CONING_RECEIVE,
+                labels,
+                { template },
+            );
+        })().catch((printError) => {
+            console.error('Coning receives were saved but post-commit label printing failed', printError);
+        });
+    }, 0);
+};
+
 export function ConingReceiveForm() {
-    const { db, patchDb, emitInvalidation } = useInventory();
+    const { db, emitInvalidation } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
 
     const [scanInput, setScanInput] = useState('');
@@ -34,29 +73,19 @@ export function ConingReceiveForm() {
     const [receiveDate, setReceiveDate] = useState(todayISO());
     const [isWastage, setIsWastage] = useState(false);
     const [wastageDialogOpen, setWastageDialogOpen] = useState(false);
-    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
     const enrichIssueWithBalance = (rawIssue) => {
         if (!rawIssue?.id) return rawIssue;
+        const legacyTotal = (db.receive_from_coning_machine_piece_totals || []).find((total) => total.pieceId === rawIssue.id) || null;
         return {
             ...rawIssue,
             issueBalance: rawIssue.issueBalance || db?.issue_balances?.[rawIssue.id] || null,
+            pieceTotal: rawIssue.pieceTotal || legacyTotal,
         };
-    };
-
-    const findIssueByBarcodeInCache = (barcode) => {
-        const normalized = String(barcode || '').trim().toUpperCase();
-        if (!normalized) return null;
-        return (db.issue_to_coning_machine || []).find(
-            (i) => String(i.barcode || '').trim().toUpperCase() === normalized
-        ) || null;
     };
 
     const loadIssueByBarcode = async (barcode, { notFoundMessage = 'Coning issue not found for barcode' } = {}) => {
         const normalized = String(barcode || '').trim();
         if (!normalized) return null;
-
-        const cached = findIssueByBarcodeInCache(normalized);
-        if (cached) return enrichIssueWithBalance(cached);
 
         try {
             const lookedUp = await api.getIssueByConingBarcode(normalized);
@@ -92,23 +121,25 @@ export function ConingReceiveForm() {
             }
         })();
         return () => { cancelled = true; };
-    }, [searchParams, issue, setSearchParams, db.issue_to_coning_machine]);
+    }, [searchParams, issue, setSearchParams]);
 
     // --- Derived ---
     const perConeWeight = Number(issue?.requiredPerConeNetWeight || 0);
     const totalExpected = Number(issue?.expectedCones || 0);
 
     const issueRefs = useMemo(() => {
-        if (!issue?.receivedRowRefs) return [];
-        try {
-            const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-            return Array.isArray(refs) ? refs : [];
-        } catch {
-            return [];
-        }
+        return parseIssueRefs(issue?.receivedRowRefs);
     }, [issue?.receivedRowRefs]);
 
+    const sourceRows = useMemo(() => getConingSources(issue), [issue]);
+
     const fallbackIssuedWeight = useMemo(() => {
+        const sumFromSources = sourceRows.reduce((sum, source) => {
+            const allocated = Number(source?.issueWeight ?? source?.issuedWeight ?? source?.allocatedWeight ?? 0);
+            const sourceWeight = Number(source?.netWeight ?? source?.rollWeight ?? 0);
+            return sum + (allocated > 0 ? allocated : sourceWeight);
+        }, 0);
+        if (sumFromSources > 0) return sumFromSources;
         const sumFromRefs = issueRefs.reduce((sum, ref) => sum + (Number(ref?.issueWeight) || 0), 0);
         if (sumFromRefs > 0) return sumFromRefs;
         // Fallback: sum referenced holo receive row weights (if issueWeight not stamped)
@@ -116,12 +147,14 @@ export function ConingReceiveForm() {
             const holoRow = (db.receive_from_holo_machine_rows || []).find((r) => r.id === ref?.rowId);
             return sum + (Number(holoRow?.rollWeight) || 0);
         }, 0);
-    }, [issueRefs, db.receive_from_holo_machine_rows]);
+    }, [sourceRows, issueRefs, db.receive_from_holo_machine_rows]);
 
     const coningPieceTotals = useMemo(() => {
         if (!issue?.id) return null;
-        return (db.receive_from_coning_machine_piece_totals || []).find((t) => t.pieceId === issue.id) || null;
-    }, [db.receive_from_coning_machine_piece_totals, issue?.id]);
+        return issue.pieceTotal
+            || (db.receive_from_coning_machine_piece_totals || []).find((t) => t.pieceId === issue.id)
+            || null;
+    }, [db.receive_from_coning_machine_piece_totals, issue?.id, issue?.pieceTotal]);
 
     const issueMetrics = useMemo(() => {
         const balance = issue?.issueBalance || (issue?.id ? db?.issue_balances?.[issue.id] : null) || null;
@@ -230,9 +263,20 @@ export function ConingReceiveForm() {
 
         // Cone Tare? 
         // We need to know the cone type from the issue.
-        const coneTypeId = issueRefs?.[0]?.coneTypeId;
+        const firstSource = sourceRows[0] || {};
+        const coneTypeId = issue?.coneTypeId
+            || issue?.trace?.coneTypeId
+            || firstSource.coneTypeId
+            || issueRefs?.[0]?.coneTypeId;
         const coneType = db.cone_types.find(c => c.id === coneTypeId);
-        const coneWt = (coneType?.weight || 0) * Number(row.coneCount || 0);
+        const coneTypeWeight = Number(
+            issue?.coneTypeWeight
+            ?? issue?.trace?.coneTypeWeight
+            ?? firstSource.coneTypeWeight
+            ?? coneType?.weight
+            ?? 0
+        );
+        const coneWt = coneTypeWeight * Number(row.coneCount || 0);
 
         return Math.max(0, gross - boxWt - coneWt);
     }
@@ -246,7 +290,7 @@ export function ConingReceiveForm() {
             if (Number.isFinite(cones)) totalCones += cones;
         }
         return { totalNetWeight, totalCones };
-    }, [cart, db.boxes, db.cone_types, issueRefs]);
+    }, [cart, db.boxes, db.cone_types, issueRefs, sourceRows, issue]);
 
     const totalReceivedWeight = Number(issueMetrics.received || 0) + cartTotals.totalNetWeight;
     const totalReceivedCones = Number(coningPieceTotals?.totalCones || 0) + cartTotals.totalCones;
@@ -256,27 +300,64 @@ export function ConingReceiveForm() {
     const excessReceivedWeight = Math.max(0, totalReceivedWeight - issueMetrics.netIssued);
 
     const issueDetails = useMemo(() => {
-        if (!issue) return { itemName: '', cutName: '', coneTypeName: '' };
-
-        let itemName = db.items?.find(i => i.id === issue.itemId)?.name || '';
-        let cutName = '';
-        let coneTypeName = '';
-
-        if (issueRefs.length > 0) {
-            const firstRef = issueRefs[0];
-            if (firstRef.coneTypeId) {
-                coneTypeName = db.cone_types?.find(c => c.id === firstRef.coneTypeId)?.name || '';
-            }
+        if (!issue) {
+            return {
+                itemName: '',
+                cutName: '',
+                coneTypeName: '',
+                yarnName: '',
+                twistName: '',
+                rollTypeName: '',
+                wrapperName: '',
+                rollCount: 0,
+            };
         }
-        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—' };
-        cutName = resolved.cutName === '—' ? '' : resolved.cutName;
-        return { itemName, cutName, coneTypeName };
-    }, [issue, issueRefs, db, traceContext]);
+
+        const firstSource = sourceRows[0] || {};
+        const firstRef = issueRefs[0] || {};
+        const serverTrace = issue.trace || {};
+        const lookupCutName = issue.cutName || serverTrace.cutName || firstSource.cutName || '';
+        const lookupYarnName = issue.yarnName || serverTrace.yarnName || firstSource.yarnName || '';
+        const lookupTwistName = issue.twistName || serverTrace.twistName || firstSource.twistName || '';
+        const lookupRollTypeName = issue.rollTypeName || serverTrace.rollTypeName || firstSource.rollTypeName || '';
+        const legacyTrace = (!lookupCutName || !lookupYarnName || !lookupTwistName || !lookupRollTypeName)
+            ? resolveConingTrace(issue, buildConingTraceContext(db))
+            : { cutName: '—', yarnName: '—', twistName: '—', rollTypeName: '—' };
+        const coneTypeId = issue.coneTypeId || serverTrace.coneTypeId || firstSource.coneTypeId || firstRef.coneTypeId;
+        const rollCountFromSources = sourceRows.reduce((sum, source) => {
+            const allocated = Number(source?.issueRolls ?? source?.issuedRolls ?? 0);
+            return sum + (allocated > 0 ? allocated : Number(source?.rollCount || 0));
+        }, 0);
+        const rollCountFromRefs = issueRefs.reduce((sum, ref) => sum + Number(ref?.issueRolls || 0), 0);
+        return {
+            itemName: issue.itemName
+                || serverTrace.itemName
+                || firstSource.itemName
+                || db.items?.find((item) => item.id === (firstSource.itemId || issue.itemId))?.name
+                || '',
+            cutName: lookupCutName || (legacyTrace.cutName === '—' ? '' : legacyTrace.cutName),
+            coneTypeName: issue.coneTypeName
+                || serverTrace.coneTypeName
+                || firstSource.coneTypeName
+                || db.cone_types?.find((coneType) => coneType.id === coneTypeId)?.name
+                || '',
+            yarnName: lookupYarnName || (legacyTrace.yarnName === '—' ? '' : legacyTrace.yarnName),
+            twistName: lookupTwistName || (legacyTrace.twistName === '—' ? '' : legacyTrace.twistName),
+            rollTypeName: lookupRollTypeName || (legacyTrace.rollTypeName === '—' ? '' : legacyTrace.rollTypeName),
+            wrapperName: issue.wrapperName
+                || serverTrace.wrapperName
+                || firstSource.wrapperName
+                || (firstRef.wrapperId ? db.wrappers?.find((wrapper) => wrapper.id === firstRef.wrapperId)?.name : '')
+                || '',
+            rollCount: rollCountFromSources || rollCountFromRefs,
+        };
+    }, [issue, sourceRows, issueRefs, db]);
 
     const receiveRowsForIssue = useMemo(() => {
         if (!issue?.id) return [];
+        if (Array.isArray(issue.receives)) return issue.receives;
         return (db.receive_from_coning_machine_rows || []).filter((row) => row.issueId === issue.id);
-    }, [db.receive_from_coning_machine_rows, issue?.id]);
+    }, [db.receive_from_coning_machine_rows, issue]);
 
     const handleSubmit = wrapSubmit(async () => {
         if (!issue || cart.length === 0) return;
@@ -299,110 +380,100 @@ export function ConingReceiveForm() {
             const receiveEntries = cart.filter(r => !r.isWastage);
             const wastageEntries = cart.filter(r => r.isWastage);
 
-            const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
-            const confirmPrint = template && receiveEntries.length > 0 ? window.confirm('Print stickers for these receives?') : false;
             const lotLabel = issue.lotLabel || issue.lotNo;
             const labelsToPrint = [];
 
             const createdRows = [];
+            const committedCartIds = new Set();
+            let authoritativeBalance = null;
+            let authoritativePieceTotal = null;
+            let saveError = null;
 
             // Process receive entries
             for (const row of receiveEntries) {
-                const res = await api.manualReceiveFromConingMachine({
-                    issueId: issue.id,
-                    pieceId: issue.id,
-                    coneCount: Number(row.coneCount),
-                    boxId: row.boxId,
-                    grossWeight: Number(row.grossWeight),
-                    date: receiveDate,
-                    operatorId: row.operatorId,
-                    notes: row.notes
-                });
-                if (res?.row) createdRows.push(res.row);
+                let res;
+                try {
+                    res = await api.manualReceiveFromConingMachine({
+                        issueId: issue.id,
+                        pieceId: issue.id,
+                        coneCount: Number(row.coneCount),
+                        boxId: row.boxId,
+                        grossWeight: Number(row.grossWeight),
+                        date: receiveDate,
+                        operatorId: row.operatorId,
+                        notes: row.notes
+                    });
+                } catch (error) {
+                    saveError = error;
+                    break;
+                }
 
-                if (confirmPrint) {
-                    // The backend allocates the authoritative sequence against the
-                    // complete table. Never reconstruct it from the client cache.
-                    const barcode = res?.row?.barcode || '';
-                    const boxName = db.boxes.find((b) => b.id === row.boxId)?.name;
-                    const operatorName = db.operators.find((o) => o.id === row.operatorId)?.name;
+                if (!res?.row) {
+                    saveError = new Error('The server did not return the saved Coning receive row.');
+                    break;
+                }
 
-                    // Resolve details from issue source
-                    let itemName = db.items.find(i => i.id === issue.itemId)?.name || '';
-                    let cutName = '';
-                    let yarnName = '';
-                    let rollType = '';
-                    let coneType = '';
-                    let wrapperName = '';
-                    let twistName = '';
-                    let rollCount = 0;
+                createdRows.push(res.row);
+                committedCartIds.add(row.id);
+                authoritativeBalance = getResponseBalance(res) || authoritativeBalance;
+                authoritativePieceTotal = getResponsePieceTotal(res) || authoritativePieceTotal;
 
-                    try {
-                        const refs = typeof issue.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue.receivedRowRefs;
-                        if (Array.isArray(refs) && refs.length > 0) {
-                            const firstRef = refs[0];
-                            if (firstRef.coneTypeId) coneType = db.cone_types.find(c => c.id === firstRef.coneTypeId)?.name || '';
-                            if (firstRef.wrapperId) wrapperName = db.wrappers.find(w => w.id === firstRef.wrapperId)?.name || '';
-
-                            refs.forEach(ref => {
-                                if (ref.issueRolls) rollCount += Number(ref.issueRolls) || 0;
-                                else {
-                                    const r = db.receive_from_holo_machine_rows?.find(row => row.id === ref.rowId);
-                                    if (r) rollCount += (r.rollCount || 0);
-                                }
-                            });
-                        }
-                        const resolved = issue ? resolveConingTrace(issue, traceContext) : { cutName: '—', yarnName: '—', twistName: '—', rollTypeName: '—' };
-                        cutName = resolved.cutName === '—' ? '' : resolved.cutName;
-                        yarnName = resolved.yarnName === '—' ? '' : resolved.yarnName;
-                        twistName = resolved.twistName === '—' ? '' : resolved.twistName;
-                        rollType = resolved.rollTypeName === '—' ? '' : resolved.rollTypeName;
-                    } catch (e) { console.error('Error resolving details', e); }
+                // The backend allocates the authoritative sequence against the
+                // complete table. Never reconstruct it from the client cache.
+                try {
+                    const barcode = res.row.barcode || '';
+                    const boxName = asArray(db.boxes).find((b) => b.id === row.boxId)?.name;
+                    const operatorName = asArray(db.operators).find((o) => o.id === row.operatorId)?.name;
+                    const rowNetWeight = Number(res.row.netWeight ?? calcRowNet(row));
+                    const rowGrossWeight = Number(res.row.grossWeight ?? row.grossWeight);
+                    const rowTareWeight = Number(res.row.tareWeight ?? (rowGrossWeight - rowNetWeight));
 
                     labelsToPrint.push({
                         lotNo: lotLabel,
                         issueBarcode: issue.barcode,
                         barcode,
                         coneCount: row.coneCount,
-                        rollCount,
-                        grossWeight: row.grossWeight,
-                        tareWeight: Number(row.grossWeight) - calcRowNet(row),
-                        netWeight: calcRowNet(row),
+                        rollCount: issueDetails.rollCount,
+                        grossWeight: rowGrossWeight,
+                        tareWeight: rowTareWeight,
+                        netWeight: rowNetWeight,
                         boxName,
                         operatorName,
-                        itemName,
-                        cut: cutName,
-                        yarnName,
-                        twist: twistName,
-                        twistName: twistName,
-                        rollType,
-                        coneType,
-                        wrapperName,
+                        itemName: issueDetails.itemName,
+                        cut: issueDetails.cutName,
+                        yarnName: issueDetails.yarnName,
+                        twist: issueDetails.twistName,
+                        twistName: issueDetails.twistName,
+                        rollType: issueDetails.rollTypeName,
+                        coneType: issueDetails.coneTypeName,
+                        wrapperName: issueDetails.wrapperName,
                         shift: issue.shift || '',
                         date: receiveDate,
                     });
+                } catch (labelError) {
+                    console.error('Coning receive was saved but its label data could not be prepared', labelError);
                 }
             }
 
-            // Process wastage entry if present
+            // Only close with wastage after every receive row has committed. If a
+            // receive fails, the failed and unattempted rows (including wastage)
+            // remain in the cart and can be retried without duplicating successes.
             let wastageTotals = null;
-            if (wastageEntries.length > 0) {
+            let markedWastageWeight = 0;
+            if (!saveError && wastageEntries.length > 0) {
                 try {
                     const wastageNote = wastageEntries[0]?.wastageNote || null;
                     const res = await api.markConingWastage({ issueId: issue.id, note: wastageNote });
-                    wastageTotals = res?.updated || null;
+                    if (!res?.updated) {
+                        throw new Error('The server did not return the updated Coning wastage total.');
+                    }
+                    wastageTotals = res.updated;
+                    markedWastageWeight = Number(res?.marked || 0);
+                    committedCartIds.add(wastageEntries[0].id);
                 } catch (e) {
                     console.error('Failed to mark coning wastage', e);
-                    alert('Warning: Failed to mark wastage. Please try again separately.');
+                    saveError = e;
                 }
-            }
-
-            if (labelsToPrint.length > 0) {
-                await printStageTemplatesBatch(
-                    LABEL_STAGE_KEYS.CONING_RECEIVE,
-                    labelsToPrint,
-                    { template }
-                );
             }
 
             if (createdRows.length > 0 || wastageTotals) {
@@ -416,58 +487,70 @@ export function ConingReceiveForm() {
                     helper: r.helperId ? { id: r.helperId, name: workerNameById.get(r.helperId) || '' } : null,
                 }));
 
-                const existingRows = Array.isArray(db.receive_from_coning_machine_rows) ? db.receive_from_coning_machine_rows : [];
-                const nextRows = [...enrichedRows, ...existingRows].filter((row, idx, arr) => {
-                    const id = row?.id;
-                    if (!id) return false;
-                    return arr.findIndex(r => r?.id === id) === idx;
-                });
-
-                const existingTotals = Array.isArray(db.receive_from_coning_machine_piece_totals) ? db.receive_from_coning_machine_piece_totals : [];
                 const pieceId = issue.id;
-                const baseTotal = existingTotals.find(t => t.pieceId === pieceId) || { pieceId, totalCones: 0, totalNetWeight: 0, wastageNetWeight: 0 };
+                const baseTotal = coningPieceTotals || {
+                    pieceId,
+                    totalCones: asArray(issue.receives).reduce((sum, row) => sum + Number(row?.coneCount || 0), 0),
+                    totalNetWeight: Number(issueMetrics.received || 0),
+                    wastageNetWeight: Number(issueMetrics.wastage || 0),
+                };
                 const incCones = createdRows.reduce((sum, r) => sum + (Number(r.coneCount) || 0), 0);
                 const incNet = createdRows.reduce((sum, r) => sum + (Number(r.netWeight) || 0), 0);
 
                 const nextTotal = wastageTotals
                     ? { ...baseTotal, ...wastageTotals }
+                    : authoritativePieceTotal
+                        ? { ...baseTotal, ...authoritativePieceTotal }
                     : {
                         ...baseTotal,
                         totalCones: Number(baseTotal.totalCones || 0) + incCones,
                         totalNetWeight: Number(baseTotal.totalNetWeight || 0) + incNet,
                     };
 
-                const nextTotals = [
-                    nextTotal,
-                    ...existingTotals.filter(t => t.pieceId !== pieceId),
-                ];
-
-                const nextIssueBalances = { ...(db.issue_balances || {}) };
-                const prevBalance = nextIssueBalances[issue.id] || issue?.issueBalance;
-                const fallbackNetIssued = Number(issueMetrics.netIssued || 0);
-                if (prevBalance) {
-                    const prevReceived = Number(prevBalance.receivedWeight || 0);
-                    const nextReceived = Number(nextTotal.totalNetWeight || prevReceived);
-                    const nextWastage = Number(nextTotal.wastageNetWeight || 0);
-                    nextIssueBalances[issue.id] = {
-                        ...prevBalance,
-                        receivedWeight: nextReceived,
-                        wastageWeight: nextWastage,
-                        pendingWeight: Math.max(0, fallbackNetIssued - nextReceived - nextWastage),
-                    };
-                }
-
-                patchDb({
-                    receive_from_coning_machine_rows: nextRows,
-                    receive_from_coning_machine_piece_totals: nextTotals,
-                    issue_balances: nextIssueBalances,
-                });
-
                 setIssue((prev) => {
-                    if (!prev) return prev;
-                    const updatedBalance = nextIssueBalances[prev.id];
-                    if (!updatedBalance) return prev;
-                    return { ...prev, issueBalance: updatedBalance };
+                    if (!prev || prev.id !== issue.id) return prev;
+                    const previousBalance = prev.issueBalance || db?.issue_balances?.[prev.id] || {
+                        originalWeight: issueMetrics.originalIssued,
+                        netIssuedWeight: issueMetrics.netIssued,
+                        receivedWeight: issueMetrics.received,
+                        wastageWeight: issueMetrics.wastage,
+                        pendingWeight: issueMetrics.pending,
+                    };
+                    const nextReceived = nextTotal.totalNetWeight != null
+                        ? Number(nextTotal.totalNetWeight)
+                        : Number(previousBalance.receivedWeight || 0) + incNet;
+                    const nextWastage = nextTotal.wastageNetWeight != null
+                        ? Number(nextTotal.wastageNetWeight)
+                        : Number(previousBalance.wastageWeight || 0) + markedWastageWeight;
+                    const balanceBeforeWastage = authoritativeBalance || previousBalance;
+                    const netIssued = Number(balanceBeforeWastage.netIssuedWeight ?? issueMetrics.netIssued ?? 0);
+                    // The last receive response is authoritative before wastage.
+                    // Once mark_wastage succeeds, its updated piece total is the
+                    // authoritative post-wastage state and must override that stale
+                    // pre-wastage balance.
+                    const nextBalance = wastageTotals
+                        ? {
+                            ...balanceBeforeWastage,
+                            receivedWeight: nextReceived,
+                            wastageWeight: nextWastage,
+                            pendingWeight: 0,
+                        }
+                        : authoritativeBalance || {
+                            ...previousBalance,
+                            receivedWeight: nextReceived,
+                            wastageWeight: nextWastage,
+                            pendingWeight: Math.max(0, netIssued - nextReceived - nextWastage),
+                        };
+                    const existingLocalRows = asArray(prev.receives);
+                    return {
+                        ...prev,
+                        issueBalance: nextBalance,
+                        pieceTotal: nextTotal,
+                        receives: [
+                            ...enrichedRows,
+                            ...existingLocalRows.filter((row) => !enrichedRows.some((created) => created.id === row?.id)),
+                        ],
+                    };
                 });
             }
             if (createdRows.length > 0 || wastageTotals) {
@@ -477,11 +560,42 @@ export function ConingReceiveForm() {
                 });
             }
 
-            setCart([]);
+            if (committedCartIds.size > 0) {
+                setCart((prev) => prev.filter((item) => !committedCartIds.has(item.id)));
+            }
+
+            if (saveError) {
+                const errorMessage = saveError?.message || 'Unknown save error';
+                if (createdRows.length > 0 && createdRows.length === receiveEntries.length && wastageEntries.length > 0) {
+                    alert(
+                        `${createdRows.length} receive row${createdRows.length === 1 ? '' : 's'} saved, `
+                        + `but wastage was not marked. The wastage entry remains queued.\n\n${errorMessage}`
+                    );
+                } else if (createdRows.length > 0) {
+                    alert(
+                        `${createdRows.length} of ${receiveEntries.length} receive rows saved. `
+                        + `The remaining rows${wastageEntries.length > 0 ? ' and wastage entry' : ''} remain queued.\n\n${errorMessage}`
+                    );
+                } else if (wastageEntries.length > 0 && receiveEntries.length === 0) {
+                    alert(`Wastage was not marked. The entry remains queued.\n\n${errorMessage}`);
+                } else {
+                    alert(errorMessage);
+                }
+                // Printing is strictly post-commit and non-fatal. Successful rows
+                // remain eligible even when a later row or wastage close fails.
+                queueConingReceivePrint(labelsToPrint);
+                return;
+            }
+
             setIsWastage(false);
-            alert(wastageEntries.length > 0 && receiveEntries.length === 0
-                ? 'Wastage marked and issue closed successfully'
-                : 'Received successfully');
+            if (wastageTotals && receiveEntries.length > 0) {
+                alert(`${createdRows.length} receive row${createdRows.length === 1 ? '' : 's'} saved, wastage marked, and issue closed successfully`);
+            } else if (wastageTotals) {
+                alert('Wastage marked and issue closed successfully');
+            } else {
+                alert('Received successfully');
+            }
+            queueConingReceivePrint(labelsToPrint);
         } catch (e) {
             alert(e.message);
         } finally {
@@ -501,8 +615,9 @@ export function ConingReceiveForm() {
                             onChange={e => setScanInput(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && handleScan()}
                             className="flex-1 sm:w-64"
+                            disabled={submitting}
                         />
-                        <Button onClick={handleScan}>Load</Button>
+                        <Button onClick={handleScan} disabled={submitting}>Load</Button>
                     </div>
                 </CardHeader>
                 {issue && (
@@ -564,8 +679,8 @@ export function ConingReceiveForm() {
                                                                 const cones = Number(row.coneCount || 0);
                                                                 const gross = Number(row.grossWeight || 0);
                                                                 const net = Number(row.netWeight || 0);
-                                                                const boxName = row.box?.name || '—';
-                                                                const operatorName = row.operator?.name || '—';
+                                                                const boxName = row.boxName || row.box?.name || '—';
+                                                                const operatorName = row.operatorName || row.operator?.name || '—';
                                                                 return (
                                                                     <TableRow key={row.id || row.barcode}>
                                                                         <TableCell className="p-2 text-left text-xs">{dateLabel}</TableCell>

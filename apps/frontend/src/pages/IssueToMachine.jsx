@@ -46,11 +46,10 @@ export function IssueToMachine() {
   const [summaryToShifts, setSummaryToShifts] = useState(['Day', 'Night']);
 
   useEffect(() => {
-    if (canRead) {
-      // Issue actions (take-back, edit, labels and received-details popovers) resolve
-      // source rows by id. They need the complete process slice even though the main
-      // tracking tables themselves are paginated through v2.
-      ensureModuleData('process', { process: stage, full: true });
+    if (canRead && stage === 'cutter') {
+      // Cutter still has operational flows that depend on the complete process slice.
+      // Holo and Coning use their paginated v2 lists plus bounded source lookups.
+      ensureModuleData('process', { process: 'cutter', full: true });
     }
   }, [canRead, ensureModuleData, stage]);
 

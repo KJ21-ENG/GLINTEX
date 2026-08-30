@@ -1367,7 +1367,7 @@ function mapReceiveRow(process, row, extras = {}) {
   if (process === 'holo' || process === 'coning') {
     base.shift = row.shift || row.issue?.shift || '';
     base.itemName = row.issue?.itemName || '';
-    base.cutName = row.issue?.cut?.name || '';
+    base.cutName = extras.cutName || row.issue?.cut?.name || '';
     base.yarnName = row.issue?.yarn?.name || '';
     base.twistName = row.issue?.twist?.name || '';
     if (process === 'coning') {
@@ -1375,6 +1375,7 @@ function mapReceiveRow(process, row, extras = {}) {
       // Returning them from v2 eliminates UI dependence on late-loaded legacy module data.
       base.perConeTargetG = Number(row.issue?.requiredPerConeNetWeight || 0);
       base.coneTypeName = extras.coneTypeName || '';
+      base.rollTypeName = extras.rollTypeName || '';
       base.machineName = resolveDisplayedReceiveMachineName(row, { process });
     }
     if (Array.isArray(extras.computedPieceIds)) {
@@ -1382,6 +1383,143 @@ function mapReceiveRow(process, row, extras = {}) {
     }
   }
   return base;
+}
+
+const normalizedLineageName = (value) => {
+  const name = String(value || '').trim();
+  return name && name !== '—' ? name : '';
+};
+
+export function resolveHoloCutNameByIssueIdForReceiveRows(rows = [], cutterRows = []) {
+  const cutterRowById = new Map((cutterRows || []).map((row) => [String(row?.id || ''), row]));
+  const issueById = new Map();
+  for (const row of rows || []) {
+    const issue = row?.issue;
+    const issueId = String(row?.issueId || issue?.id || '');
+    if (issueId && issue && !issueById.has(issueId)) issueById.set(issueId, issue);
+  }
+
+  const out = new Map();
+  for (const [issueId, issue] of issueById.entries()) {
+    const directName = normalizedLineageName(issue?.cut?.name || issue?.cutName);
+    if (directName) {
+      out.set(issueId, directName);
+      continue;
+    }
+
+    const names = new Set();
+    for (const ref of normalizeReceivedRowRefs(issue?.receivedRowRefs)) {
+      const cutterRow = cutterRowById.get(String(ref?.rowId || ''));
+      const tracedName = normalizedLineageName(cutterRow?.cutMaster?.name || cutterRow?.cut);
+      if (tracedName) names.add(tracedName);
+    }
+    out.set(issueId, Array.from(names).join(', '));
+  }
+  return out;
+}
+
+async function fetchHoloCutNameByIssueIdForReceiveRows(rows = [], db = prisma) {
+  const cutterRowIds = new Set();
+  for (const row of rows || []) {
+    const issue = row?.issue;
+    if (normalizedLineageName(issue?.cut?.name || issue?.cutName)) continue;
+    for (const ref of normalizeReceivedRowRefs(issue?.receivedRowRefs)) {
+      if (ref?.rowId) cutterRowIds.add(String(ref.rowId));
+    }
+  }
+
+  const cutterRows = cutterRowIds.size
+    ? await db.receiveFromCutterMachineRow.findMany({
+      where: { id: { in: Array.from(cutterRowIds) }, isDeleted: false },
+      select: { id: true, cut: true, cutMaster: { select: { name: true } } },
+    })
+    : [];
+  return resolveHoloCutNameByIssueIdForReceiveRows(rows, cutterRows);
+}
+
+function addLineageFrontierTarget(frontier, seenTargetsByRowId, rowIdValue, targetIssueIdValue) {
+  const rowId = String(rowIdValue || '');
+  const targetIssueId = String(targetIssueIdValue || '');
+  if (!rowId || !targetIssueId) return;
+  const seenTargets = seenTargetsByRowId.get(rowId) || new Set();
+  if (seenTargets.has(targetIssueId)) return;
+  seenTargets.add(targetIssueId);
+  seenTargetsByRowId.set(rowId, seenTargets);
+  const targets = frontier.get(rowId) || new Set();
+  targets.add(targetIssueId);
+  frontier.set(rowId, targets);
+}
+
+export async function fetchConingRollTypeNameByIssueIdForReceiveRows(rows = [], db = prisma) {
+  const rollTypeNamesByIssueId = new Map();
+  const seenTargetsByRowId = new Map();
+  let frontier = new Map();
+
+  for (const row of rows || []) {
+    const issue = row?.issue;
+    const targetIssueId = String(row?.issueId || issue?.id || '');
+    if (!targetIssueId || !issue) continue;
+    if (!rollTypeNamesByIssueId.has(targetIssueId)) rollTypeNamesByIssueId.set(targetIssueId, new Set());
+    for (const ref of normalizeReceivedRowRefs(issue?.receivedRowRefs)) {
+      addLineageFrontierTarget(frontier, seenTargetsByRowId, ref?.rowId, targetIssueId);
+    }
+  }
+
+  while (frontier.size > 0) {
+    const rowIds = Array.from(frontier.keys());
+    const [holoRows, coningRows] = await Promise.all([
+      db.receiveFromHoloMachineRow.findMany({
+        where: { id: { in: rowIds }, isDeleted: false },
+        select: { id: true, rollType: { select: { name: true } } },
+      }),
+      db.receiveFromConingMachineRow.findMany({
+        where: { id: { in: rowIds }, isDeleted: false },
+        select: { id: true, issueId: true },
+      }),
+    ]);
+
+    const holoRowIds = new Set();
+    for (const holoRow of holoRows || []) {
+      const rowId = String(holoRow?.id || '');
+      if (!rowId) continue;
+      holoRowIds.add(rowId);
+      const rollTypeName = normalizedLineageName(holoRow?.rollType?.name);
+      if (!rollTypeName) continue;
+      for (const targetIssueId of frontier.get(rowId) || []) {
+        const names = rollTypeNamesByIssueId.get(targetIssueId) || new Set();
+        names.add(rollTypeName);
+        rollTypeNamesByIssueId.set(targetIssueId, names);
+      }
+    }
+
+    const coningRowsToTrace = (coningRows || []).filter((row) => !holoRowIds.has(String(row?.id || '')));
+    const parentIssueIds = Array.from(new Set(coningRowsToTrace.map((row) => row?.issueId).filter(Boolean)));
+    const parentIssues = parentIssueIds.length
+      ? await db.issueToConingMachine.findMany({
+        where: { id: { in: parentIssueIds }, isDeleted: false },
+        select: { id: true, receivedRowRefs: true },
+      })
+      : [];
+    const parentIssueById = new Map((parentIssues || []).map((issue) => [String(issue?.id || ''), issue]));
+    const nextFrontier = new Map();
+    for (const coningRow of coningRowsToTrace) {
+      const rowId = String(coningRow?.id || '');
+      const parentIssue = parentIssueById.get(String(coningRow?.issueId || ''));
+      if (!rowId || !parentIssue) continue;
+      const targets = frontier.get(rowId) || [];
+      for (const ref of normalizeReceivedRowRefs(parentIssue.receivedRowRefs)) {
+        for (const targetIssueId of targets) {
+          addLineageFrontierTarget(nextFrontier, seenTargetsByRowId, ref?.rowId, targetIssueId);
+        }
+      }
+    }
+    frontier = nextFrontier;
+  }
+
+  return new Map(Array.from(rollTypeNamesByIssueId.entries()).map(([issueId, names]) => [
+    issueId,
+    Array.from(names).sort((a, b) => a.localeCompare(b)).join(', '),
+  ]));
 }
 
 async function fetchConeTypeNameByIssueIdForConingReceiveRows(rows = []) {
@@ -1425,18 +1563,42 @@ const RECEIVE_COMPUTED_FIELDS = {
 
 // Map a batch of raw receive rows into the flattened display shape, attaching the same
 // computed extras (piece ids, cone type) the paged handler uses.
-async function mapReceiveRowsWithExtras(process, rows = []) {
+async function enrichReceiveRowsWithLabelLineage(process, rows = []) {
   if (process === 'holo') {
-    const pieceIdsByIssueId = await computeHoloIssuePieceIdsByIssueId(rows.map(r => r.issueId));
-    return rows.map((r) => mapReceiveRow(process, r, { computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [] }));
+    const cutNameByIssueId = await fetchHoloCutNameByIssueIdForReceiveRows(rows);
+    return rows.map((row) => ({
+      ...row,
+      cutName: cutNameByIssueId.get(String(row?.issueId || row?.issue?.id || '')) || row?.cutName || '',
+    }));
   }
   if (process === 'coning') {
-    const pieceIdsByIssueId = await computeConingIssuePieceIdsByIssueId(rows.map(r => r.issueId));
-    const coneTypeNameByIssueId = await fetchConeTypeNameByIssueIdForConingReceiveRows(rows);
-    return rows.map((r) => mapReceiveRow(process, r, {
+    const rollTypeNameByIssueId = await fetchConingRollTypeNameByIssueIdForReceiveRows(rows);
+    return rows.map((row) => ({
+      ...row,
+      rollTypeName: rollTypeNameByIssueId.get(String(row?.issueId || row?.issue?.id || '')) || row?.rollTypeName || '',
+    }));
+  }
+  return rows;
+}
+
+async function mapReceiveRowsWithExtras(process, rows = [], { includeLabelLineage = true } = {}) {
+  if (process === 'holo') {
+    const pieceIdsByIssueId = await computeHoloIssuePieceIdsByIssueId(rows.map(r => r.issueId));
+    const mappedRows = rows.map((r) => mapReceiveRow(process, r, {
+      computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [],
+    }));
+    return includeLabelLineage ? enrichReceiveRowsWithLabelLineage(process, mappedRows) : mappedRows;
+  }
+  if (process === 'coning') {
+    const [pieceIdsByIssueId, coneTypeNameByIssueId] = await Promise.all([
+      computeConingIssuePieceIdsByIssueId(rows.map(r => r.issueId)),
+      fetchConeTypeNameByIssueIdForConingReceiveRows(rows),
+    ]);
+    const mappedRows = rows.map((r) => mapReceiveRow(process, r, {
       computedPieceIds: pieceIdsByIssueId.get(r.issueId) || [],
       coneTypeName: coneTypeNameByIssueId.get(String(r.issueId)) || '',
     }));
+    return includeLabelLineage ? enrichReceiveRowsWithLabelLineage(process, mappedRows) : mappedRows;
   }
   return rows.map((r) => mapReceiveRow(process, r));
 }
@@ -1453,6 +1615,7 @@ function buildReceiveSummaryFromItems(process, items = []) {
 
 router.get('/receive/:process/history', requireAuth, requireStageReadPermission(receiveStagePermissionKey), async (req, res) => {
   const process = String(req.params.process || '').trim().toLowerCase();
+  const issueId = normalizeText(req.query.issueId);
   const limit = clampLimit(req.query.limit);
   const cursor = decodeCursor(req.query.cursor);
   const filters = sheetFiltersArrayFromQuery(req.query.filters);
@@ -1476,6 +1639,7 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
     }
     const whereAll = {
       isDeleted: false,
+      ...(issueId ? { issueId } : {}),
       ...(dateWhere ? dateWhere : {}),
       ...(filterWhere.length || extraWhere.length ? { AND: [...filterWhere, ...extraWhere] } : {}),
       ...(searchOr.length ? { OR: searchOr } : {}),
@@ -1490,13 +1654,13 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
       });
       const rowsWithUsers = await resolveUserFields(rowsRaw);
       const rowsWithItems = process === 'cutter' ? rowsWithUsers : await attachItemNamesToReceiveRows(rowsWithUsers);
-      const allItems = (await mapReceiveRowsWithExtras(process, rowsWithItems))
+      const allItems = (await mapReceiveRowsWithExtras(process, rowsWithItems, { includeLabelLineage: false }))
         .filter((row) => matchesComputedFilters(row, computedFilters));
       const pageCandidates = pageNum != null
         ? allItems.slice((pageNum - 1) * limit)
         : applyCursorToSortedItems(allItems, cursor, order);
       const hasMore = pageCandidates.length > limit;
-      const items = pageCandidates.slice(0, limit);
+      const items = await enrichReceiveRowsWithLabelLineage(process, pageCandidates.slice(0, limit));
       const lastInPage = items[items.length - 1];
       const nextCursor = pageNum == null && hasMore && lastInPage
         ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id })
@@ -1567,8 +1731,108 @@ router.get('/receive/:process/history', requireAuth, requireStageReadPermission(
   }
 });
 
+async function fetchReceiveShiftFacet(process) {
+  if (process === 'cutter') {
+    const rows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { isDeleted: false, NOT: { shift: null } },
+      select: { shift: true },
+      distinct: ['shift'],
+    });
+    return rows.map((row) => row.shift).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  }
+  const model = process === 'holo' ? prisma.issueToHoloMachine : prisma.issueToConingMachine;
+  const rows = await model.findMany({
+    where: { isDeleted: false, NOT: { shift: null } },
+    select: { shift: true },
+    distinct: ['shift'],
+  });
+  return rows.map((row) => row.shift).filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
+
+const RECEIVE_TARGETED_FACET_BASE_FIELDS = Object.freeze([
+  'machine',
+  'operator',
+  'employee',
+  'helper',
+  'item',
+  'cut',
+  'yarn',
+  'twist',
+  'box',
+  'bobbin',
+  'coneType',
+  'addedBy',
+  'shift',
+]);
+
+export function receiveTargetedFacetFieldsForProcess(process) {
+  return process === 'cutter'
+    ? [...RECEIVE_TARGETED_FACET_BASE_FIELDS, 'piece']
+    : [...RECEIVE_TARGETED_FACET_BASE_FIELDS];
+}
+
+async function fetchReceiveFacetValues(process, field) {
+  if (!receiveTargetedFacetFieldsForProcess(process).includes(field)) return null;
+  if (field === 'machine') {
+    const rows = await prisma.machine.findMany({
+      where: { processType: { in: ['all', process] } },
+      select: { name: true },
+      orderBy: { name: 'asc' },
+    });
+    return rows.map((row) => row.name).filter(Boolean);
+  }
+  if (field === 'operator' || field === 'employee' || field === 'helper') {
+    const rows = await prisma.operator.findMany({ select: { name: true }, orderBy: { name: 'asc' } });
+    return rows.map((row) => row.name).filter(Boolean);
+  }
+  if (field === 'item') {
+    const rows = await prisma.item.findMany({ select: { name: true }, orderBy: { name: 'asc' } });
+    return rows.map((row) => row.name).filter(Boolean);
+  }
+  if (field === 'cut') {
+    const rows = await prisma.cut.findMany({ select: { name: true }, orderBy: { name: 'asc' } });
+    return rows.map((row) => row.name).filter(Boolean);
+  }
+  if (field === 'yarn') {
+    const rows = await prisma.yarn.findMany({ select: { name: true }, orderBy: { name: 'asc' } });
+    return rows.map((row) => row.name).filter(Boolean);
+  }
+  if (field === 'twist') {
+    const rows = await prisma.twist.findMany({ select: { name: true }, orderBy: { name: 'asc' } });
+    return rows.map((row) => row.name).filter(Boolean);
+  }
+  if (field === 'box') {
+    const rows = await prisma.box.findMany({ select: { name: true }, orderBy: { name: 'asc' } });
+    return rows.map((row) => row.name).filter(Boolean);
+  }
+  if (field === 'bobbin') {
+    const rows = await prisma.bobbin.findMany({ select: { name: true }, orderBy: { name: 'asc' } });
+    return rows.map((row) => row.name).filter(Boolean);
+  }
+  if (field === 'coneType') {
+    const rows = await prisma.coneType.findMany({ select: { name: true }, orderBy: { name: 'asc' } });
+    return rows.map((row) => row.name).filter(Boolean);
+  }
+  if (field === 'addedBy') {
+    const rows = await prisma.user.findMany({ select: { username: true }, orderBy: { username: 'asc' } });
+    return rows.map((row) => row.username).filter(Boolean);
+  }
+  if (field === 'shift') return fetchReceiveShiftFacet(process);
+  if (field === 'piece') {
+    const rows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: { isDeleted: false },
+      select: { pieceId: true },
+      distinct: ['pieceId'],
+      orderBy: { pieceId: 'asc' },
+    });
+    return rows.map((row) => row.pieceId).filter(Boolean);
+  }
+  return [];
+}
+
 router.get('/receive/:process/history/facets', requireAuth, requireStageReadPermission(receiveStagePermissionKey), async (req, res) => {
   const process = String(req.params.process || '').trim().toLowerCase();
+  const field = String(req.query.field || '').trim();
   const excludeField = String(req.query.excludeField || '').trim();
   const filters = sheetFiltersArrayFromQuery(req.query.filters);
   const dateFrom = req.query.dateFrom;
@@ -1576,6 +1840,15 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
   const search = req.query.search;
 
   try {
+    if (field) {
+      const values = await fetchReceiveFacetValues(process, field);
+      if (values === null) return res.status(400).json({ error: 'Invalid facet field' });
+      return res.json({
+        facets: { [field]: values },
+        meta: { process, excludeField, field },
+      });
+    }
+
     const model = receiveModelForProcess(process);
     const dateWhere = buildDateWhere({ dateFrom, dateTo, field: 'date' });
     const filterWhere = buildFilterWhere(filters, RECEIVE_FILTERS, { excludeField, process });
@@ -1605,30 +1878,7 @@ router.get('/receive/:process/history/facets', requireAuth, requireStageReadPerm
       prisma.user.findMany({ select: { username: true }, orderBy: { username: 'asc' } }),
     ]);
 
-    let shifts = [];
-    if (process === 'cutter') {
-      const distinctShifts = await prisma.receiveFromCutterMachineRow.findMany({
-        where: { isDeleted: false, NOT: { shift: null } },
-        select: { shift: true },
-        distinct: ['shift'],
-      });
-      shifts = distinctShifts.map(s => s.shift).filter(Boolean);
-    } else if (process === 'holo') {
-      const distinctShifts = await prisma.issueToHoloMachine.findMany({
-        where: { isDeleted: false, NOT: { shift: null } },
-        select: { shift: true },
-        distinct: ['shift'],
-      });
-      shifts = distinctShifts.map(s => s.shift).filter(Boolean);
-    } else if (process === 'coning') {
-      const distinctShifts = await prisma.issueToConingMachine.findMany({
-        where: { isDeleted: false, NOT: { shift: null } },
-        select: { shift: true },
-        distinct: ['shift'],
-      });
-      shifts = distinctShifts.map(s => s.shift).filter(Boolean);
-    }
-    shifts.sort((a, b) => a.localeCompare(b));
+    const shifts = await fetchReceiveShiftFacet(process);
 
     // `where` is currently unused; keeping it for future context-filtered facets.
     void where;

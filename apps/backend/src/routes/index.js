@@ -52,6 +52,7 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 const RECEIVE_ROWS_FETCH_LIMIT = 5000;
 const RECEIVE_UPLOADS_FETCH_LIMIT = 100;
+const ISSUE_LOOKUP_RECEIVE_LIMIT = 200;
 const PERM_READ = ACCESS_LEVELS.READ;
 const PERM_WRITE = ACCESS_LEVELS.WRITE;
 const TAKE_BACK_EPSILON = 1e-6;
@@ -2399,6 +2400,14 @@ function hasAnyReadPermission(req, keys = []) {
   return keys.some(key => Number(req.user?.permissions?.[key] || 0) >= PERM_READ);
 }
 
+function requireAnyReadPermission(keys = []) {
+  return function requireAnyReadPermissionMiddleware(req, res, next) {
+    if (!req.user) return res.status(401).json({ error: 'unauthorized' });
+    if (!hasAnyReadPermission(req, keys)) return res.status(403).json({ error: 'forbidden' });
+    return next();
+  };
+}
+
 function buildBrandPayload(settingsRow) {
   return {
     primary: settingsRow?.brandPrimary || null,
@@ -2509,15 +2518,19 @@ async function buildHoloIssuedToConingMap(client, holoRowIds = []) {
   if (uniqueIds.length === 0) return new Map();
   const [rows, takeBackRows] = await Promise.all([
     client.$queryRaw`
+    WITH target_rows AS (
+      SELECT DISTINCT row_id
+      FROM unnest(${uniqueIds}::text[]) AS ids(row_id)
+    )
     SELECT
-      elem->>'rowId' AS row_id,
+      target_rows.row_id,
       SUM(CASE WHEN (elem->>'issueRolls') IS NULL OR (elem->>'issueRolls') = '' THEN 0 ELSE (elem->>'issueRolls')::numeric END) AS issue_rolls,
       SUM(CASE WHEN (elem->>'issueWeight') IS NULL OR (elem->>'issueWeight') = '' THEN 0 ELSE (elem->>'issueWeight')::numeric END) AS issue_weight
-    FROM "IssueToConingMachine" i,
-      jsonb_array_elements(COALESCE(i."receivedRowRefs", '[]'::jsonb)) elem
+    FROM "IssueToConingMachine" i
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(i."receivedRowRefs", '[]'::jsonb)) elem
+    JOIN target_rows ON target_rows.row_id = elem->>'rowId'
     WHERE i."isDeleted" = false
-      AND elem->>'rowId' = ANY (${uniqueIds}::text[])
-    GROUP BY row_id
+    GROUP BY target_rows.row_id
   `,
     client.issueTakeBackLine.findMany({
       where: {
@@ -2581,31 +2594,140 @@ function getHoloRowNetWeight(row) {
   return Math.max(0, gross - tare);
 }
 
-async function buildConingSourceLookupPayload(row) {
+async function buildHoloSourceLookupPayload(row) {
   if (!row) return null;
 
+  const piece = row.pieceId
+    ? await prisma.inboundItem.findUnique({ where: { id: row.pieceId } })
+    : null;
+  const itemId = piece?.itemId || null;
+  const item = itemId
+    ? await prisma.item.findUnique({ where: { id: itemId }, select: { id: true, name: true } })
+    : null;
+  const totalBobbins = Number(row.bobbinQuantity || 0);
+  const totalWeight = Number(row.netWt || 0);
+  const issuedBobbins = Number(row.issuedBobbins || 0);
+  const issuedWeight = Number(row.issuedBobbinWeight || 0);
+  const dispatchedCount = Number(row.dispatchedCount || 0);
+  const dispatchedWeight = Number(row.dispatchedWeight || 0);
+  // Keep this identical to the authoritative Issue-to-Holo POST guard.
+  const availableBobbins = Math.max(0, totalBobbins - issuedBobbins - dispatchedCount);
+  const availableWeight = Math.max(0, totalWeight - issuedWeight - dispatchedWeight);
+  const outcome = availableBobbins > 0 && availableWeight > TAKE_BACK_EPSILON
+    ? 'found'
+    : 'unavailable';
+  const cutName = row.cutMaster?.name || (typeof row.cut === 'string' ? row.cut : '') || '';
+  const lotNo = piece?.lotNo || '';
+  const itemName = item?.name || row.itemName || '';
+
+  return {
+    outcome,
+    ...(outcome === 'unavailable'
+      ? { error: 'No bobbins available for issue (may have been dispatched or already issued).' }
+      : {}),
+    row: {
+      id: row.id,
+      rowId: row.id,
+      date: row.date,
+      pieceId: row.pieceId,
+      lotNo,
+      itemId,
+      itemName,
+      vchNo: row.vchNo,
+      barcode: row.barcode,
+      legacyBarcode: row.notes || null,
+      notes: row.notes || '',
+      bobbinId: row.bobbinId || null,
+      bobbinName: row.bobbin?.name || '',
+      bobbinWeight: Number(row.bobbin?.weight || 0),
+      boxId: row.boxId || null,
+      boxName: row.box?.name || '',
+      boxWeight: Number(row.box?.weight || 0),
+      cutId: row.cutId || null,
+      cutName,
+      bobbinQuantity: totalBobbins,
+      netWeight: roundTo3Decimals(totalWeight),
+      netWt: roundTo3Decimals(totalWeight),
+      grossWeight: Number(row.grossWt || 0),
+      grossWt: Number(row.grossWt || 0),
+      tareWeight: Number(row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0),
+      tareWt: Number(row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0),
+      issuedBobbins,
+      issuedBobbinWeight: roundTo3Decimals(issuedWeight),
+      dispatchedCount,
+      dispatchedWeight: roundTo3Decimals(dispatchedWeight),
+      availableBobbins,
+      availableWeight: roundTo3Decimals(availableWeight),
+    },
+    piece: piece ? {
+      id: piece.id,
+      lotNo: piece.lotNo,
+      itemId: piece.itemId,
+      weight: Number(piece.weight || 0),
+      status: piece.status,
+      seq: piece.seq,
+      barcode: piece.barcode,
+    } : null,
+    item,
+    trace: {
+      pieceId: row.pieceId || null,
+      lotNo,
+      itemId,
+      itemName,
+      cutId: row.cutId || null,
+      cutName,
+    },
+    pieceIds: row.pieceId ? [row.pieceId] : [],
+    availability: {
+      totalBobbins,
+      totalWeight: roundTo3Decimals(totalWeight),
+      issuedBobbins,
+      issuedWeight: roundTo3Decimals(issuedWeight),
+      dispatchedCount,
+      dispatchedWeight: roundTo3Decimals(dispatchedWeight),
+      availableBobbins,
+      availableWeight: roundTo3Decimals(availableWeight),
+    },
+  };
+}
+
+async function buildConingSourceLookupPayload(row, sourceStage = 'holo') {
+  if (!row) return null;
+
+  const normalizedSourceStage = sourceStage === 'coning' ? 'coning' : 'holo';
+  const isConingSource = normalizedSourceStage === 'coning';
   const issue = row.issue || null;
-  const totalWeight = getHoloRowNetWeight(row);
-  const totalRolls = Number(row.rollCount || 0);
+  const totalWeight = isConingSource
+    ? Number(row.netWeight ?? row.coneWeight ?? 0)
+    : getHoloRowNetWeight(row);
+  const totalRolls = Number(isConingSource ? row.coneCount : row.rollCount) || 0;
   const dispatchedCount = Number(row.dispatchedCount || 0);
   const dispatchedWeight = Number(row.dispatchedWeight || 0);
   const issuedToConingMap = await buildHoloIssuedToConingMap(prisma, [row.id]);
   const issuedToConing = issuedToConingMap.get(row.id) || { issuedRolls: 0, issuedWeight: 0 };
   const availableWeight = Math.max(0, totalWeight - dispatchedWeight - Number(issuedToConing.issuedWeight || 0));
-  const availableRolls = calcAvailableCountFromWeight({
-    totalCount: totalRolls,
-    issuedCount: issuedToConing.issuedRolls || 0,
-    dispatchedCount,
-    totalWeight,
-    availableWeight,
-  }) || 0;
-  const trace = await resolveHoloIssueDetails(issue, createTraceCaches());
-  const pieceIds = await resolveHoloIssuePieceIds(issue);
+  // Match the POST guard exactly: count and weight are independent inventory
+  // dimensions. A low remaining weight must not silently reduce the count
+  // balance because the submitted issue weight is validated separately.
+  const availableRolls = Math.max(
+    0,
+    totalRolls - dispatchedCount - Number(issuedToConing.issuedRolls || 0),
+  );
+  const trace = isConingSource
+    ? await resolveConingTraceDetails(issue)
+    : await resolveHoloIssueDetails(issue, createTraceCaches());
+  // Holo receives usually carry their direct piece. Re-coning rows retain the
+  // same lot/item/trace metadata, and the UI already falls back to the lot label
+  // when no direct piece id exists.
+  const pieceIds = isConingSource ? [] : await resolveHoloIssuePieceIds(issue);
   const item = issue?.itemId
     ? await prisma.item.findUnique({ where: { id: issue.itemId }, select: { id: true, name: true } })
     : null;
   const crateIndex = parseReceiveCrateIndex(row.barcode);
-  const legacyBarcode = buildLegacyReceiveBarcode('RHO', issue?.lotNo, crateIndex);
+  const legacyBarcode = buildLegacyReceiveBarcode(isConingSource ? 'RCO' : 'RHO', issue?.lotNo, crateIndex);
+  const rollTypeId = isConingSource ? null : (row.rollTypeId || null);
+  const rollTypeName = isConingSource ? (trace.rollTypeName || '') : (row.rollType?.name || '');
+  const rollTypeWeight = isConingSource ? 0 : Number(row.rollType?.weight || 0);
 
   const outcome = (availableRolls > 0 && availableWeight > TAKE_BACK_EPSILON) ? 'found' : 'unavailable';
 
@@ -2614,13 +2736,30 @@ async function buildConingSourceLookupPayload(row) {
     ...(outcome === 'unavailable' ? { error: 'No rolls available for issue (may have been dispatched or already issued).' } : {}),
     row: {
       id: row.id,
+      rowId: row.id,
+      sourceStage: normalizedSourceStage,
       date: row.date,
       issueId: row.issueId,
       pieceId: row.pieceId,
+      lotNo: issue?.lotNo || '',
+      itemId: issue?.itemId || null,
+      itemName: item?.name || '',
       rollCount: totalRolls,
+      coneCount: isConingSource ? totalRolls : undefined,
       rollWeight: totalWeight,
+      coneWeight: isConingSource ? Number(row.coneWeight || 0) : undefined,
+      netWeight: roundTo3Decimals(totalWeight),
       grossWeight: Number(row.grossWeight || 0),
       tareWeight: Number(row.tareWeight || 0),
+      boxId: row.boxId || null,
+      boxName: row.box?.name || '',
+      boxWeight: Number(row.box?.weight || 0),
+      rollTypeId,
+      rollTypeName,
+      rollTypeWeight,
+      cutName: trace.cutName || issue?.cut?.name || '',
+      yarnName: trace.yarnName || issue?.yarn?.name || '',
+      twistName: trace.twistName || issue?.twist?.name || '',
       barcode: row.barcode,
       legacyBarcode,
       notes: row.notes || '',
@@ -2650,7 +2789,19 @@ async function buildConingSourceLookupPayload(row) {
       twistId: issue.twistId,
       cutId: issue.cutId,
     } : null,
-    trace,
+    trace: {
+      ...trace,
+      sourceStage: normalizedSourceStage,
+      lotNo: issue?.lotNo || '',
+      itemId: issue?.itemId || null,
+      itemName: item?.name || '',
+      rollTypeId,
+      rollTypeName,
+      rollTypeWeight,
+      boxId: row.boxId || null,
+      boxName: row.box?.name || '',
+      boxWeight: Number(row.box?.weight || 0),
+    },
     pieceIds,
     availability: {
       totalRolls,
@@ -2661,6 +2812,387 @@ async function buildConingSourceLookupPayload(row) {
       issuedToConingWeight: issuedToConing.issuedWeight || 0,
       availableRolls,
       availableWeight: roundTo3Decimals(availableWeight),
+    },
+  };
+}
+
+async function buildHoloIssueLookupPayload(issue) {
+  const refs = parseJsonArraySafe(issue?.receivedRowRefs);
+  const allSourceIds = Array.from(new Set(
+    refs.map((ref) => (typeof ref?.rowId === 'string' ? ref.rowId.trim() : '')).filter(Boolean),
+  ));
+  // This is already scoped to one exact issue. Keep every referenced source so
+  // edit, take-back, receive, and label actions never operate on partial metadata.
+  const sourceIds = allSourceIds;
+
+  const [sourceRows, item, balances, receivesPlusOne, trace] = await Promise.all([
+    sourceIds.length
+      ? prisma.receiveFromCutterMachineRow.findMany({
+        where: { id: { in: sourceIds }, isDeleted: false },
+        include: {
+          bobbin: { select: { id: true, name: true, weight: true } },
+          box: { select: { id: true, name: true, weight: true } },
+          cutMaster: { select: { id: true, name: true } },
+        },
+      })
+      : [],
+    issue?.itemId
+      ? prisma.item.findUnique({ where: { id: issue.itemId }, select: { id: true, name: true } })
+      : null,
+    computeIssueBalancesBatch(prisma, 'holo', [issue]),
+    prisma.receiveFromHoloMachineRow.findMany({
+      where: { issueId: issue.id, isDeleted: false },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: ISSUE_LOOKUP_RECEIVE_LIMIT + 1,
+      include: {
+        rollType: { select: { id: true, name: true, weight: true } },
+        box: { select: { id: true, name: true, weight: true } },
+        operator: { select: { id: true, name: true } },
+        helper: { select: { id: true, name: true } },
+      },
+    }),
+    resolveHoloIssueDetails(issue, createTraceCaches()),
+  ]);
+
+  const sourceRowById = new Map(sourceRows.map((row) => [row.id, row]));
+  let pieceIds = Array.from(new Set(sourceRows.map((row) => row.pieceId).filter(Boolean)));
+  if (pieceIds.length === 0) pieceIds = await resolveHoloIssuePieceIds(issue);
+  const [pieces, pieceTotals] = await Promise.all([
+    pieceIds.length
+      ? prisma.inboundItem.findMany({ where: { id: { in: pieceIds } } })
+      : [],
+    pieceIds.length
+      ? prisma.receiveFromHoloMachinePieceTotal.findMany({ where: { pieceId: { in: pieceIds } } })
+      : [],
+  ]);
+  const pieceById = new Map(pieces.map((piece) => [piece.id, piece]));
+  const refByRowId = new Map(refs.map((ref) => [ref?.rowId, ref]));
+  const crates = sourceIds.map((rowId) => {
+    const row = sourceRowById.get(rowId);
+    if (!row) return null;
+    const ref = refByRowId.get(rowId) || {};
+    const piece = pieceById.get(row.pieceId);
+    const crateTare = Number(row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0);
+    return {
+      id: row.id,
+      rowId: row.id,
+      date: row.date,
+      barcode: row.barcode || ref.barcode || null,
+      vchNo: row.vchNo,
+      pieceId: row.pieceId,
+      lotNo: piece?.lotNo || issue.lotNo || '',
+      itemId: piece?.itemId || issue.itemId || null,
+      itemName: item?.name || row.itemName || '',
+      bobbinId: row.bobbinId || null,
+      bobbinName: row.bobbin?.name || '',
+      bobbinWeight: Number(row.bobbin?.weight || 0),
+      boxId: row.boxId || null,
+      boxName: row.box?.name || '',
+      boxWeight: Number(row.box?.weight || 0),
+      cutId: row.cutId || issue.cutId || null,
+      cutName: row.cutMaster?.name || trace.cutName || '',
+      bobbinQuantity: Number(row.bobbinQuantity || 0),
+      netWeight: roundTo3Decimals(Number(row.netWt || 0)),
+      netWt: roundTo3Decimals(Number(row.netWt || 0)),
+      grossWeight: Number(row.grossWt || 0),
+      grossWt: Number(row.grossWt || 0),
+      tareWeight: crateTare,
+      tareWt: crateTare,
+      crateTare,
+      issuedBobbins: Number(ref.issuedBobbins ?? row.bobbinQuantity ?? 0),
+      issuedBobbinWeight: roundTo3Decimals(Number(ref.issuedBobbinWeight ?? row.netWt ?? 0)),
+      sourceIssuedBobbins: Number(row.issuedBobbins || 0),
+      sourceIssuedBobbinWeight: roundTo3Decimals(Number(row.issuedBobbinWeight || 0)),
+      dispatchedCount: Number(row.dispatchedCount || 0),
+      dispatchedWeight: roundTo3Decimals(Number(row.dispatchedWeight || 0)),
+    };
+  }).filter(Boolean);
+  const receivesTruncated = receivesPlusOne.length > ISSUE_LOOKUP_RECEIVE_LIMIT;
+  const receives = receivesPlusOne.slice(0, ISSUE_LOOKUP_RECEIVE_LIMIT);
+  const itemName = item?.name || '';
+  const machineName = issue.machine?.name || '';
+  const operatorName = issue.operator?.name || '';
+  const lotNos = Array.from(new Set(crates.map((crate) => crate.lotNo).filter(Boolean)));
+  if (lotNos.length === 0 && issue.lotNo) lotNos.push(issue.lotNo);
+  const lotLabel = lotNos.length <= 1
+    ? (lotNos[0] || issue.lotNo || '')
+    : (lotNos.length <= 3 ? `Mixed (${lotNos.join(', ')})` : `Mixed (${lotNos.length})`);
+
+  return {
+    ...issue,
+    itemName,
+    machineName,
+    operatorName,
+    cutName: trace.cutName || issue.cut?.name || '',
+    yarnName: trace.yarnName || issue.yarn?.name || '',
+    twistName: trace.twistName || issue.twist?.name || '',
+    lotLabel,
+    lotNos,
+    pieceIds,
+    pieces,
+    crates,
+    sources: crates,
+    sourcesTruncated: false,
+    issueBalance: balances.get(issue.id) || null,
+    hasReceives: receives.length > 0,
+    receives,
+    receivesTruncated,
+    pieceTotals,
+    trace: {
+      ...trace,
+      lotNo: issue.lotNo || '',
+      lotNos,
+      lotLabel,
+      itemId: issue.itemId || null,
+      itemName,
+      pieceIds,
+    },
+  };
+}
+
+async function buildConingIssueLookupPayload(issue) {
+  const refs = parseJsonArraySafe(issue?.receivedRowRefs);
+  const allSourceIds = Array.from(new Set(
+    refs.map((ref) => (typeof ref?.rowId === 'string' ? ref.rowId.trim() : '')).filter(Boolean),
+  ));
+  // This is already scoped to one exact issue. Keep every referenced source so
+  // edit, take-back, receive, and label actions never operate on partial metadata.
+  const sourceIds = allSourceIds;
+  const coneTypeIds = Array.from(new Set(refs.map((ref) => ref?.coneTypeId).filter(Boolean)));
+  const wrapperIds = Array.from(new Set(refs.map((ref) => ref?.wrapperId).filter(Boolean)));
+  const issueBoxIds = Array.from(new Set(refs.map((ref) => ref?.boxId).filter(Boolean)));
+
+  const [holoRows, coningRows, item, balances, receivesPlusOne, pieceTotal, trace, coneTypes, wrappers, issueBoxes] = await Promise.all([
+    sourceIds.length
+      ? prisma.receiveFromHoloMachineRow.findMany({
+        where: { id: { in: sourceIds }, isDeleted: false },
+        include: {
+          issue: {
+            include: {
+              cut: { select: { id: true, name: true } },
+              yarn: { select: { id: true, name: true } },
+              twist: { select: { id: true, name: true } },
+            },
+          },
+          rollType: { select: { id: true, name: true, weight: true } },
+          box: { select: { id: true, name: true, weight: true } },
+        },
+      })
+      : [],
+    sourceIds.length
+      ? prisma.receiveFromConingMachineRow.findMany({
+        where: { id: { in: sourceIds }, isDeleted: false },
+        include: {
+          issue: {
+            include: {
+              cut: { select: { id: true, name: true } },
+              yarn: { select: { id: true, name: true } },
+              twist: { select: { id: true, name: true } },
+            },
+          },
+          box: { select: { id: true, name: true, weight: true } },
+        },
+      })
+      : [],
+    issue?.itemId
+      ? prisma.item.findUnique({ where: { id: issue.itemId }, select: { id: true, name: true } })
+      : null,
+    computeIssueBalancesBatch(prisma, 'coning', [issue]),
+    prisma.receiveFromConingMachineRow.findMany({
+      where: { issueId: issue.id, isDeleted: false },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: ISSUE_LOOKUP_RECEIVE_LIMIT + 1,
+      include: {
+        box: { select: { id: true, name: true, weight: true } },
+        operator: { select: { id: true, name: true } },
+        helper: { select: { id: true, name: true } },
+      },
+    }),
+    prisma.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId: issue.id } }),
+    resolveConingTraceDetails(issue),
+    coneTypeIds.length
+      ? prisma.coneType.findMany({ where: { id: { in: coneTypeIds } }, select: { id: true, name: true, weight: true } })
+      : [],
+    wrapperIds.length
+      ? prisma.wrapper.findMany({ where: { id: { in: wrapperIds } }, select: { id: true, name: true } })
+      : [],
+    issueBoxIds.length
+      ? prisma.box.findMany({ where: { id: { in: issueBoxIds } }, select: { id: true, name: true, weight: true } })
+      : [],
+  ]);
+
+  const holoRowById = new Map(holoRows.map((row) => [row.id, row]));
+  const coningRowById = new Map(coningRows.map((row) => [row.id, row]));
+  const coneTypeById = new Map(coneTypes.map((row) => [row.id, row]));
+  const wrapperById = new Map(wrappers.map((row) => [row.id, row]));
+  const issueBoxById = new Map(issueBoxes.map((row) => [row.id, row]));
+  const refByRowId = new Map(refs.map((ref) => [ref?.rowId, ref]));
+
+  const cutterSourceIds = Array.from(new Set(holoRows.flatMap((row) => (
+    parseJsonArraySafe(row.issue?.receivedRowRefs)
+      .map((ref) => (typeof ref?.rowId === 'string' ? ref.rowId.trim() : ''))
+      .filter(Boolean)
+  ))));
+  const cutterSources = cutterSourceIds.length
+    ? await prisma.receiveFromCutterMachineRow.findMany({
+      where: { id: { in: cutterSourceIds }, isDeleted: false },
+      select: { id: true, pieceId: true },
+    })
+    : [];
+  let pieceIds = Array.from(new Set([
+    ...holoRows.map((row) => row.pieceId).filter(Boolean),
+    ...cutterSources.map((row) => row.pieceId).filter(Boolean),
+  ]));
+  if (pieceIds.length === 0 && issue.lotNo) {
+    const lotPieces = await prisma.inboundItem.findMany({
+      where: { lotNo: issue.lotNo },
+      select: { id: true },
+      take: 2,
+    });
+    if (lotPieces.length === 1) pieceIds = [lotPieces[0].id];
+  }
+  const pieces = pieceIds.length
+    ? await prisma.inboundItem.findMany({ where: { id: { in: pieceIds } } })
+    : [];
+  const itemName = item?.name || '';
+  const sources = sourceIds.map((rowId) => {
+    const ref = refByRowId.get(rowId) || {};
+    const coneType = coneTypeById.get(ref.coneTypeId);
+    const wrapper = wrapperById.get(ref.wrapperId);
+    const issueBox = issueBoxById.get(ref.boxId);
+    const holoRow = holoRowById.get(rowId);
+    if (holoRow) {
+      return {
+        id: holoRow.id,
+        rowId: holoRow.id,
+        sourceStage: 'holo',
+        date: holoRow.date,
+        barcode: ref.barcode || holoRow.barcode,
+        pieceId: holoRow.pieceId || null,
+        lotNo: holoRow.issue?.lotNo || issue.lotNo || '',
+        itemId: holoRow.issue?.itemId || issue.itemId || null,
+        itemName,
+        cutId: holoRow.issue?.cutId || issue.cutId || null,
+        cutName: holoRow.issue?.cut?.name || trace.cutName || '',
+        yarnId: holoRow.issue?.yarnId || issue.yarnId || null,
+        yarnName: holoRow.issue?.yarn?.name || trace.yarnName || '',
+        twistId: holoRow.issue?.twistId || issue.twistId || null,
+        twistName: holoRow.issue?.twist?.name || trace.twistName || '',
+        rollTypeId: holoRow.rollTypeId || null,
+        rollTypeName: holoRow.rollType?.name || '',
+        rollTypeWeight: Number(holoRow.rollType?.weight || 0),
+        rollCount: Number(holoRow.rollCount || 0),
+        rollWeight: roundTo3Decimals(getHoloRowNetWeight(holoRow)),
+        netWeight: roundTo3Decimals(getHoloRowNetWeight(holoRow)),
+        grossWeight: Number(holoRow.grossWeight || 0),
+        tareWeight: Number(holoRow.tareWeight || 0),
+        sourceBoxId: holoRow.boxId || null,
+        sourceBoxName: holoRow.box?.name || '',
+        sourceBoxWeight: Number(holoRow.box?.weight || 0),
+        dispatchedCount: Number(holoRow.dispatchedCount || 0),
+        dispatchedWeight: roundTo3Decimals(Number(holoRow.dispatchedWeight || 0)),
+        issueRolls: Number(ref.issueRolls || 0),
+        issueWeight: roundTo3Decimals(Number(ref.issueWeight || 0)),
+        coneTypeId: ref.coneTypeId || null,
+        coneTypeName: coneType?.name || '',
+        coneTypeWeight: Number(coneType?.weight || 0),
+        wrapperId: ref.wrapperId || null,
+        wrapperName: wrapper?.name || '',
+        boxId: ref.boxId || null,
+        boxName: issueBox?.name || '',
+        boxWeight: Number(issueBox?.weight || 0),
+      };
+    }
+
+    const coningRow = coningRowById.get(rowId);
+    if (!coningRow) return null;
+    return {
+      id: coningRow.id,
+      rowId: coningRow.id,
+      sourceStage: 'coning',
+      date: coningRow.date,
+      barcode: ref.barcode || coningRow.barcode,
+      lotNo: coningRow.issue?.lotNo || issue.lotNo || '',
+      itemId: coningRow.issue?.itemId || issue.itemId || null,
+      itemName,
+      cutId: coningRow.issue?.cutId || issue.cutId || null,
+      cutName: coningRow.issue?.cut?.name || trace.cutName || '',
+      yarnId: coningRow.issue?.yarnId || issue.yarnId || null,
+      yarnName: coningRow.issue?.yarn?.name || trace.yarnName || '',
+      twistId: coningRow.issue?.twistId || issue.twistId || null,
+      twistName: coningRow.issue?.twist?.name || trace.twistName || '',
+      coneCount: Number(coningRow.coneCount || 0),
+      netWeight: roundTo3Decimals(Number(coningRow.netWeight || 0)),
+      grossWeight: Number(coningRow.grossWeight || 0),
+      tareWeight: Number(coningRow.tareWeight || 0),
+      sourceBoxId: coningRow.boxId || null,
+      sourceBoxName: coningRow.box?.name || '',
+      sourceBoxWeight: Number(coningRow.box?.weight || 0),
+      dispatchedCount: Number(coningRow.dispatchedCount || 0),
+      dispatchedWeight: roundTo3Decimals(Number(coningRow.dispatchedWeight || 0)),
+      issueRolls: Number(ref.issueRolls || 0),
+      issueWeight: roundTo3Decimals(Number(ref.issueWeight || 0)),
+      coneTypeId: ref.coneTypeId || null,
+      coneTypeName: coneType?.name || '',
+      coneTypeWeight: Number(coneType?.weight || 0),
+      wrapperId: ref.wrapperId || null,
+      wrapperName: wrapper?.name || '',
+      boxId: ref.boxId || null,
+      boxName: issueBox?.name || '',
+      boxWeight: Number(issueBox?.weight || 0),
+    };
+  }).filter(Boolean);
+
+  const firstRef = refs[0] || {};
+  const firstConeType = coneTypeById.get(firstRef.coneTypeId);
+  const firstWrapper = wrapperById.get(firstRef.wrapperId);
+  const firstIssueBox = issueBoxById.get(firstRef.boxId);
+  const receivesTruncated = receivesPlusOne.length > ISSUE_LOOKUP_RECEIVE_LIMIT;
+  const receives = receivesPlusOne.slice(0, ISSUE_LOOKUP_RECEIVE_LIMIT);
+
+  return {
+    ...issue,
+    itemName,
+    machineName: issue.machine?.name || '',
+    operatorName: issue.operator?.name || '',
+    cutName: trace.cutName || issue.cut?.name || '',
+    yarnName: trace.yarnName || issue.yarn?.name || '',
+    twistName: trace.twistName || issue.twist?.name || '',
+    rollTypeName: trace.rollTypeName || sources[0]?.rollTypeName || '',
+    coneTypeId: firstRef.coneTypeId || null,
+    coneTypeName: firstConeType?.name || '',
+    coneTypeWeight: Number(firstConeType?.weight || 0),
+    wrapperId: firstRef.wrapperId || null,
+    wrapperName: firstWrapper?.name || '',
+    boxId: firstRef.boxId || null,
+    boxName: firstIssueBox?.name || '',
+    boxWeight: Number(firstIssueBox?.weight || 0),
+    lotLabel: issue.lotNo || '',
+    lotNos: issue.lotNo ? [issue.lotNo] : [],
+    pieceIds,
+    pieces,
+    sources,
+    crates: sources,
+    sourcesTruncated: false,
+    issueBalance: balances.get(issue.id) || null,
+    hasReceives: receives.length > 0,
+    receives,
+    receivesTruncated,
+    pieceTotal,
+    trace: {
+      ...trace,
+      lotNo: issue.lotNo || '',
+      itemId: issue.itemId || null,
+      itemName,
+      pieceIds,
+      coneTypeId: firstRef.coneTypeId || null,
+      coneTypeName: firstConeType?.name || '',
+      coneTypeWeight: Number(firstConeType?.weight || 0),
+      wrapperId: firstRef.wrapperId || null,
+      wrapperName: firstWrapper?.name || '',
+      boxId: firstRef.boxId || null,
+      boxName: firstIssueBox?.name || '',
+      boxWeight: Number(firstIssueBox?.weight || 0),
     },
   };
 }
@@ -3202,87 +3734,44 @@ router.get('/api/issue_to_cutter_machine/lookup', requirePermission('issue.cutte
   }
 });
 
-router.get('/api/issue_to_holo_machine/lookup', requirePermission('issue.holo', PERM_READ), async (req, res) => {
+router.get('/api/issue_to_holo_machine/lookup', requireAnyReadPermission(['issue.holo', 'receive.holo']), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
-    const issue = await prisma.issueToHoloMachine.findFirst({ where: { barcode, isDeleted: false } });
-    if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
-    const receivedRefs = Array.isArray(issue.receivedRowRefs) ? issue.receivedRowRefs : [];
-    const rowIds = receivedRefs.map((r) => (typeof r?.rowId === 'string' ? r.rowId : null)).filter(Boolean);
-    const rows = rowIds.length > 0
-      ? await prisma.receiveFromCutterMachineRow.findMany({
-        where: { id: { in: rowIds }, isDeleted: false },
-        select: {
-          id: true,
-          bobbinId: true,
-          pieceId: true,
-          barcode: true,
-          netWt: true,
-          tareWt: true,
-          pktBoxWt: true,
-          pcsBoxWt: true,
-          grossWt: true,
-          bobbinQuantity: true,
-        },
-      })
-      : [];
-    const bobbinIds = Array.from(new Set(rows.map((r) => r.bobbinId).filter(Boolean)));
-    const bobbins = bobbinIds.length > 0
-      ? await prisma.bobbin.findMany({
-        where: { id: { in: bobbinIds } },
-        select: { id: true, name: true },
-      })
-      : [];
-    const bobbinNameById = new Map(bobbins.map((b) => [b.id, b.name || '']));
-    const pieceIds = Array.from(new Set(rows.map((r) => r.pieceId).filter(Boolean)));
-    if (pieceIds.length === 0 && issue?.lotNo) {
-      pieceIds.push(`${issue.lotNo}-1`);
-    }
-    const pieces = pieceIds.length
-      ? await prisma.inboundItem.findMany({
-        where: { id: { in: pieceIds } },
-        select: { id: true, lotNo: true, itemId: true, seq: true },
-      })
-      : [];
-    const pieceMap = new Map(pieces.map((p) => [p.id, p]));
-    const refMap = new Map(receivedRefs.map((r) => [r?.rowId, r]));
-    const crates = rows.map((row) => {
-      const meta = refMap.get(row.id) || {};
-      const piece = pieceMap.get(row.pieceId);
-      const crateTare = row.tareWt ?? row.pktBoxWt ?? row.pcsBoxWt ?? 0;
-      return {
-        rowId: row.id,
-        bobbinId: row.bobbinId || null,
-        bobbinName: row.bobbinId ? (bobbinNameById.get(row.bobbinId) || null) : null,
-        pieceId: row.pieceId,
-        lotNo: piece?.lotNo || meta.lotNo || null,
-        itemId: piece?.itemId || meta.itemId || null,
-        barcode: row.barcode || meta.barcode || null,
-        netWeight: row.netWt ?? null,
-        grossWeight: row.grossWt ?? null,
-        crateTare,
-        issuedBobbins: meta.issuedBobbins ?? row.bobbinQuantity ?? null,
-      };
+    const issue = await prisma.issueToHoloMachine.findFirst({
+      where: { barcode, isDeleted: false },
+      include: {
+        machine: { select: { id: true, name: true } },
+        operator: { select: { id: true, name: true } },
+        cut: { select: { id: true, name: true } },
+        yarn: { select: { id: true, name: true } },
+        twist: { select: { id: true, name: true } },
+      },
     });
-    const lotNos = Array.from(new Set(crates.map((c) => c.lotNo).filter(Boolean)));
-    const lotLabel = lotNos.length <= 1
-      ? (lotNos[0] || issue.lotNo || '')
-      : (lotNos.length <= 3 ? `Mixed (${lotNos.join(', ')})` : `Mixed (${lotNos.length})`);
-    res.json({ ...issue, pieceIds, lotNos, lotLabel, crates });
+    if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
+    res.json(await buildHoloIssueLookupPayload(issue));
   } catch (err) {
     console.error('Failed to lookup holo issue barcode', err);
     res.status(500).json({ error: 'Failed to lookup barcode' });
   }
 });
 
-router.get('/api/issue_to_coning_machine/lookup', requirePermission('issue.coning', PERM_READ), async (req, res) => {
+router.get('/api/issue_to_coning_machine/lookup', requireAnyReadPermission(['issue.coning', 'receive.coning']), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
-    const issue = await prisma.issueToConingMachine.findFirst({ where: { barcode, isDeleted: false } });
+    const issue = await prisma.issueToConingMachine.findFirst({
+      where: { barcode, isDeleted: false },
+      include: {
+        machine: { select: { id: true, name: true } },
+        operator: { select: { id: true, name: true } },
+        cut: { select: { id: true, name: true } },
+        yarn: { select: { id: true, name: true } },
+        twist: { select: { id: true, name: true } },
+      },
+    });
     if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
-    res.json(issue);
+    res.json(await buildConingIssueLookupPayload(issue));
   } catch (err) {
     console.error('Failed to lookup coning issue barcode', err);
     res.status(500).json({ error: 'Failed to lookup barcode' });
@@ -9247,7 +9736,18 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
     const box = boxId ? await prisma.box.findUnique({ where: { id: boxId } }) : null;
     const issue = await prisma.issueToHoloMachine.findFirst({
       where: { id: issueId, isDeleted: false },
-      select: { lotNo: true, barcode: true, itemId: true, receivedRowRefs: true, cutId: true, twistId: true, yarnId: true },
+      select: {
+        id: true,
+        lotNo: true,
+        barcode: true,
+        itemId: true,
+        receivedRowRefs: true,
+        metallicBobbins: true,
+        metallicBobbinsWeight: true,
+        cutId: true,
+        twistId: true,
+        yarnId: true,
+      },
     });
     if (!issue) {
       return res.status(404).json({ error: 'Issue not found' });
@@ -9326,7 +9826,7 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
     });
 
     const netIncrement = Number(netWeight);
-    await prisma.receiveFromHoloMachinePieceTotal.upsert({
+    const pieceTotal = await prisma.receiveFromHoloMachinePieceTotal.upsert({
       where: { pieceId },
       update: {
         totalRolls: { increment: rollCountNum },
@@ -9341,7 +9841,21 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
         ...actorCreateFields(actorUserId),
       },
     });
-    res.json({ ok: true, row: createdRow });
+    let issueBalance = null;
+    try {
+      const issueBalances = await computeIssueBalancesBatch(prisma, 'holo', [issue]);
+      issueBalance = issueBalances.get(issue.id) || null;
+    } catch (balanceErr) {
+      // The receive and piece-total writes have already committed. Never turn a
+      // successful write into a retryable 500 just because response enrichment failed.
+      console.error('Failed to enrich Holo receive response balance', balanceErr);
+    }
+    res.json({
+      ok: true,
+      row: createdRow,
+      issueBalance,
+      pieceTotal,
+    });
 
     // Notify receive_from_holo_machine created
     try {
@@ -9805,7 +10319,7 @@ router.post('/api/receive_from_holo_machine/revert_wastage_row', requirePermissi
   }
 });
 
-router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('issue.coning', PERM_WRITE), async (req, res) => {
+router.get('/api/issue_to_holo_machine/source-row/lookup', requirePermission('issue.holo', PERM_READ), async (req, res) => {
   try {
     const barcode = normalizeBarcodeInput(req.query?.barcode);
     if (!barcode) {
@@ -9813,6 +10327,83 @@ router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('
     }
 
     const include = {
+      bobbin: { select: { id: true, name: true, weight: true } },
+      box: { select: { id: true, name: true, weight: true } },
+      cutMaster: { select: { id: true, name: true } },
+    };
+    const barcodeRows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: {
+        barcode: { equals: barcode, mode: 'insensitive' },
+        isDeleted: false,
+      },
+      include,
+      orderBy: { createdAt: 'desc' },
+      take: 2,
+    });
+    if (barcodeRows.length > 0) {
+      if (barcodeRows.length === 1) {
+        const payload = await buildHoloSourceLookupPayload(barcodeRows[0]);
+        const status = payload.outcome === 'found' ? 200 : 409;
+        return res.status(status).json(payload);
+      }
+      return res.status(409).json({
+        outcome: 'duplicate_barcode_match',
+        error: 'Multiple active rows match this barcode. Please contact an administrator.',
+      });
+    }
+    const deletedBarcodeRow = await prisma.receiveFromCutterMachineRow.findFirst({
+      where: { barcode: { equals: barcode, mode: 'insensitive' }, isDeleted: true },
+      select: { id: true },
+    });
+    if (deletedBarcodeRow) {
+      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted Cutter Receive row' });
+    }
+
+    // Legacy imports stored the scanned receive barcode in notes. Only consult
+    // this fallback when no modern barcode matched so stale notes cannot shadow it.
+    const noteRows = await prisma.receiveFromCutterMachineRow.findMany({
+      where: {
+        notes: { equals: barcode, mode: 'insensitive' },
+        isDeleted: false,
+      },
+      include,
+      orderBy: { createdAt: 'desc' },
+      take: 2,
+    });
+    if (noteRows.length > 0) {
+      if (noteRows.length === 1) {
+        const payload = await buildHoloSourceLookupPayload(noteRows[0]);
+        const status = payload.outcome === 'found' ? 200 : 409;
+        return res.status(status).json(payload);
+      }
+      return res.status(409).json({
+        outcome: 'duplicate_legacy_match',
+        error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.',
+      });
+    }
+    const deletedNoteRow = await prisma.receiveFromCutterMachineRow.findFirst({
+      where: { notes: { equals: barcode, mode: 'insensitive' }, isDeleted: true },
+      select: { id: true },
+    });
+    if (deletedNoteRow) {
+      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted Cutter Receive row' });
+    }
+
+    return res.status(404).json({ outcome: 'not_found', error: 'Barcode not found in Cutter Receive rows' });
+  } catch (err) {
+    console.error('Failed to lookup holo source row', err);
+    res.status(500).json({ outcome: 'not_found', error: err.message || 'Failed to lookup barcode' });
+  }
+});
+
+router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('issue.coning', PERM_READ), async (req, res) => {
+  try {
+    const barcode = normalizeBarcodeInput(req.query?.barcode);
+    if (!barcode) {
+      return res.status(400).json({ outcome: 'not_found', error: 'barcode query parameter is required' });
+    }
+
+    const holoInclude = {
       issue: {
         include: {
           cut: { select: { name: true } },
@@ -9820,64 +10411,141 @@ router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('
           twist: { select: { name: true } },
         },
       },
+      rollType: { select: { id: true, name: true, weight: true } },
+      box: { select: { id: true, name: true, weight: true } },
+    };
+    const coningInclude = {
+      issue: {
+        include: {
+          cut: { select: { name: true } },
+          yarn: { select: { name: true } },
+          twist: { select: { name: true } },
+        },
+      },
+      box: { select: { id: true, name: true, weight: true } },
     };
 
-    const barcodeRows = await prisma.receiveFromHoloMachineRow.findMany({
-      where: { barcode: { equals: barcode, mode: 'insensitive' } },
-      include,
-      orderBy: { createdAt: 'desc' },
-    });
+    const [holoBarcodeRows, coningBarcodeRows] = await Promise.all([
+      prisma.receiveFromHoloMachineRow.findMany({
+        where: {
+          barcode: { equals: barcode, mode: 'insensitive' },
+          isDeleted: false,
+          issue: { isDeleted: false },
+        },
+        include: holoInclude,
+        orderBy: { createdAt: 'desc' },
+        take: 2,
+      }),
+      prisma.receiveFromConingMachineRow.findMany({
+        where: {
+          barcode: { equals: barcode, mode: 'insensitive' },
+          isDeleted: false,
+          issue: { isDeleted: false },
+        },
+        include: coningInclude,
+        orderBy: { createdAt: 'desc' },
+        take: 2,
+      }),
+    ]);
+    const barcodeRows = [
+      ...holoBarcodeRows.map((row) => ({ row, sourceStage: 'holo' })),
+      ...coningBarcodeRows.map((row) => ({ row, sourceStage: 'coning' })),
+    ];
     if (barcodeRows.length > 0) {
-      const activeRows = barcodeRows.filter((row) => !row.isDeleted && !row.issue?.isDeleted);
-      if (activeRows.length === 1) {
-        const payload = await buildConingSourceLookupPayload(activeRows[0]);
+      if (barcodeRows.length === 1) {
+        const match = barcodeRows[0];
+        const payload = await buildConingSourceLookupPayload(match.row, match.sourceStage);
         const status = payload.outcome === 'found' ? 200 : 409;
         return res.status(status).json(payload);
       }
-      if (activeRows.length > 1) {
-        return res.status(409).json({
-          outcome: 'duplicate_legacy_match',
-          error: 'Multiple rows match this barcode. Please use the new barcode instead.',
-        });
-      }
-      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted Holo Receive row' });
+      return res.status(409).json({
+        outcome: 'duplicate_barcode_match',
+        error: 'Multiple active rows match this barcode. Please contact an administrator.',
+      });
+    }
+    const deletedBarcodeRows = await Promise.all([
+      prisma.receiveFromHoloMachineRow.findFirst({
+        where: { barcode: { equals: barcode, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+      prisma.receiveFromConingMachineRow.findFirst({
+        where: { barcode: { equals: barcode, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+    ]);
+    if (deletedBarcodeRows.some(Boolean)) {
+      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted receive row' });
     }
 
-    const noteRows = await prisma.receiveFromHoloMachineRow.findMany({
-      where: { notes: { equals: barcode, mode: 'insensitive' } },
-      include,
-      orderBy: { createdAt: 'desc' },
-    });
+    const [holoNoteRows, coningNoteRows] = await Promise.all([
+      prisma.receiveFromHoloMachineRow.findMany({
+        where: {
+          notes: { equals: barcode, mode: 'insensitive' },
+          isDeleted: false,
+          issue: { isDeleted: false },
+        },
+        include: holoInclude,
+        orderBy: { createdAt: 'desc' },
+        take: 2,
+      }),
+      prisma.receiveFromConingMachineRow.findMany({
+        where: {
+          notes: { equals: barcode, mode: 'insensitive' },
+          isDeleted: false,
+          issue: { isDeleted: false },
+        },
+        include: coningInclude,
+        orderBy: { createdAt: 'desc' },
+        take: 2,
+      }),
+    ]);
+    const noteRows = [
+      ...holoNoteRows.map((row) => ({ row, sourceStage: 'holo' })),
+      ...coningNoteRows.map((row) => ({ row, sourceStage: 'coning' })),
+    ];
     if (noteRows.length > 0) {
-      const activeRows = noteRows.filter((row) => !row.isDeleted && !row.issue?.isDeleted);
-      if (activeRows.length === 1) {
-        const payload = await buildConingSourceLookupPayload(activeRows[0]);
+      if (noteRows.length === 1) {
+        const match = noteRows[0];
+        const payload = await buildConingSourceLookupPayload(match.row, match.sourceStage);
         const status = payload.outcome === 'found' ? 200 : 409;
         return res.status(status).json(payload);
       }
-      if (activeRows.length > 1) {
-        return res.status(409).json({
-          outcome: 'duplicate_legacy_match',
-          error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.',
-        });
-      }
-      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted Holo Receive row' });
+      return res.status(409).json({
+        outcome: 'duplicate_legacy_match',
+        error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.',
+      });
+    }
+    const deletedNoteRows = await Promise.all([
+      prisma.receiveFromHoloMachineRow.findFirst({
+        where: { notes: { equals: barcode, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+      prisma.receiveFromConingMachineRow.findFirst({
+        where: { notes: { equals: barcode, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+    ]);
+    if (deletedNoteRows.some(Boolean)) {
+      return res.status(410).json({ outcome: 'deleted', error: 'Barcode belongs to a deleted receive row' });
     }
 
-    const legacyResolved = await resolveLegacyReceiveRow(barcode, { include });
-    if (legacyResolved?.stage === 'holo' && legacyResolved.row) {
-      const payload = await buildConingSourceLookupPayload(legacyResolved.row);
+    const parsedLegacyBarcode = parseLegacyReceiveBarcode(barcode);
+    const legacyResolved = await resolveLegacyReceiveRow(barcode, {
+      include: parsedLegacyBarcode?.stage === 'coning' ? coningInclude : holoInclude,
+    });
+    if ((legacyResolved?.stage === 'holo' || legacyResolved?.stage === 'coning') && legacyResolved.row) {
+      const payload = await buildConingSourceLookupPayload(legacyResolved.row, legacyResolved.stage);
       const status = payload.outcome === 'found' ? 200 : 409;
       return res.status(status).json(payload);
     }
-    if (legacyResolved?.stage === 'holo' && legacyResolved.error === 'ambiguous') {
+    if ((legacyResolved?.stage === 'holo' || legacyResolved?.stage === 'coning') && legacyResolved.error === 'ambiguous') {
       return res.status(409).json({
         outcome: 'duplicate_legacy_match',
         error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.',
       });
     }
 
-    return res.status(404).json({ outcome: 'not_found', error: 'Barcode not found in Holo Receive rows' });
+    return res.status(404).json({ outcome: 'not_found', error: 'Barcode not found in Holo or Coning Receive rows' });
   } catch (err) {
     console.error('Failed to lookup coning source row', err);
     res.status(500).json({ outcome: 'not_found', error: err.message || 'Failed to lookup barcode' });
@@ -10365,7 +11033,7 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
         ...actorCreateFields(actorUserId),
       },
     });
-    await prisma.receiveFromConingMachinePieceTotal.upsert({
+    const pieceTotal = await prisma.receiveFromConingMachinePieceTotal.upsert({
       where: { pieceId },
       update: {
         totalCones: { increment: coneCount },
@@ -10380,7 +11048,21 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
         ...actorCreateFields(actorUserId),
       },
     });
-    res.json({ ok: true, row: createdRow });
+    let issueBalance = null;
+    try {
+      const issueBalances = await computeIssueBalancesBatch(prisma, 'coning', [issue]);
+      issueBalance = issueBalances.get(issue.id) || null;
+    } catch (balanceErr) {
+      // The receive and piece-total writes have already committed. Never turn a
+      // successful write into a retryable 500 just because response enrichment failed.
+      console.error('Failed to enrich Coning receive response balance', balanceErr);
+    }
+    res.json({
+      ok: true,
+      row: createdRow,
+      issueBalance,
+      pieceTotal,
+    });
 
     // Notify receive_from_coning_machine created
     try {

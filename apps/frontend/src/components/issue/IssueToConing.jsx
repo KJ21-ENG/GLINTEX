@@ -4,35 +4,12 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
-import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
-import { buildHoloTraceContext, resolveHoloTrace } from '../../utils/holoTrace';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 
 export function IssueToConing() {
-    const { db, refreshProcessData, emitInvalidation } = useInventory();
-    const traceContext = useMemo(() => buildConingTraceContext(db), [db]);
-    const holoTraceContext = useMemo(() => buildHoloTraceContext(db), [db]);
-    const activeConingTakeBackByIssueSource = useMemo(() => {
-        const map = new Map();
-        (db.issue_take_backs || []).forEach((tb) => {
-            if (tb?.stage !== 'coning') return;
-            if (tb?.isReverse || tb?.isReversed) return;
-            const issueId = String(tb?.issueId || '').trim();
-            if (!issueId) return;
-            (tb.lines || []).forEach((line) => {
-                const sourceId = String(line?.sourceId || '').trim();
-                if (!sourceId) return;
-                const key = `${issueId}::${sourceId}`;
-                const current = map.get(key) || { count: 0, weight: 0 };
-                current.count += Number(line?.count || 0);
-                current.weight += Number(line?.weight || 0);
-                map.set(key, current);
-            });
-        });
-        return map;
-    }, [db.issue_take_backs]);
+    const { db, emitInvalidation } = useInventory();
 
     const [form, setForm] = useState({
         date: todayISO(),
@@ -88,86 +65,34 @@ export function IssueToConing() {
     const findItemName = (itemId, fallback = '') => (db.items || []).find(i => i.id === itemId)?.name || fallback || 'Unknown';
     const findYarnName = (yarnId, fallback = '') => (db.yarns || []).find(y => y.id === yarnId)?.name || fallback || 'Unknown';
 
-    function buildLocalLookup(row) {
-        const issue = db.issue_to_holo_machine.find(i => i.id === row.issueId);
-        if (!issue) return { error: 'Lot not found for this crate' };
-
-        const resolved = resolveHoloTrace(issue, holoTraceContext);
-        const totalRolls = Number(row.rollCount || 0);
-        const totalWeight = Number(row.rollWeight || row.netWeight || (Number(row.grossWeight || 0) - Number(row.tareWeight || 0)) || 0);
-        const dispatchedRolls = Number(row.dispatchedCount || 0);
-        const dispatchedWeight = Number(row.dispatchedWeight || 0);
-
-        let issuedToConingRolls = 0;
-        let issuedToConingWeight = 0;
-        const rawIssuedByIssueSource = new Map();
-        (db.issue_to_coning_machine || []).forEach(coningIssue => {
-            if (coningIssue.isDeleted) return;
-            try {
-                const refs = typeof coningIssue.receivedRowRefs === 'string'
-                    ? JSON.parse(coningIssue.receivedRowRefs || '[]')
-                    : (coningIssue.receivedRowRefs || []);
-                refs.forEach(ref => {
-                    if (ref.rowId === row.id || normalizeValue(ref.barcode) === normalizeValue(row.barcode)) {
-                        const key = `${coningIssue.id}::${row.id}`;
-                        const current = rawIssuedByIssueSource.get(key) || { rolls: 0, weight: 0 };
-                        current.rolls += Number(ref.issueRolls || 0);
-                        current.weight += Number(ref.issueWeight || 0);
-                        rawIssuedByIssueSource.set(key, current);
-                    }
-                });
-            } catch (e) { /* ignore parse errors */ }
-        });
-        rawIssuedByIssueSource.forEach((rawIssued, key) => {
-            const takeBack = activeConingTakeBackByIssueSource.get(key) || { count: 0, weight: 0 };
-            issuedToConingRolls += Math.max(0, Number(rawIssued.rolls || 0) - Number(takeBack.count || 0));
-            issuedToConingWeight += Math.max(0, Number(rawIssued.weight || 0) - Number(takeBack.weight || 0));
-        });
-
-        let pieceIds = Array.isArray(row.computedPieceIds) ? row.computedPieceIds.filter(Boolean) : [];
-        if (!pieceIds.length) {
-            try {
-                const hRefs = typeof issue?.receivedRowRefs === 'string' ? JSON.parse(issue.receivedRowRefs) : issue?.receivedRowRefs;
-                if (Array.isArray(hRefs)) {
-                    const ids = new Set();
-                    hRefs.forEach(hRef => {
-                        const cutterRow = db.receive_from_cutter_machine_rows?.find(cr => cr.id === hRef.rowId);
-                        if (cutterRow?.pieceId) ids.add(cutterRow.pieceId);
-                    });
-                    pieceIds = Array.from(ids);
-                }
-            } catch (e) { /* ignore parse errors */ }
-        }
-
-        return {
-            row,
-            issue,
-            trace: { cutName: resolved.cutName === '—' ? '' : resolved.cutName },
-            pieceIds,
-            itemName: findItemName(issue.itemId, ''),
-            yarnName: findYarnName(issue.yarnId, ''),
-            availability: {
-                totalRolls,
-                totalWeight,
-                availableRolls: Math.max(0, totalRolls - dispatchedRolls - issuedToConingRolls),
-                availableWeight: Math.max(0, totalWeight - dispatchedWeight - issuedToConingWeight),
-            },
-        };
-    }
-
     function normalizeServerLookup(result) {
         if (!result || result.outcome !== 'found') {
-            return { error: result?.error || 'Barcode not found in Holo Receive rows' };
+            return { error: result?.error || 'Barcode not found in Holo or Coning Receive rows' };
         }
         const row = result.row || {};
         const issue = result.issue || row.issue || null;
+        const trace = result.trace || {};
+        const pieceIds = Array.isArray(result.pieceIds)
+            ? result.pieceIds
+            : (Array.isArray(row.computedPieceIds) ? row.computedPieceIds : []);
         return {
             row: { ...row, issueId: row.issueId || issue?.id },
             issue,
-            trace: result.trace || {},
-            pieceIds: Array.isArray(result.pieceIds) ? result.pieceIds : (row.computedPieceIds || []),
-            itemName: issue?.itemName || findItemName(issue?.itemId, ''),
-            yarnName: result.trace?.yarnName || findYarnName(issue?.yarnId, ''),
+            trace,
+            pieceIds,
+            itemName: issue?.itemName || result.item?.name || row.itemName || trace.itemName || findItemName(issue?.itemId, ''),
+            yarnName: trace.yarnName || issue?.yarnName || row.yarnName || findYarnName(issue?.yarnId, ''),
+            cutId: row.cutId || issue?.cutId || trace.cutId || null,
+            twistId: row.twistId || issue?.twistId || trace.twistId || null,
+            twistName: row.twistName || issue?.twistName || trace.twistName || '',
+            rollTypeId: row.rollTypeId || row.rollType?.id || trace.rollTypeId || null,
+            rollTypeName: row.rollTypeName || row.rollType?.name || trace.rollTypeName || result.rollType?.name || '',
+            rollTypeWeight: Number(row.rollTypeWeight ?? row.rollType?.weight ?? trace.rollTypeWeight ?? 0),
+            boxId: row.boxId || row.box?.id || null,
+            boxName: row.boxName || row.box?.name || '',
+            boxWeight: Number(row.boxWeight ?? row.box?.weight ?? 0),
+            grossWeight: Number(row.grossWeight ?? 0),
+            tareWeight: Number(row.tareWeight ?? 0),
             availability: result.availability || {
                 totalRolls: row.rollCount || 0,
                 totalWeight: row.rollWeight || 0,
@@ -178,23 +103,11 @@ export function IssueToConing() {
     }
 
     async function resolveScannedCrate(normalized) {
-        const matches = (db.receive_from_holo_machine_rows || []).filter(r => {
-            return normalizeValue(r.barcode) === normalized
-                || normalizeValue(r.notes) === normalized
-                || normalizeValue(r.legacyBarcode) === normalized;
-        });
-
-        if (matches.length > 1) {
-            return { error: 'Multiple rows match this legacy barcode. Please use the new barcode instead.' };
-        }
-
-        if (matches.length === 1) return buildLocalLookup(matches[0]);
-
         try {
             const result = await api.lookupConingSourceRowByBarcode(normalized);
             return normalizeServerLookup(result);
         } catch (e) {
-            return { error: e.message || 'Barcode not found in Holo Receive rows' };
+            return { error: e.message || 'Barcode not found in Holo or Coning Receive rows' };
         }
     }
 
@@ -211,7 +124,7 @@ export function IssueToConing() {
                 return;
             }
 
-            const { row, issue, availability, trace, pieceIds, itemName, yarnName } = lookup;
+            const { row, issue, availability, trace, pieceIds, itemName, yarnName, rollTypeName } = lookup;
 
             if (crates.some(c => c.rowId === row.id)) {
                 alert('Crate already added');
@@ -244,10 +157,10 @@ export function IssueToConing() {
                 return;
             }
 
-            const totalRolls = Number(availability?.totalRolls || row.rollCount || 0);
-            const totalWeight = Number(availability?.totalWeight || row.rollWeight || row.netWeight || 0);
-            const availableRolls = Number(availability?.availableRolls || row.availableRolls || 0);
-            const availableWeight = Number(availability?.availableWeight || row.availableWeight || 0);
+            const totalRolls = Number(availability?.totalRolls ?? row.rollCount ?? 0);
+            const totalWeight = Number(availability?.totalWeight ?? row.rollWeight ?? row.netWeight ?? 0);
+            const availableRolls = Number(availability?.availableRolls ?? row.availableRolls ?? 0);
+            const availableWeight = Number(availability?.availableWeight ?? row.availableWeight ?? 0);
 
             if (availableRolls <= 0 || availableWeight <= 0) {
                 alert('No rolls available for issue (may have been dispatched or already issued).');
@@ -270,8 +183,26 @@ export function IssueToConing() {
                 issueWeight: defaultIssueWeight,
                 itemId: scannedItemId,
                 itemName,
+                cutId: lookup.cutId,
                 cut: cutName,
-                yarnId: scannedYarnId
+                yarnId: scannedYarnId,
+                yarnName,
+                twistId: lookup.twistId,
+                twistName: lookup.twistName,
+                rollTypeId: lookup.rollTypeId,
+                rollTypeName,
+                rollTypeWeight: lookup.rollTypeWeight,
+                boxId: lookup.boxId,
+                boxName: lookup.boxName,
+                boxWeight: lookup.boxWeight,
+                grossWeight: lookup.grossWeight,
+                tareWeight: lookup.tareWeight,
+                totalRolls,
+                totalWeight,
+                issueId: row.issueId || issue?.id || null,
+                pieceIds: pieceIds || [],
+                trace,
+                source: { row, issue, availability, trace, pieceIds },
             }]);
             setScanInput('');
             setScanFeedback(`Added ${normalized}`);
@@ -296,10 +227,65 @@ export function IssueToConing() {
         }));
     }
 
+    async function offerPostCommitPrint(created, snapshot) {
+        try {
+            const issue = created?.issueToConingMachine;
+            if (!issue) return;
+            const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_ISSUE);
+            if (!template || !window.confirm('Print sticker for this issue?')) return;
+
+            await printStageTemplate(
+                LABEL_STAGE_KEYS.CONING_ISSUE,
+                {
+                    lotNo: issue.lotNo,
+                    barcode: issue.barcode,
+                    totalRolls: snapshot.totalRolls,
+                    rollCount: snapshot.totalRolls,
+                    totalWeight: snapshot.totalWeight,
+                    grossWeight: null,
+                    tareWeight: null,
+                    netWeight: snapshot.totalWeight,
+                    expectedCones: issue.expectedCones,
+                    perConeTargetG: snapshot.targetWeight,
+                    machineName: snapshot.machineName,
+                    operatorName: snapshot.operatorName,
+                    shift: snapshot.shift,
+                    itemName: snapshot.itemName,
+                    cut: snapshot.cut,
+                    yarnName: snapshot.yarnName,
+                    rollType: snapshot.rollType,
+                    coneType: snapshot.coneType,
+                    wrapperName: snapshot.wrapperName,
+                    date: snapshot.date,
+                },
+                { template },
+            );
+        } catch (error) {
+            console.error('Coning issue was saved but its label could not be printed', error);
+            alert('Issue was saved, but the label could not be printed. You can reprint it from Issue History.');
+        }
+    }
+
     const handleSubmit = wrapSubmit(async () => {
         if (crates.length === 0) return;
         if (!form.targetWeight) { alert('Enter target cone weight'); return; }
 
+        const distinctNames = (field) => Array.from(new Set(crates.map((crate) => String(crate[field] || '').trim()).filter(Boolean))).join(', ');
+        const labelSnapshot = {
+            machineName: (db.machines || []).find((machine) => machine.id === form.machineId)?.name || '',
+            operatorName: (db.operators || []).find((operator) => operator.id === form.operatorId)?.name || '',
+            coneType: (db.cone_types || []).find((cone) => cone.id === form.coneTypeId)?.name || '',
+            wrapperName: (db.wrappers || []).find((wrapper) => wrapper.id === form.wrapperId)?.name || '',
+            itemName: distinctNames('itemName'),
+            cut: distinctNames('cut'),
+            yarnName: distinctNames('yarnName'),
+            rollType: distinctNames('rollTypeName'),
+            totalRolls: coningMeta.totalRolls,
+            totalWeight: coningMeta.totalNet,
+            targetWeight: form.targetWeight,
+            shift: form.shift || '',
+            date: form.date,
+        };
         setSubmitting(true);
         try {
             const created = await api.createIssueToConingMachine({
@@ -320,74 +306,13 @@ export function IssueToConing() {
                     issueWeight: Number(c.issueWeight)
                 }))
             });
-            const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_ISSUE);
-            if (template && created?.issueToConingMachine) {
-                const confirmPrint = window.confirm('Print sticker for this issue?');
-                if (confirmPrint) {
-                    const machineName = db.machines.find((m) => m.id === form.machineId)?.name;
-                    const operatorName = db.operators.find((o) => o.id === form.operatorId)?.name;
-                    const coneType = db.cone_types?.find(x => x.id === form.coneTypeId)?.name;
-                    const wrapperName = db.wrappers?.find(x => x.id === form.wrapperId)?.name;
-
-                    // Resolve info from first crate source
-                    let itemName = '';
-                    let yarnName = '';
-                    let cutName = '';
-                    let rollType = '';
-
-                    if (crates.length > 0) {
-                        const resolved = created?.issueToConingMachine
-                            ? resolveConingTrace(created.issueToConingMachine, traceContext)
-                            : { cutName: '—', yarnName: '—', rollTypeName: '—' };
-                        cutName = resolved.cutName === '—' ? '' : resolved.cutName;
-                        yarnName = resolved.yarnName === '—' ? '' : resolved.yarnName;
-                        rollType = resolved.rollTypeName === '—' ? '' : resolved.rollTypeName;
-
-                        const firstRow = db.receive_from_holo_machine_rows?.find(r => r.id === crates[0].rowId);
-                        if (firstRow) {
-                            const holoIssue = db.issue_to_holo_machine?.find(i => i.id === firstRow.issueId);
-                            if (holoIssue) {
-                                itemName = db.items?.find(i => i.id === holoIssue.itemId)?.name || '';
-                            }
-                        }
-                    }
-
-                    await printStageTemplate(
-                        LABEL_STAGE_KEYS.CONING_ISSUE,
-                        {
-                            lotNo: created.issueToConingMachine.lotNo,
-                            barcode: created.issueToConingMachine.barcode,
-                            totalRolls: coningMeta.totalRolls,
-                            rollCount: coningMeta.totalRolls,
-                            totalWeight: coningMeta.totalNet,
-                            grossWeight: null,
-                            tareWeight: null,
-                            netWeight: coningMeta.totalNet,
-                            expectedCones: created.issueToConingMachine.expectedCones,
-                            perConeTargetG: form.targetWeight,
-                            machineName,
-                            operatorName,
-                            shift: form.shift || '',
-                            itemName,
-                            cut: cutName,
-                            yarnName,
-                            rollType,
-                            coneType,
-                            wrapperName,
-                            date: form.date,
-                        },
-                        { template },
-                    );
-                }
-            }
             emitInvalidation([
                 INVENTORY_INVALIDATION_KEYS.issueOnMachine('coning'),
                 INVENTORY_INVALIDATION_KEYS.issueHistory('coning'),
             ], { source: 'createIssueToConingMachine' });
-            // Avoid full bootstrap refresh; coning process module covers issues/receives involved here.
-            await refreshProcessData('coning');
             setCrates([]);
             alert('Issued to Coning successfully');
+            void offerPostCommitPrint(created, labelSnapshot);
         } catch (e) {
             alert(e.message);
         } finally {

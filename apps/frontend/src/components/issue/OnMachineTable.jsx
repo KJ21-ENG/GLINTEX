@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatKg, formatDateDDMMYYYY } from '../../utils';
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu } from '../ui';
-import { ArrowRight, Download, Loader2, RotateCcw, Search, X } from 'lucide-react';
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu, Button } from '../ui';
+import { ArrowRight, Download, Info, Loader2, RotateCcw, Search, X } from 'lucide-react';
 import { exportHistoryToExcel } from '../../services';
 import { KeyValueGrid } from '../common/KeyValueGrid';
 import { SheetColumnFilter } from '../common/SheetColumnFilters';
@@ -13,8 +13,82 @@ import { Dialog, DialogContent } from '../ui/Dialog';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
 import { useV2CursorList } from '../../hooks/useV2CursorList';
 import { useInfiniteScrollSentinel } from '../../hooks/useInfiniteScrollSentinel';
+import * as api from '../../api';
 import * as v2 from '../../api/v2';
 import { InfoPopover } from '../common/InfoPopover';
+
+function OnDemandInfoPopover({
+    title,
+    items = [],
+    isLoading = false,
+    error = '',
+    onOpen,
+    renderContent,
+    footerText = '',
+    emptyText = 'No items.',
+    widthClassName = 'w-64',
+    bodyClassName = 'max-h-[200px] overflow-y-auto text-sm',
+    buttonClassName = 'h-6 w-6 rounded-full hover:bg-muted',
+    align = 'left',
+}) {
+    const [isOpen, setIsOpen] = useState(false);
+    const popoverRef = useRef(null);
+
+    useEffect(() => {
+        if (!isOpen) return undefined;
+        const handlePointerDown = (event) => {
+            if (!popoverRef.current?.contains(event.target)) setIsOpen(false);
+        };
+        document.addEventListener('pointerdown', handlePointerDown);
+        return () => document.removeEventListener('pointerdown', handlePointerDown);
+    }, [isOpen]);
+
+    const toggle = () => {
+        const nextOpen = !isOpen;
+        setIsOpen(nextOpen);
+        if (nextOpen) onOpen?.();
+    };
+
+    return (
+        <div className="relative inline-block" ref={popoverRef}>
+            <Button
+                variant="ghost"
+                size="icon"
+                className={buttonClassName}
+                onClick={(event) => {
+                    event.stopPropagation();
+                    toggle();
+                }}
+            >
+                <Info className="h-4 w-4 text-primary" />
+            </Button>
+            {isOpen && (
+                <div
+                    className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} top-full mt-2 z-50 ${widthClassName} rounded-md border bg-popover p-4 text-popover-foreground shadow-md`}
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    <h4 className="mb-2 font-medium leading-none">{title}</h4>
+                    <div className={bodyClassName}>
+                        {isLoading ? (
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                                <Loader2 className="h-4 w-4 animate-spin" /> Loading details…
+                            </div>
+                        ) : error ? (
+                            <div className="text-destructive">{error}</div>
+                        ) : items.length === 0 ? (
+                            <div className="text-muted-foreground">{emptyText}</div>
+                        ) : (
+                            renderContent(items)
+                        )}
+                    </div>
+                    {footerText && !isLoading && !error ? (
+                        <div className="mt-2 border-t pt-2 text-[11px] text-muted-foreground">{footerText}</div>
+                    ) : null}
+                </div>
+            )}
+        </div>
+    );
+}
 
 /**
  * OnMachineTable - Displays work-in-progress entries (issued but not fully received)
@@ -39,6 +113,14 @@ export function OnMachineTable({ db, process }) {
     const [takeBackNote, setTakeBackNote] = useState('');
     const [takeBackLinesDraft, setTakeBackLinesDraft] = useState([]);
     const [takeBackSaving, setTakeBackSaving] = useState(false);
+    const [actionLoadingId, setActionLoadingId] = useState(null);
+    const [receivedDetailsByIssue, setReceivedDetailsByIssue] = useState({});
+    const [receivedDetailsTruncated, setReceivedDetailsTruncated] = useState({});
+    const [receivedDetailsLoading, setReceivedDetailsLoading] = useState({});
+    const [receivedDetailsError, setReceivedDetailsError] = useState({});
+    const actionBusyRef = useRef(false);
+    const issueActionCacheRef = useRef(new Map());
+    const issueDetailInflightRef = useRef(new Map());
     const scrollRootRef = useRef(null);
     const boxById = useMemo(() => {
         const map = new Map();
@@ -49,24 +131,6 @@ export function OnMachineTable({ db, process }) {
         });
         return map;
     }, [db.boxes]);
-    const bobbinById = useMemo(() => {
-        const map = new Map();
-        (db.bobbins || []).forEach((bobbin) => {
-            const id = String(bobbin?.id || '').trim();
-            if (!id) return;
-            map.set(id, bobbin);
-        });
-        return map;
-    }, [db.bobbins]);
-    const rollTypeById = useMemo(() => {
-        const map = new Map();
-        (db.roll_types || []).forEach((rollType) => {
-            const id = String(rollType?.id || '').trim();
-            if (!id) return;
-            map.set(id, rollType);
-        });
-        return map;
-    }, [db.roll_types]);
     const roundTakeBackWeight = (value) => {
         const num = Number(value || 0);
         if (!Number.isFinite(num) || num <= 0) return 0;
@@ -187,51 +251,18 @@ export function OnMachineTable({ db, process }) {
         return map;
     }, [db.inbound_items]);
 
-    const cutterReceiveById = useMemo(() => {
-        const map = new Map();
-        (db.receive_from_cutter_machine_rows || []).forEach((row) => {
-            const id = String(row?.id || '').trim();
-            if (!id) return;
-            map.set(id, row);
-        });
-        return map;
-    }, [db.receive_from_cutter_machine_rows]);
-
-    const holoReceiveById = useMemo(() => {
-        const map = new Map();
-        (db.receive_from_holo_machine_rows || []).forEach((row) => {
-            const id = String(row?.id || '').trim();
-            if (!id) return;
-            map.set(id, row);
-        });
-        return map;
-    }, [db.receive_from_holo_machine_rows]);
-
     const resolveTakeBackSourceLabel = (stage, sourceId, fallback = '') => {
         if (stage === 'cutter') {
             return inboundBarcodeById.get(sourceId) || fallback || sourceId;
-        }
-        if (stage === 'holo') {
-            const row = cutterReceiveById.get(sourceId);
-            const rowBarcode = String(row?.barcode || row?.vchNo || '').trim();
-            if (rowBarcode) return rowBarcode;
-            const pieceBarcode = inboundBarcodeById.get(String(row?.pieceId || '').trim());
-            return pieceBarcode || fallback || sourceId;
-        }
-        if (stage === 'coning') {
-            const row = holoReceiveById.get(sourceId);
-            const rowBarcode = String(row?.barcode || '').trim();
-            if (rowBarcode) return rowBarcode;
-            return fallback || sourceId;
         }
         return fallback || sourceId;
     };
 
     const receiveRowsByIssue = useMemo(() => {
         const map = new Map();
-        const collection = process === 'cutter' ? (db.receive_from_cutter_machine_rows || []) :
-            process === 'holo' ? (db.receive_from_holo_machine_rows || []) :
-                process === 'coning' ? (db.receive_from_coning_machine_rows || []) : [];
+        // Cutter still owns a process snapshot. Holo and Coning receive details are
+        // loaded issue-by-issue when the user opens the details control.
+        const collection = process === 'cutter' ? (db.receive_from_cutter_machine_rows || []) : [];
 
         collection.forEach(r => {
             if (r.isDeleted || !r.issueId) return;
@@ -303,6 +334,109 @@ export function OnMachineTable({ db, process }) {
         );
     }, [db.cuts, db.boxes]);
 
+    const getIssueDetailCacheKey = (entry) => `${process}:${entry?.id || entry?.barcode || ''}`;
+
+    const loadIssueDetail = async (entry, { force = false } = {}) => {
+        if (!entry) throw new Error('Issue details are unavailable');
+        if (process === 'cutter') return entry;
+
+        const key = getIssueDetailCacheKey(entry);
+        const cached = issueActionCacheRef.current.get(key);
+        if (!force && cached?.detail) return cached.detail;
+        if (!force && issueDetailInflightRef.current.has(key)) {
+            return await issueDetailInflightRef.current.get(key);
+        }
+        if (!entry.barcode) throw new Error('Issue barcode is missing');
+
+        const pending = (process === 'holo'
+            ? api.getIssueByHoloBarcode(entry.barcode)
+            : api.getIssueByConingBarcode(entry.barcode))
+            .then((detail) => {
+                issueActionCacheRef.current.set(key, { ...(issueActionCacheRef.current.get(key) || {}), detail });
+                return detail;
+            })
+            .finally(() => issueDetailInflightRef.current.delete(key));
+        issueDetailInflightRef.current.set(key, pending);
+        return await pending;
+    };
+
+    const loadIssueActionBundle = async (entry, { force = false } = {}) => {
+        if (process === 'cutter') {
+            return {
+                detail: entry,
+                takeBacks: activeTakeBacksByIssue.get(entry.id) || [],
+            };
+        }
+
+        const key = getIssueDetailCacheKey(entry);
+        const cached = issueActionCacheRef.current.get(key);
+        if (!force && cached?.detail && Array.isArray(cached?.takeBacks)) return cached;
+
+        const [detail, takeBackResponse] = await Promise.all([
+            loadIssueDetail(entry, { force }),
+            api.getIssueTakeBacks({ stage: process, issueId: entry.id }),
+        ]);
+        const takeBacks = Array.isArray(takeBackResponse?.issue_take_backs)
+            ? takeBackResponse.issue_take_backs
+            : [];
+        const next = { ...(issueActionCacheRef.current.get(key) || {}), detail, takeBacks };
+        issueActionCacheRef.current.set(key, next);
+        return next;
+    };
+
+    const clearIssueActionCache = (issueId) => {
+        const key = `${process}:${issueId}`;
+        issueActionCacheRef.current.delete(key);
+        issueDetailInflightRef.current.delete(key);
+        setReceivedDetailsByIssue((prev) => {
+            if (!Object.prototype.hasOwnProperty.call(prev, issueId)) return prev;
+            const next = { ...prev };
+            delete next[issueId];
+            return next;
+        });
+        setReceivedDetailsTruncated((prev) => {
+            if (!Object.prototype.hasOwnProperty.call(prev, issueId)) return prev;
+            const next = { ...prev };
+            delete next[issueId];
+            return next;
+        });
+    };
+
+    const loadReceivedDetails = async (entry) => {
+        if (!entry || process === 'cutter') return;
+        if (Object.prototype.hasOwnProperty.call(receivedDetailsByIssue, entry.id)) return;
+
+        setReceivedDetailsLoading((prev) => ({ ...prev, [entry.id]: true }));
+        setReceivedDetailsError((prev) => ({ ...prev, [entry.id]: '' }));
+        try {
+            const detail = await loadIssueDetail(entry);
+            let receives = Array.isArray(detail?.receives) ? detail.receives : null;
+            let truncated = Boolean(detail?.receivesTruncated);
+            if (!receives) {
+                const response = await v2.getV2ReceiveHistory(process, {
+                    issueId: entry.id,
+                    limit: 200,
+                    order: 'desc',
+                });
+                receives = Array.isArray(response?.items) ? response.items : [];
+                truncated = Boolean(response?.hasMore);
+            }
+            if (process === 'holo') {
+                const cutName = detail?.cutName || detail?.trace?.cutName || '';
+                receives = receives.map((row) => ({ ...row, cut: row?.cut || cutName }));
+            }
+            setReceivedDetailsByIssue((prev) => ({ ...prev, [entry.id]: receives }));
+            setReceivedDetailsTruncated((prev) => ({ ...prev, [entry.id]: truncated }));
+        } catch (err) {
+            setReceivedDetailsError((prev) => ({
+                ...prev,
+                [entry.id]: err?.message || 'Failed to load received details',
+            }));
+        } finally {
+            setReceivedDetailsLoading((prev) => ({ ...prev, [entry.id]: false }));
+        }
+    };
+
     const activeTakeBacksByIssue = useMemo(() => {
         const map = new Map();
         (db.issue_take_backs || [])
@@ -334,7 +468,7 @@ export function OnMachineTable({ db, process }) {
         return map;
     }, [db.issue_take_backs]);
 
-    const buildTakeBackSources = (entry) => {
+    const buildTakeBackSources = (entry, actionBundle = null) => {
         if (!entry) return [];
 
         const EPSILON = 1e-9;
@@ -344,7 +478,9 @@ export function OnMachineTable({ db, process }) {
             return n > EPSILON ? n : 0;
         };
 
-        const activeTakeBacks = activeTakeBacksByIssue.get(entry.id) || [];
+        const activeTakeBacks = Array.isArray(actionBundle?.takeBacks)
+            ? actionBundle.takeBacks.filter((tb) => !tb?.isReverse && !tb?.isReversed)
+            : (activeTakeBacksByIssue.get(entry.id) || []);
         const activeBySource = new Map();
         activeTakeBacks.forEach((tb) => {
             const lines = Array.isArray(tb.lines) ? tb.lines : [];
@@ -395,47 +531,56 @@ export function OnMachineTable({ db, process }) {
             }).filter((line) => line.maxWeight > 0.0001);
         }
 
-        let refs = entry.receivedRowRefs;
+        const detail = actionBundle?.detail || entry;
+        let refs = detail?.receivedRowRefs ?? entry.receivedRowRefs;
         if (typeof refs === 'string') {
             try { refs = JSON.parse(refs || '[]'); } catch { refs = []; }
         }
         const refRows = Array.isArray(refs) ? refs : [];
+        const detailSources = Array.isArray(detail?.sources)
+            ? detail.sources
+            : (Array.isArray(detail?.crates) ? detail.crates : []);
+        const detailSourceById = new Map();
+        detailSources.forEach((source) => {
+            const sourceId = String(source?.rowId || source?.id || '').trim();
+            if (sourceId) detailSourceById.set(sourceId, source);
+        });
         const sourceMap = new Map();
         refRows.forEach((ref) => {
             const sourceId = typeof ref?.rowId === 'string' ? ref.rowId.trim() : '';
             if (!sourceId) return;
+            const source = detailSourceById.get(sourceId) || {};
             const originalCount = process === 'holo'
-                ? Number(ref?.issuedBobbins || 0)
-                : Number(ref?.issueRolls || 0);
+                ? Number(ref?.issuedBobbins ?? source?.issuedBobbins ?? 0)
+                : Number(ref?.issueRolls ?? source?.issueRolls ?? 0);
             const originalWeight = process === 'holo'
-                ? Number(ref?.issuedBobbinWeight || 0)
-                : Number(ref?.issueWeight || 0);
+                ? Number(ref?.issuedBobbinWeight ?? source?.issuedBobbinWeight ?? 0)
+                : Number(ref?.issueWeight ?? source?.issueWeight ?? 0);
             const active = activeBySource.get(sourceId) || { count: 0, weight: 0 };
             const maxCount = Math.max(0, originalCount - Number(active.count || 0));
             const maxWeight = Math.max(0, originalWeight - Number(active.weight || 0));
             if (maxWeight <= 0.0001) return;
-            const cutterRow = process === 'holo' ? cutterReceiveById.get(sourceId) : null;
-            const holoRow = process === 'coning' ? holoReceiveById.get(sourceId) : null;
-            const bobbin = process === 'holo' ? bobbinById.get(String(cutterRow?.bobbinId || '').trim()) : null;
-            const rollType = process === 'coning' ? rollTypeById.get(String(holoRow?.rollTypeId || '').trim()) : null;
-            const sourceBoxWeight = process === 'coning' ? Number(boxById.get(String(holoRow?.boxId || '').trim())?.weight || 0) : 0;
-            const rollCount = process === 'coning' ? Number(holoRow?.rollCount || 0) : 0;
-            const tareWeight = process === 'coning' ? Number(holoRow?.tareWeight || 0) : 0;
+            const sourceBoxId = String(source?.sourceBoxId || source?.boxId || source?.box?.id || '').trim();
+            const sourceBoxWeight = Number(source?.sourceBoxWeight ?? source?.boxWeight ?? source?.box?.weight ?? boxById.get(sourceBoxId)?.weight ?? 0);
+            const rollCount = process === 'coning' ? Number(source?.rollCount ?? source?.coneCount ?? 0) : 0;
+            const tareWeight = process === 'coning' ? Number(source?.tareWeight ?? source?.tareWt ?? 0) : 0;
             const derivedRollUnitWeight = (process === 'coning' && rollCount > 0 && Number.isFinite(tareWeight))
                 ? Math.max(0, (tareWeight - sourceBoxWeight) / rollCount)
                 : 0;
             sourceMap.set(sourceId, {
                 sourceId,
-                label: resolveTakeBackSourceLabel(process, sourceId, ref?.barcode),
+                label: String(source?.barcode || source?.vchNo || ref?.barcode || sourceId),
                 maxCount,
                 maxWeight,
-                sourceBoxId: process === 'holo'
-                    ? String(cutterRow?.boxId || '').trim()
-                    : (process === 'coning' ? String(holoRow?.boxId || '').trim() : ''),
-                pieceTypeId: process === 'holo' ? String(cutterRow?.bobbinId || '').trim() : '',
-                pieceTypeName: process === 'holo' ? (bobbin?.name || '—') : '',
-                pieceUnitWeight: process === 'holo' ? Number(bobbin?.weight || 0) : 0,
-                rollUnitWeight: process === 'coning' ? Number(rollType?.weight || derivedRollUnitWeight || 0) : 0,
+                sourceBoxId,
+                pieceTypeId: process === 'holo' ? String(source?.bobbinId || source?.bobbin?.id || '').trim() : '',
+                pieceTypeName: process === 'holo' ? (source?.bobbinName || source?.bobbin?.name || '—') : '',
+                pieceUnitWeight: process === 'holo'
+                    ? Number(source?.bobbinWeight ?? source?.bobbin?.weight ?? 0)
+                    : 0,
+                rollUnitWeight: process === 'coning'
+                    ? Number(source?.rollTypeWeight ?? source?.rollType?.weight ?? derivedRollUnitWeight ?? 0)
+                    : 0,
             });
         });
 
@@ -459,8 +604,7 @@ export function OnMachineTable({ db, process }) {
         return Array.from(sourceMap.values());
     };
 
-    const openTakeBackModal = (entry) => {
-        const sources = buildTakeBackSources(entry);
+    const showTakeBackModal = (entry, sources) => {
         setTakeBackTarget(entry);
         setTakeBackDate(new Date().toISOString().slice(0, 10));
         setTakeBackReason('');
@@ -499,6 +643,26 @@ export function OnMachineTable({ db, process }) {
             }),
         );
         setTakeBackModalOpen(true);
+    };
+
+    const openTakeBackModal = async (entry) => {
+        if (!entry || actionBusyRef.current) return;
+        actionBusyRef.current = true;
+        setActionLoadingId(entry.id);
+        try {
+            const actionBundle = await loadIssueActionBundle(entry);
+            const sources = buildTakeBackSources(entry, actionBundle);
+            if (sources.length === 0) {
+                alert('No take-back-eligible lines available.');
+                return;
+            }
+            showTakeBackModal(entry, sources);
+        } catch (err) {
+            alert(err?.message || 'Failed to load take-back details');
+        } finally {
+            actionBusyRef.current = false;
+            setActionLoadingId(null);
+        }
     };
 
     const submitTakeBack = async () => {
@@ -559,6 +723,7 @@ export function OnMachineTable({ db, process }) {
                 note: takeBackNote.trim() || null,
                 lines,
             });
+            clearIssueActionCache(takeBackTarget.id);
             setTakeBackModalOpen(false);
         } catch (err) {
             alert(err.message || 'Failed to create take-back');
@@ -568,22 +733,35 @@ export function OnMachineTable({ db, process }) {
     };
 
     const handleReverseLatestTakeBack = async (entry) => {
-        const latest = latestReversibleTakeBackByIssue.get(entry.id);
-        if (!latest) {
-            alert('No reversible take-back found for this issue');
-            return;
-        }
-        const confirmed = window.confirm('Reverse the latest take-back for this issue?');
-        if (!confirmed) return;
+        if (!entry || actionBusyRef.current) return;
+        actionBusyRef.current = true;
+        setActionLoadingId(entry.id);
         try {
+            const actionBundle = await loadIssueActionBundle(entry);
+            const exactTakeBacks = Array.isArray(actionBundle?.takeBacks)
+                ? actionBundle.takeBacks
+                : [];
+            const latest = process === 'cutter'
+                ? latestReversibleTakeBackByIssue.get(entry.id)
+                : exactTakeBacks.find((takeBack) => !takeBack?.isReverse && !takeBack?.isReversed);
+            if (!latest) {
+                alert('No reversible take-back found for this issue');
+                return;
+            }
+            const confirmed = window.confirm('Reverse the latest take-back for this issue?');
+            if (!confirmed) return;
             await reverseIssueTakeBack(latest.id, {
                 date: new Date().toISOString().slice(0, 10),
                 reason: 'reverse',
                 note: 'Reversed from On Machine',
                 stage: process,
             });
+            clearIssueActionCache(entry.id);
         } catch (err) {
             alert(err.message || 'Failed to reverse take-back');
+        } finally {
+            actionBusyRef.current = false;
+            setActionLoadingId(null);
         }
     };
 
@@ -665,6 +843,11 @@ export function OnMachineTable({ db, process }) {
     useEffect(() => {
         const key = INVENTORY_INVALIDATION_KEYS.issueOnMachine(process);
         return subscribeInvalidation(key, () => {
+            issueActionCacheRef.current.clear();
+            issueDetailInflightRef.current.clear();
+            setReceivedDetailsByIssue({});
+            setReceivedDetailsTruncated({});
+            setReceivedDetailsError({});
             v2List.refresh();
         });
     }, [process, subscribeInvalidation, v2List.refresh]);
@@ -746,8 +929,14 @@ export function OnMachineTable({ db, process }) {
     };
 
     const getActions = (entry) => {
-        const activeTakeBackCount = (activeTakeBacksByIssue.get(entry.id) || []).length;
-        const takeBackSources = buildTakeBackSources(entry);
+        const isHydrating = Boolean(actionLoadingId);
+        const isHydratingThisRow = actionLoadingId === entry.id;
+        const canTakeBack = process === 'cutter'
+            ? buildTakeBackSources(entry).length > 0
+            : Number(entry.pendingWeight || 0) > 0.001;
+        const canReverse = process === 'cutter'
+            ? (activeTakeBacksByIssue.get(entry.id) || []).length > 0
+            : Number(entry.takeBackWeight || 0) > 0.001;
         return [
             {
                 label: 'Go to Receive',
@@ -756,19 +945,56 @@ export function OnMachineTable({ db, process }) {
             },
             {
                 label: 'Take Back',
-                icon: <RotateCcw className="w-4 h-4" />,
+                icon: isHydratingThisRow ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />,
                 onClick: () => openTakeBackModal(entry),
-                disabled: takeBackSources.length === 0,
-                disabledReason: 'No take-back-eligible lines available.',
+                disabled: !canTakeBack || isHydrating,
+                disabledReason: isHydrating ? 'Loading exact issue details.' : 'No pending weight is available to take back.',
             },
             {
                 label: 'Reverse Last Take Back',
                 icon: <RotateCcw className="w-4 h-4" />,
                 onClick: () => handleReverseLatestTakeBack(entry),
-                disabled: activeTakeBackCount <= 0,
-                disabledReason: 'No active take-back found.',
+                disabled: !canReverse || isHydrating,
+                disabledReason: isHydrating ? 'Loading exact take-back history.' : 'No active take-back found.',
             },
         ];
+    };
+
+    const renderReceivedDetailsControl = (entry, { mobile = false } = {}) => {
+        const title = process === 'cutter'
+            ? 'Received Crates'
+            : (process === 'holo' ? 'Holo Receives' : 'Coning Receives');
+        const commonProps = {
+            title,
+            emptyText: 'No items received yet.',
+            widthClassName: mobile ? 'w-[320px]' : (process === 'coning' ? 'w-[560px]' : 'w-[420px]'),
+            bodyClassName: 'max-h-[300px] overflow-y-auto',
+            buttonClassName: 'h-5 w-5 rounded-full hover:bg-muted inline-flex',
+            align: mobile ? 'left' : 'right',
+        };
+
+        if (process === 'cutter') {
+            return (
+                <InfoPopover
+                    {...commonProps}
+                    items={receiveRowsByIssue.get(entry.id) || []}
+                    renderContent={(items) => renderReceivedPopoverContent(items, process)}
+                    actionLabel="View Details"
+                />
+            );
+        }
+
+        return (
+            <OnDemandInfoPopover
+                {...commonProps}
+                items={receivedDetailsByIssue[entry.id] || []}
+                isLoading={Boolean(receivedDetailsLoading[entry.id])}
+                error={receivedDetailsError[entry.id] || ''}
+                onOpen={() => loadReceivedDetails(entry)}
+                renderContent={(items) => renderReceivedPopoverContent(items, process)}
+                footerText={receivedDetailsTruncated[entry.id] ? 'Showing the latest 200 receive rows for this issue.' : ''}
+            />
+        );
     };
 
     // Calculate progress percentage - cap at 99% if there's still pending weight
@@ -1246,17 +1472,7 @@ export function OnMachineTable({ db, process }) {
                                             <TableCell className="text-right">
                                                 <div className="flex items-center justify-end gap-1 text-green-600">
                                                     <span className="font-medium">{formatKg(entry.receivedWeight)}</span>
-                                                    <InfoPopover
-                                                        title={process === 'cutter' ? 'Received Crates' : (process === 'holo' ? 'Holo Receives' : 'Coning Receives')}
-                                                        items={receiveRowsByIssue.get(entry.id) || []}
-                                                        renderContent={(items) => renderReceivedPopoverContent(items, process)}
-                                                        emptyText="No items received yet."
-                                                        widthClassName={process === 'coning' ? "w-[560px]" : "w-[420px]"}
-                                                        bodyClassName="max-h-[300px] overflow-y-auto"
-                                                        buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex"
-                                                        align="right"
-                                                        actionLabel="View Details"
-                                                    />
+                                                    {renderReceivedDetailsControl(entry)}
                                                 </div>
                                             </TableCell>
                                             <TableCell className="text-right tabular-nums whitespace-nowrap font-medium text-blue-600">{formatKg(entry.pendingWeight)}</TableCell>
@@ -1391,17 +1607,7 @@ export function OnMachineTable({ db, process }) {
                                         <span className="text-muted-foreground">Net: {formatKg(entry.netIssuedWeight ?? entry.issuedWeight)}</span>
                                         <div className="flex items-center gap-1 text-green-600">
                                             <span>Rcvd: {formatKg(entry.receivedWeight)}</span>
-                                            <InfoPopover
-                                                title={process === 'cutter' ? 'Received Crates' : (process === 'holo' ? 'Holo Receives' : 'Coning Receives')}
-                                                items={receiveRowsByIssue.get(entry.id) || []}
-                                                renderContent={(items) => renderReceivedPopoverContent(items, process)}
-                                                emptyText="No items received yet."
-                                                widthClassName="w-[320px]"
-                                                bodyClassName="max-h-[300px] overflow-y-auto"
-                                                buttonClassName="h-5 w-5 rounded-full hover:bg-muted inline-flex"
-                                                align="left"
-                                                actionLabel="View Details"
-                                            />
+                                            {renderReceivedDetailsControl(entry, { mobile: true })}
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-2">

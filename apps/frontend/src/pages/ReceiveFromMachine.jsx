@@ -48,11 +48,10 @@ export function ReceiveFromMachine() {
   }, [process]);
 
   useEffect(() => {
-    if (canRead) {
-      // Receive forms and label/reprint actions still resolve source rows, challans
-      // and trace metadata by id. Keep that operational slice complete while the
-      // visible history table remains server-paginated through v2.
-      ensureModuleData('process', { process: stage, full: true });
+    if (canRead && stage === 'cutter') {
+      // Cutter still has operational flows that depend on the complete process slice.
+      // Holo and Coning use their paginated v2 lists plus bounded issue lookups.
+      ensureModuleData('process', { process: 'cutter', full: true });
     }
   }, [canRead, ensureModuleData, stage]);
 

@@ -17,10 +17,77 @@ import {
     RECEIVE_SUMMARY_OVER_ISSUED_EPSILON_KG,
 } from './ResizableIssueSummary';
 
+const asArray = (value) => (Array.isArray(value) ? value : []);
+
+const getHoloLookupPieces = (issue) => {
+    const explicitPieces = asArray(issue?.pieces);
+    if (explicitPieces.length > 0) return explicitPieces;
+
+    const piecesById = new Map();
+    for (const crate of asArray(issue?.crates)) {
+        if (!crate?.pieceId || piecesById.has(crate.pieceId)) continue;
+        piecesById.set(crate.pieceId, {
+            id: crate.pieceId,
+            lotNo: crate.lotNo || '',
+            itemId: crate.itemId || '',
+            itemName: crate.itemName || '',
+            cutName: crate.cutName || '',
+        });
+    }
+    return Array.from(piecesById.values());
+};
+
+const getHoloPieceIds = (issue) => {
+    const explicitIds = asArray(issue?.pieceIds).filter(Boolean);
+    if (explicitIds.length > 0) return explicitIds;
+    return getHoloLookupPieces(issue).map((piece) => piece?.id).filter(Boolean);
+};
+
+const getResponseBalance = (response) => response?.issueBalance || response?.issue_balance || response?.balance || null;
+
+const advanceIssueBalance = (balance, {
+    receivedWeight = 0,
+    wastageWeight = 0,
+    receivedCount = 0,
+    wastageCount = 0,
+} = {}) => {
+    if (!balance) return null;
+    const nextReceivedWeight = Number(balance.receivedWeight || 0) + Number(receivedWeight || 0);
+    const nextWastageWeight = Number(balance.wastageWeight || 0) + Number(wastageWeight || 0);
+    const nextReceivedCount = Number(balance.receivedCount || 0) + Number(receivedCount || 0);
+    const nextWastageCount = Number(balance.wastageCount || 0) + Number(wastageCount || 0);
+    const netIssuedWeight = Number(balance.netIssuedWeight ?? balance.originalWeight ?? 0);
+    const netIssuedCount = Number(balance.netIssuedCount ?? balance.originalCount ?? 0);
+    return {
+        ...balance,
+        receivedCount: nextReceivedCount,
+        receivedWeight: nextReceivedWeight,
+        wastageCount: nextWastageCount,
+        wastageWeight: nextWastageWeight,
+        pendingCount: Math.max(0, netIssuedCount - nextReceivedCount - nextWastageCount),
+        pendingWeight: Math.max(0, netIssuedWeight - nextReceivedWeight - nextWastageWeight),
+    };
+};
+
+const queueHoloReceivePrint = ({ cachedTemplate, labelData }) => {
+    setTimeout(() => {
+        void (async () => {
+            const tpl = cachedTemplate || (await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE));
+            if (!tpl || !window.confirm('Print sticker for this receive?')) return;
+            await printStageTemplate(
+                LABEL_STAGE_KEYS.HOLO_RECEIVE,
+                labelData,
+                { template: tpl },
+            );
+        })().catch((printError) => {
+            console.error('Holo receive was saved but post-commit label printing failed', printError);
+        });
+    }, 0);
+};
+
 export function HoloReceiveForm() {
-    const { db, patchDb, emitInvalidation } = useInventory();
+    const { db, emitInvalidation } = useInventory();
     const [searchParams, setSearchParams] = useSearchParams();
-    const traceContext = useMemo(() => buildHoloTraceContext(db), [db]);
 
     const [scanInput, setScanInput] = useState('');
     const [issue, setIssue] = useState(null);
@@ -79,7 +146,7 @@ export function HoloReceiveForm() {
                             machineId: enriched.machineId || '',
                             operatorId: enriched.operatorId || '',
                             shift: enriched.shift || '',
-                            pieceId: Array.isArray(enriched.pieceIds) && enriched.pieceIds.length > 0 ? enriched.pieceIds[0] : '',
+                            pieceId: getHoloPieceIds(enriched)[0] || '',
                         }));
                     } else {
                         alert('Barcode not found or invalid');
@@ -117,24 +184,66 @@ export function HoloReceiveForm() {
 
     const pieceOptions = useMemo(() => {
         if (!issue) return [];
-        const ids = Array.isArray(issue.pieceIds) ? issue.pieceIds : [];
+        const lookupPieces = getHoloLookupPieces(issue);
+        const lookupPieceById = new Map(lookupPieces.map((piece) => [piece.id, piece]));
+        const ids = getHoloPieceIds(issue);
         return ids.map(pid => {
-            const piece = db.inbound_items.find(p => p.id === pid);
-            const label = piece ? `${piece.id} (${piece.lotNo})` : pid;
+            const piece = lookupPieceById.get(pid) || db.inbound_items.find(p => p.id === pid);
+            const label = piece?.lotNo ? `${pid} (${piece.lotNo})` : pid;
             return { id: pid, name: label };
         });
     }, [issue, db.inbound_items]);
 
     const selectedPiece = useMemo(() => {
         if (!issue || !form.pieceId) return null;
-        return db.inbound_items.find(p => p.id === form.pieceId) || null;
+        return getHoloLookupPieces(issue).find(p => p.id === form.pieceId)
+            || db.inbound_items.find(p => p.id === form.pieceId)
+            || null;
     }, [issue, form.pieceId, db.inbound_items]);
 
-    const cutName = useMemo(() => {
-        if (!issue) return '';
-        const resolved = resolveHoloTrace(issue, traceContext);
-        return resolved.cutName === '—' ? '' : resolved.cutName;
-    }, [issue, traceContext]);
+    const materialDetails = useMemo(() => {
+        if (!issue) return { lotNo: '', itemName: '', cutName: '', yarnName: '', twistName: '' };
+        const selectedCrate = asArray(issue.crates).find((crate) => crate?.pieceId === form.pieceId)
+            || asArray(issue.crates)[0]
+            || null;
+        const serverTrace = issue.trace || {};
+        const itemId = selectedPiece?.itemId || selectedCrate?.itemId || issue.itemId;
+        const lookupCutName = selectedPiece?.cutName
+            || selectedCrate?.cutName
+            || issue.cutName
+            || serverTrace.cutName
+            || '';
+        const lookupYarnName = selectedPiece?.yarnName
+            || selectedCrate?.yarnName
+            || issue.yarnName
+            || serverTrace.yarnName
+            || '';
+        const lookupTwistName = selectedPiece?.twistName
+            || selectedCrate?.twistName
+            || issue.twistName
+            || serverTrace.twistName
+            || '';
+        const legacyTrace = !lookupCutName
+            ? resolveHoloTrace(issue, buildHoloTraceContext(db))
+            : { cutName: '—', yarnName: '—', twistName: '—' };
+        return {
+            lotNo: selectedPiece?.lotNo || selectedCrate?.lotNo || issue.lotLabel || issue.lotNo || '',
+            itemName: selectedPiece?.itemName
+                || selectedCrate?.itemName
+                || issue.itemName
+                || serverTrace.itemName
+                || db?.items?.find((item) => item.id === itemId)?.name
+                || itemId
+                || '',
+            cutName: lookupCutName || (legacyTrace.cutName === '—' ? '' : legacyTrace.cutName),
+            yarnName: lookupYarnName
+                || db?.yarns?.find((yarn) => yarn.id === issue.yarnId)?.name
+                || '',
+            twistName: lookupTwistName
+                || db?.twists?.find((twist) => twist.id === issue.twistId)?.name
+                || '',
+        };
+    }, [issue, form.pieceId, selectedPiece, db]);
 
     const issueMetrics = useMemo(() => {
         const balance = issue?.issueBalance || (issue?.id ? db?.issue_balances?.[issue.id] : null) || null;
@@ -172,7 +281,7 @@ export function HoloReceiveForm() {
                 machineId: enriched.machineId || '',
                 operatorId: enriched.operatorId || '',
                 shift: enriched.shift || '',
-                pieceId: Array.isArray(enriched.pieceIds) && enriched.pieceIds.length > 0 ? enriched.pieceIds[0] : '',
+                pieceId: getHoloPieceIds(enriched)[0] || '',
             }));
         } catch (e) {
             alert(e.message);
@@ -205,80 +314,56 @@ export function HoloReceiveForm() {
                 notes: form.notes
             });
 
-            // Patch local DB so UI is ready for the next entry immediately.
-            // Full refresh of the process module is expensive (it runs heavy backend aggregation),
-            // so we avoid doing it on every receive save.
             if (result?.row?.id) {
                 const savedRollTypeId = result?.row?.rollTypeId || form.rollTypeId || '';
-                const savedRollTypeName = (db?.rollTypes || []).find((r) => r.id === savedRollTypeId)?.name || '';
+                const savedRollTypeName = result?.row?.rollTypeName
+                    || result?.row?.rollType?.name
+                    || (db?.rollTypes || []).find((r) => r.id === savedRollTypeId)?.name
+                    || '';
                 const isWastageRow = String(savedRollTypeName || '').toLowerCase().includes('wastage');
-                const existingRows = Array.isArray(db.receive_from_holo_machine_rows) ? db.receive_from_holo_machine_rows : [];
-                const nextRows = [
-                    { ...result.row, rollType: savedRollTypeId ? { id: savedRollTypeId, name: savedRollTypeName } : (result.row.rollType || null) },
-                    ...existingRows.filter(r => r?.id !== result.row.id),
-                ];
-
-                const existingTotals = Array.isArray(db.receive_from_holo_machine_piece_totals) ? db.receive_from_holo_machine_piece_totals : [];
-                const netInc = Number(netWeight || 0);
-                const totalsIdx = existingTotals.findIndex(t => t?.pieceId === form.pieceId);
-                const nextTotals = totalsIdx >= 0
-                    ? existingTotals.map((t, idx) => {
-                        if (idx !== totalsIdx) return t;
-                        return {
-                            ...t,
-                            totalRolls: Number(t.totalRolls || 0) + (Number.isFinite(rollCountNum) ? rollCountNum : 0),
-                            totalNetWeight: Number(t.totalNetWeight || 0) + (isWastageRow ? 0 : (Number.isFinite(netInc) ? netInc : 0)),
-                            wastageNetWeight: Number(t.wastageNetWeight || 0) + (isWastageRow && Number.isFinite(netInc) ? netInc : 0),
-                        };
-                    })
-                    : [
-                        {
-                            pieceId: form.pieceId,
-                            totalRolls: Number.isFinite(rollCountNum) ? rollCountNum : 0,
-                            totalNetWeight: isWastageRow ? 0 : (Number.isFinite(netInc) ? netInc : 0),
-                            wastageNetWeight: isWastageRow && Number.isFinite(netInc) ? netInc : 0,
-                        },
-                        ...existingTotals,
-                    ];
-
-                patchDb({
-                    receive_from_holo_machine_rows: nextRows,
-                    receive_from_holo_machine_piece_totals: nextTotals,
-                    issue_balances: (() => {
-                        const map = { ...(db.issue_balances || {}) };
-                        const prevBalance = map[issue.id] || issue?.issueBalance;
-                        if (prevBalance) {
-                            const incValue = Number.isFinite(netInc) ? netInc : 0;
-                            const nextReceived = Number(prevBalance.receivedWeight || 0) + (isWastageRow ? 0 : incValue);
-                            const nextWastage = Number(prevBalance.wastageWeight || 0) + (isWastageRow ? incValue : 0);
-                            const nextPending = Math.max(0, Number(prevBalance.pendingWeight || 0) - (Number.isFinite(netInc) ? netInc : 0));
-                            map[issue.id] = {
-                                ...prevBalance,
-                                receivedWeight: nextReceived,
-                                wastageWeight: nextWastage,
-                                pendingWeight: nextPending,
-                            };
-                        }
-                        return map;
-                    })(),
-                });
-
+                const savedNetWeight = Number(result.row.rollWeight ?? result.row.netWeight ?? netWeight ?? 0);
+                const netIncrement = Number.isFinite(savedNetWeight) ? savedNetWeight : 0;
+                const authoritativeBalance = getResponseBalance(result);
+                const authoritativePieceTotal = result?.pieceTotal || result?.piece_total || null;
                 setIssue((prev) => {
-                    if (!prev) return prev;
-                    const prevBalance = prev.issueBalance || db?.issue_balances?.[prev.id];
-                    if (!prevBalance) return prev;
-                    const incValue = Number.isFinite(netInc) ? netInc : 0;
-                    const nextReceived = Number(prevBalance.receivedWeight || 0) + (isWastageRow ? 0 : incValue);
-                    const nextWastage = Number(prevBalance.wastageWeight || 0) + (isWastageRow ? incValue : 0);
-                    const nextPending = Math.max(0, Number(prevBalance.pendingWeight || 0) - (Number.isFinite(netInc) ? netInc : 0));
+                    if (!prev || prev.id !== issue.id) return prev;
+                    const fallbackBalance = prev.issueBalance || db?.issue_balances?.[prev.id] || {
+                        originalWeight: issueMetrics.originalIssued,
+                        netIssuedWeight: issueMetrics.netIssued,
+                        receivedWeight: issueMetrics.received,
+                        wastageWeight: issueMetrics.wastage,
+                        pendingWeight: issueMetrics.pending,
+                    };
+                    const nextBalance = authoritativeBalance || advanceIssueBalance(fallbackBalance, {
+                        receivedWeight: isWastageRow ? 0 : netIncrement,
+                        wastageWeight: isWastageRow ? netIncrement : 0,
+                        receivedCount: !isWastageRow && Number.isFinite(rollCountNum) ? rollCountNum : 0,
+                        wastageCount: isWastageRow && Number.isFinite(rollCountNum) ? rollCountNum : 0,
+                    });
+                    const currentPieceTotals = asArray(prev.pieceTotals);
+                    const previousPieceTotal = currentPieceTotals.find((total) => total?.pieceId === form.pieceId) || {
+                        pieceId: form.pieceId,
+                        totalRolls: 0,
+                        totalNetWeight: 0,
+                        wastageNetWeight: 0,
+                    };
+                    const nextPieceTotal = authoritativePieceTotal || {
+                        ...previousPieceTotal,
+                        totalRolls: Number(previousPieceTotal.totalRolls || 0) + (Number.isFinite(rollCountNum) ? rollCountNum : 0),
+                        totalNetWeight: Number(previousPieceTotal.totalNetWeight || 0) + (isWastageRow ? 0 : netIncrement),
+                        wastageNetWeight: Number(previousPieceTotal.wastageNetWeight || 0) + (isWastageRow ? netIncrement : 0),
+                    };
                     return {
                         ...prev,
-                        issueBalance: {
-                            ...prevBalance,
-                            receivedWeight: nextReceived,
-                            wastageWeight: nextWastage,
-                            pendingWeight: nextPending,
-                        },
+                        issueBalance: nextBalance,
+                        pieceTotals: [
+                            nextPieceTotal,
+                            ...currentPieceTotals.filter((total) => total?.pieceId !== form.pieceId),
+                        ],
+                        receives: [
+                            result.row,
+                            ...asArray(prev.receives).filter((row) => row?.id !== result.row.id),
+                        ],
                     };
                 });
             }
@@ -287,52 +372,33 @@ export function HoloReceiveForm() {
                 issueId: issue?.id || null,
             });
 
-            const tpl = template || (await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE));
-            if (tpl && result?.row) {
-                const confirmPrint = window.confirm('Print sticker for this receive?');
-                if (confirmPrint) {
-                    const rollTypeName = db?.rollTypes?.find((r) => r.id === form.rollTypeId)?.name;
-                    const boxName = db?.boxes?.find((b) => b.id === form.boxId)?.name;
-                    const operatorName = db?.operators?.find((o) => o.id === form.operatorId)?.name;
-                    const machineName = db?.machines?.find((m) => m.id === form.machineId)?.name;
-                    const itemName = selectedPiece
-                        ? db?.items?.find((i) => i.id === selectedPiece.itemId)?.name
-                        : db?.items?.find((i) => i.id === issue.itemId)?.name;
-                    const yarnName = db?.yarns?.find((y) => y.id === issue.yarnId)?.name;
-                    const twist = db?.twists?.find((t) => t.id === issue.twistId)?.name;
-
-                    const resolved = resolveHoloTrace(issue, traceContext);
-                    const cutName = resolved.cutName === '—' ? '' : resolved.cutName;
-
-                    await printStageTemplate(
-                        LABEL_STAGE_KEYS.HOLO_RECEIVE,
-                        {
-                            lotNo: selectedPiece?.lotNo || issue.lotLabel || issue.lotNo,
-                            barcode: result.row.barcode,
-                            rollCount: form.rollCount,
-                            grossWeight: form.grossWeight,
-                            tareWeight,
-                            netWeight,
-                            rollType: rollTypeName,
-                            boxName,
-                            operatorName,
-                            machineName,
-                            itemName,
-                            yarnName,
-                            twist: twist || '',
-                            twistName: twist || '',
-                            cut: cutName,
-                            shift: form.shift,
-                            date: form.date,
-                        },
-                        { template: tpl },
-                    );
-                }
-            }
-            alert('Received successfully');
+            const postCommitPrint = result?.row ? {
+                cachedTemplate: template,
+                labelData: {
+                    lotNo: materialDetails.lotNo,
+                    barcode: result.row.barcode,
+                    rollCount: result.row.rollCount ?? form.rollCount,
+                    grossWeight: result.row.grossWeight ?? form.grossWeight,
+                    tareWeight: result.row.tareWeight ?? tareWeight,
+                    netWeight: result.row.rollWeight ?? result.row.netWeight ?? netWeight,
+                    rollType: db?.rollTypes?.find((r) => r.id === form.rollTypeId)?.name,
+                    boxName: db?.boxes?.find((b) => b.id === form.boxId)?.name,
+                    operatorName: db?.operators?.find((o) => o.id === form.operatorId)?.name,
+                    machineName: db?.machines?.find((m) => m.id === form.machineId)?.name,
+                    itemName: materialDetails.itemName,
+                    yarnName: materialDetails.yarnName,
+                    twist: materialDetails.twistName,
+                    twistName: materialDetails.twistName,
+                    cut: materialDetails.cutName,
+                    shift: form.shift,
+                    date: form.date,
+                },
+            } : null;
 
             // Reset partial form
             setForm(p => ({ ...p, rollCount: '', grossWeight: '' }));
+            alert('Received successfully');
+            if (postCommitPrint) queueHoloReceivePrint(postCommitPrint);
         } catch (e) {
             alert(e.message);
         } finally {
@@ -352,8 +418,9 @@ export function HoloReceiveForm() {
                             onChange={e => setScanInput(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && handleScan()}
                             className="flex-1 sm:w-64"
+                            disabled={submitting}
                         />
-                        <Button onClick={handleScan}>Load</Button>
+                        <Button onClick={handleScan} disabled={submitting}>Load</Button>
                     </div>
                 </CardHeader>
                 {issue && (
@@ -364,11 +431,11 @@ export function HoloReceiveForm() {
                         >
                             <ReceiveSummaryGroup id="receive-summary-holo-material" title="Material">
                                 <div className="min-w-0" style={receiveSummaryMetricGridStyle}>
-                                    <ReceiveSummaryMetricCard label="Lot" value={issue.lotLabel || issue.lotNo || '—'} />
-                                    <ReceiveSummaryMetricCard label="Item" value={db?.items?.find(i => i.id === issue.itemId)?.name || issue.itemId || '—'} />
-                                    <ReceiveSummaryMetricCard label="Cut" value={cutName || '—'} />
-                                    <ReceiveSummaryMetricCard label="Yarn" value={db?.yarns?.find(y => y.id === issue.yarnId)?.name || '—'} />
-                                    <ReceiveSummaryMetricCard label="Twist" value={db?.twists?.find(t => t.id === issue.twistId)?.name || '—'} />
+                                    <ReceiveSummaryMetricCard label="Lot" value={materialDetails.lotNo || '—'} />
+                                    <ReceiveSummaryMetricCard label="Item" value={materialDetails.itemName || '—'} />
+                                    <ReceiveSummaryMetricCard label="Cut" value={materialDetails.cutName || '—'} />
+                                    <ReceiveSummaryMetricCard label="Yarn" value={materialDetails.yarnName || '—'} />
+                                    <ReceiveSummaryMetricCard label="Twist" value={materialDetails.twistName || '—'} />
                                 </div>
                             </ReceiveSummaryGroup>
 

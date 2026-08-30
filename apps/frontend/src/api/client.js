@@ -146,6 +146,9 @@ export async function createCutterPurchaseInbound(payload) {
 }
 export async function createIssueToCutterMachine(payload) { return await request('/api/issue_to_cutter_machine', { method: 'POST', body: payload }); }
 export async function createIssueToMachine(payload) { return await createIssueToCutterMachine(payload); }
+export async function lookupHoloSourceRowByBarcode(barcode) {
+  return await request(`/api/issue_to_holo_machine/source-row/lookup?barcode=${encodeURIComponent(barcode)}`);
+}
 export async function lookupConingSourceRowByBarcode(barcode) {
   return await request(`/api/issue_to_coning_machine/source-row/lookup?barcode=${encodeURIComponent(barcode)}`);
 }

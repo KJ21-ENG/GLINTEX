@@ -45,6 +45,25 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const issueActionBusyRef = useRef(false);
   const issueDetailCacheRef = useRef(new Map());
   const issueDetailInflightRef = useRef(new Map());
+  const issueEditorGenerationRef = useRef(0);
+  const issueEditorStageRef = useRef(process);
+  issueEditorStageRef.current = process;
+  const isCurrentIssueEditorRequest = (generation, stage) => (
+    issueEditorGenerationRef.current === generation && issueEditorStageRef.current === stage
+  );
+  useEffect(() => {
+    issueEditorGenerationRef.current += 1;
+    issueActionBusyRef.current = false;
+    setIssueActionLoadingId(null);
+    setEditingIssue(null);
+    setIssueDraft(null);
+    setIssueScanInput('');
+    setIssueScanLoading(false);
+  }, [process]);
+  useEffect(() => () => {
+    issueEditorGenerationRef.current += 1;
+    issueActionBusyRef.current = false;
+  }, []);
   const lotLabelFor = (row) => row?.lotLabel || row?.lotNo || '';
   const formatInputDate = (value) => (value ? String(value).slice(0, 10) : '');
   const parseIssuePieceIds = (row) => (
@@ -268,7 +287,11 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
   const openIssueEditor = async (row) => {
     if (!row) return;
 
+    const requestGeneration = issueEditorGenerationRef.current + 1;
+    const requestStage = process;
+
     if (process === 'cutter') {
+      issueEditorGenerationRef.current = requestGeneration;
       const hasReceives = getIssueHasReceives(row);
       setEditingIssue({ ...row, hasReceives });
       setIssueScanInput('');
@@ -285,10 +308,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     }
 
     if (issueActionBusyRef.current) return;
+    issueEditorGenerationRef.current = requestGeneration;
     issueActionBusyRef.current = true;
     setIssueActionLoadingId(row.id);
     try {
       const detail = await loadExactIssueDetail(row);
+      if (!isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
       const hydrated = { ...row, ...detail };
       const hasReceives = typeof detail?.hasReceives === 'boolean'
         ? detail.hasReceives
@@ -375,14 +400,19 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         metaTouched: false,
       });
     } catch (err) {
-      alert(err?.message || 'Failed to load issue details');
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        alert(err?.message || 'Failed to load issue details');
+      }
     } finally {
-      issueActionBusyRef.current = false;
-      setIssueActionLoadingId(null);
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        issueActionBusyRef.current = false;
+        setIssueActionLoadingId(null);
+      }
     }
   };
 
   const closeIssueEditor = () => {
+    issueEditorGenerationRef.current += 1;
     setEditingIssue(null);
     setIssueDraft(null);
     setIssueScanInput('');
@@ -451,17 +481,24 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     if (!issueDraft) return;
     const normalized = issueScanInput.trim().toUpperCase();
     if (!normalized) return;
+    const requestGeneration = issueEditorGenerationRef.current;
+    const requestStage = process;
 
     let result;
     setIssueScanLoading(true);
     try {
       result = await api.lookupHoloSourceRowByBarcode(normalized);
     } catch (err) {
-      alert(err?.message || 'Barcode not found in Cutter Receive rows');
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        alert(err?.message || 'Barcode not found in Cutter Receive rows');
+      }
       return;
     } finally {
-      setIssueScanLoading(false);
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        setIssueScanLoading(false);
+      }
     }
+    if (!isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
     if (result?.outcome !== 'found' || !result?.row) {
       alert(result?.error || 'Barcode is not available for Holo issue');
       return;
@@ -494,10 +531,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const unitWeight = Number(row.unitWeight)
       || (bobbinQty > 0 ? Number(row.netWt ?? row.netWeight ?? 0) / bobbinQty : null);
 
-    setIssueDraft((prev) => ({
+    setIssueDraft((prev) => prev && ({
       ...prev,
       crates: [
-        ...prev.crates,
+        ...(prev.crates || []),
         {
           rowId: row.id,
           barcode: row.barcode,
@@ -542,6 +579,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     if (!issueDraft) return;
     const normalized = issueScanInput.trim().toUpperCase();
     if (!normalized) return;
+    const requestGeneration = issueEditorGenerationRef.current;
+    const requestStage = process;
 
     let row = null;
     let availability = null;
@@ -549,18 +588,25 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     try {
       const result = await api.lookupConingSourceRowByBarcode(normalized);
       if (result?.outcome !== 'found') {
-        alert(result?.error || 'Barcode not found in receive rows');
+        if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+          alert(result?.error || 'Barcode not found in receive rows');
+        }
         return;
       }
       row = result.row;
       availability = result.availability || null;
     } catch (err) {
-      alert(err.message || 'Barcode not found in receive rows');
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        alert(err.message || 'Barcode not found in receive rows');
+      }
       return;
     } finally {
-      setIssueScanLoading(false);
+      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        setIssueScanLoading(false);
+      }
     }
 
+    if (!isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
     if (!row) return;
     if (issueDraft.crates.some(c => c.rowId === row.id)) {
       alert('Crate already added');
@@ -593,10 +639,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const baseWeight = availability?.availableWeight ?? row.availableWeight ?? row.rollWeight ?? row.coneWeight ?? 0;
     const unitWeight = baseRolls > 0 ? baseWeight / baseRolls : 0;
 
-    setIssueDraft((prev) => ({
+    setIssueDraft((prev) => prev && ({
       ...prev,
       crates: [
-        ...prev.crates,
+        ...(prev.crates || []),
         {
           rowId: row.id,
           barcode: row.barcode,
@@ -731,14 +777,19 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
   const handleReprint = async (row) => {
     if (!row) return;
+    const requestStage = process;
+    let requestGeneration = null;
     if (process !== 'cutter') {
       if (issueActionBusyRef.current) return;
+      requestGeneration = issueEditorGenerationRef.current + 1;
+      issueEditorGenerationRef.current = requestGeneration;
       issueActionBusyRef.current = true;
       setIssueActionLoadingId(row.id);
     }
     try {
       let stageKey, data;
       const exactRow = process === 'cutter' ? row : { ...row, ...(await loadExactIssueDetail(row)) };
+      if (process !== 'cutter' && !isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
       const lotLabel = lotLabelFor(exactRow);
 
       if (process === 'cutter') {
@@ -846,6 +897,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       }
 
       const template = await loadTemplate(stageKey);
+      if (process !== 'cutter' && !isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
       if (!template) {
         alert('No sticker template found for this stage. Please configure it in Label Designer.');
         return;
@@ -854,9 +906,11 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       await printStageTemplate(stageKey, data, { template });
       // Silent success - printer handles feedback
     } catch (err) {
-      alert(err.message || 'Failed to reprint sticker');
+      if (process === 'cutter' || isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+        alert(err.message || 'Failed to reprint sticker');
+      }
     } finally {
-      if (process !== 'cutter') {
+      if (process !== 'cutter' && isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
         issueActionBusyRef.current = false;
         setIssueActionLoadingId(null);
       }

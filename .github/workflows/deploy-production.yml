@@ -1,10 +1,19 @@
 name: Deploy Production
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      deploy_sha:
+        description: Exact 40-character main commit SHA
+        required: true
+        type: string
+      expected_host_sha:
+        description: Exact currently deployed production SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 concurrency:
   group: production-deploy
@@ -12,24 +21,47 @@ concurrency:
 
 jobs:
   deploy:
-    name: Pull and rebuild production
+    name: Deploy exact main SHA
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
-      - name: Deploy over SSH
+      - name: Checkout exact workflow source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Validate and deploy
+        shell: bash
         env:
+          DEPLOY_SHA: ${{ inputs.deploy_sha }}
+          EXPECTED_HOST_SHA: ${{ inputs.expected_host_sha }}
           SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PRODUCTION_SSH_KNOWN_HOSTS }}
           SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
           SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
           APP_DIR: ${{ secrets.PRODUCTION_APP_DIR }}
         run: |
           set -euo pipefail
 
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_HOST_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = refs/heads/main
+          test "$DEPLOY_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          bash -n .github/scripts/deploy-production.sh
+
+          install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/production_deploy_key
           chmod 600 ~/.ssh/production_deploy_key
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
-          ssh -i ~/.ssh/production_deploy_key "$SSH_USER@$SSH_HOST" \
-            "cd \"$APP_DIR\" && git pull --ff-only && docker compose up -d --build"
+          printf -v app_dir_q '%q' "$APP_DIR"
+          printf -v deploy_sha_q '%q' "$DEPLOY_SHA"
+          printf -v expected_host_sha_q '%q' "$EXPECTED_HOST_SHA"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/production_deploy_key "$SSH_USER@$SSH_HOST" \
+            "bash -s -- $app_dir_q $deploy_sha_q $expected_host_sha_q" \
+            < .github/scripts/deploy-production.sh

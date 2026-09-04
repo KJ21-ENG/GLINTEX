@@ -372,6 +372,7 @@ function ProductionReport() {
     const [dateTo, setDateTo] = useState(todayISO());
     const [loading, setLoading] = useState(false);
     const [report, setReport] = useState(null);
+    const [rowFilter, setRowFilter] = useState('');
     const [exportModalOpen, setExportModalOpen] = useState(false);
     const [exportProcess, setExportProcess] = useState('cutter');
     const [exportFrom, setExportFrom] = useState('');
@@ -577,6 +578,10 @@ function ProductionReport() {
         loadReport();
     }, [process, view, dateFrom, dateTo]);
 
+    useEffect(() => {
+        setRowFilter('');
+    }, [process, view]);
+
     const getRowKey = (item, index) => {
         if (view === 'operator') return `op-${item.operatorId || index}`;
         if (view === 'shift') return `sh-${item.shift || index}`;
@@ -661,11 +666,23 @@ function ProductionReport() {
         return [item.machineNo || item.machineName || 'Unknown', formatKg(item.received), item.count || item.rollCount || item.coneCount || 0];
     };
 
-    const grandTotals = report?.data?.reduce((acc, item) => {
+    const filteredReportData = useMemo(() => {
+        const normalizedFilter = rowFilter.trim().toLocaleLowerCase();
+        const rows = report?.data || [];
+        if (!normalizedFilter) return rows;
+
+        return rows.filter((item) => (
+            getRowData(item)
+                .map((value) => String(value ?? '').toLocaleLowerCase())
+                .some((value) => value.includes(normalizedFilter))
+        ));
+    }, [report?.data, rowFilter, view]);
+
+    const grandTotals = filteredReportData.reduce((acc, item) => {
         acc.received += (Number(item.received) || 0);
         acc.count += (Number(item.count || item.rollCount || item.coneCount) || 0);
         return acc;
-    }, { received: 0, count: 0 }) || { received: 0, count: 0 };
+    }, { received: 0, count: 0 });
     const exportRangeDays = getInclusiveUtcDayRange(exportFrom, exportTo);
     const isMultiDayExport = exportRangeDays > 1;
     const isExportRangeTooWide = exportRangeDays > MAX_DAILY_EXPORT_RANGE_DAYS;
@@ -854,11 +871,21 @@ function ProductionReport() {
 
             {/* Data Table */}
             <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
+                <CardHeader className="flex flex-col gap-3">
                     <CardTitle className="text-lg">
                         {process === 'all' ? 'All Processes' : `${process.charAt(0).toUpperCase() + process.slice(1)} Production`}
                         {' '}- {view === 'operator' ? 'Operator-wise' : view === 'shift' ? 'Shift-wise' : view === 'item' ? 'Item-wise' : view === 'yarn' ? 'Yarn-wise' : 'Machine-wise'}
                     </CardTitle>
+                    <div className="relative w-full sm:hidden">
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                            value={rowFilter}
+                            onChange={(event) => setRowFilter(event.target.value)}
+                            placeholder={`Filter ${getColumnHeaders()[0].toLowerCase()}...`}
+                            className="h-9 pl-8"
+                            aria-label={`Filter report by ${getColumnHeaders()[0].toLowerCase()}`}
+                        />
+                    </div>
                 </CardHeader>
                 <CardContent>
                     {loading ? (
@@ -878,14 +905,32 @@ function ProductionReport() {
                                         <TableRow>
                                             <TableHead className="w-10"></TableHead>
                                             {getColumnHeaders().map((header, i) => (
-                                                <TableHead key={i} className={i > 0 ? 'text-right' : ''}>
-                                                    {header}
+                                                <TableHead key={i} className={cn(i > 0 && 'text-right', i === 0 && 'min-w-[240px] py-2')}>
+                                                    <span>{header}</span>
+                                                    {i === 0 && (
+                                                        <div className="relative mt-2">
+                                                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                                            <Input
+                                                                value={rowFilter}
+                                                                onChange={(event) => setRowFilter(event.target.value)}
+                                                                placeholder={`Filter ${header.toLowerCase()}...`}
+                                                                className="h-9 bg-background pl-8 font-normal"
+                                                                aria-label={`Filter report by ${header.toLowerCase()}`}
+                                                            />
+                                                        </div>
+                                                    )}
                                                 </TableHead>
                                             ))}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {report.data.map((item, index) => {
+                                        {filteredReportData.length === 0 ? (
+                                            <TableRow>
+                                                <TableCell colSpan={getColumnHeaders().length + 1} className="h-24 text-center text-muted-foreground">
+                                                    No rows match “{rowFilter}”.
+                                                </TableCell>
+                                            </TableRow>
+                                        ) : filteredReportData.map((item, index) => {
                                             const rowData = getRowData(item);
                                             const key = getRowKey(item, index);
                                             const isExpanded = expandedRows.has(key);
@@ -1031,7 +1076,11 @@ function ProductionReport() {
 
                             {/* Mobile Card View - Simplified for now, just show expand button */}
                             <div className="block sm:hidden space-y-3">
-                                {report.data.map((item, index) => {
+                                {filteredReportData.length === 0 ? (
+                                    <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+                                        No rows match “{rowFilter}”.
+                                    </div>
+                                ) : filteredReportData.map((item, index) => {
                                     const headers = getColumnHeaders();
                                     const rowData = getRowData(item);
                                     const key = getRowKey(item, index);
@@ -1096,7 +1145,7 @@ function ProductionReport() {
                                     );
                                 })}
 
-                                {report.data.length > 0 && (
+                                {filteredReportData.length > 0 && (
                                     <div className="border rounded-lg bg-primary/5 shadow-sm overflow-hidden border-primary/20 mt-4">
                                         <div className="p-4 flex items-center justify-between bg-primary/10">
                                             <div className="font-bold text-primary">Grand Total</div>

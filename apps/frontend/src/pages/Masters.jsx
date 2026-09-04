@@ -183,6 +183,8 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
     const [search, setSearch] = useState('');
     const [editingId, setEditingId] = useState(null);
     const [editName, setEditName] = useState('');
+    const [deletingId, setDeletingId] = useState(null);
+    const [deleteResult, setDeleteResult] = useState(null);
     const allowCreate = !!canCreate;
     const allowEdit = !!canEdit;
     const allowDelete = !!canDelete;
@@ -203,6 +205,25 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
         setEditingId(null);
     }
 
+    const handleDelete = async (item) => {
+        if (!allowDelete || deletingId) return;
+        if (!confirm(`Delete ${item.name}?`)) return;
+
+        setDeletingId(item.id);
+        setDeleteResult(null);
+        try {
+            await onDelete(item.id);
+            setDeleteResult({ type: 'success', message: `${item.name} deleted successfully.` });
+        } catch (err) {
+            setDeleteResult({
+                type: 'error',
+                message: err?.message || `Failed to delete ${item.name}.`,
+            });
+        } finally {
+            setDeletingId(null);
+        }
+    }
+
     return (
         <Card>
             <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -213,6 +234,16 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
                 </div>
             </CardHeader>
             <CardContent className="space-y-4">
+                {deleteResult && (
+                    <div
+                        role={deleteResult.type === 'error' ? 'alert' : 'status'}
+                        className={`rounded-md border px-3 py-2 text-sm ${deleteResult.type === 'error'
+                            ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                            : 'border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400'}`}
+                    >
+                        {deleteResult.message}
+                    </div>
+                )}
                 <div className="flex flex-col sm:flex-row gap-2">
                     <Input placeholder={`New ${title} name`} value={newName} onChange={e => setNewName(e.target.value)} disabled={!allowCreate} />
                     <Button onClick={handleCreate} disabled={loading || !newName.trim() || !allowCreate} className="w-full sm:w-auto">
@@ -256,7 +287,16 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
                                                     <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name) }}><Edit2 className="w-4 h-4" /></Button>
                                                 </DisabledWithTooltip>
                                                 <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
-                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                                    <Button
+                                                        size="icon"
+                                                        variant="ghost"
+                                                        className="h-8 w-8 text-destructive"
+                                                        onClick={() => handleDelete(item)}
+                                                        disabled={!allowDelete || deletingId === item.id}
+                                                        aria-label={`Delete ${item.name}`}
+                                                    >
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </Button>
                                                 </DisabledWithTooltip>
                                             </div>
                                         )}
@@ -294,7 +334,16 @@ function SimpleMasterCrud({ title, data, onCreate, onUpdate, onDelete, loading, 
                                             <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditingId(item.id); setEditName(item.name) }}><Edit2 className="w-4 h-4" /></Button>
                                         </DisabledWithTooltip>
                                         <DisabledWithTooltip disabled={!allowDelete} tooltip="You do not have permission to delete master records.">
-                                            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => { if (confirm('Delete?')) onDelete(item.id) }}><Trash2 className="w-4 h-4" /></Button>
+                                            <Button
+                                                size="icon"
+                                                variant="ghost"
+                                                className="h-8 w-8 text-destructive"
+                                                onClick={() => handleDelete(item)}
+                                                disabled={!allowDelete || deletingId === item.id}
+                                                aria-label={`Delete ${item.name}`}
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </Button>
                                         </DisabledWithTooltip>
                                     </>
                                 )}

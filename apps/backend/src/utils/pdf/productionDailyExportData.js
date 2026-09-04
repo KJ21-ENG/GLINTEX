@@ -416,6 +416,12 @@ async function buildHoloHoursWastageSummary({ date, db }) {
 async function buildHoloOtherWastageSummary({ date, db }) {
   const [items, metrics] = await Promise.all([
     db.holoOtherWastageItem.findMany({
+      where: {
+        OR: [
+          { isActive: true },
+          { metrics: { some: { date } } },
+        ],
+      },
       orderBy: { name: 'asc' },
     }),
     db.holoOtherWastageMetric.findMany({

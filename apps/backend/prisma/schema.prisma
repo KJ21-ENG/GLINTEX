@@ -289,6 +289,7 @@ model HoloDailyMetric {
 model HoloOtherWastageItem {
   id              String                   @id @default(cuid())
   name            String                   @unique
+  isActive        Boolean                  @default(true)
   createdAt       DateTime                 @default(now())
   updatedAt       DateTime                 @default(now()) @updatedAt
   createdByUserId String?

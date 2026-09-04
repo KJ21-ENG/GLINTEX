@@ -65,7 +65,18 @@ function createDbStub({
       },
     },
     holoOtherWastageItem: {
-      findMany: async () => holoOtherWastageItems,
+      findMany: async ({ where } = {}) => {
+        if (!where?.OR) return holoOtherWastageItems;
+        const historicalDate = where.OR
+          .map((condition) => condition?.metrics?.some?.date)
+          .find(Boolean);
+        return holoOtherWastageItems.filter((item) => (
+          item.isActive
+          || holoOtherWastageMetrics.some((metric) => (
+            metric.otherWastageItemId === item.id && metric.date === historicalDate
+          ))
+        ));
+      },
     },
     holoOtherWastageMetric: {
       findMany: async ({ where } = {}) => {
@@ -302,8 +313,9 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
       { date: '2026-03-09', baseMachine: 'H1', hours: 12, wastage: 0.25 },
     ],
     holoOtherWastageItems: [
-      { id: 'other-2', name: 'Core Waste' },
-      { id: 'other-1', name: 'Packing Damage' },
+      { id: 'other-2', name: 'Core Waste', isActive: true },
+      { id: 'other-1', name: 'Packing Damage', isActive: false },
+      { id: 'other-3', name: 'Retired Without History', isActive: false },
     ],
     holoOtherWastageMetrics: [
       { date: '2026-03-09', otherWastageItemId: 'other-1', wastage: 0.75 },
@@ -360,6 +372,21 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
   assert.deepEqual(data.otherWastageSummary, [
     { item: 'Core Waste', wastage: 0 },
     { item: 'Packing Damage', wastage: 0.75 },
+  ]);
+
+  const futureData = await buildProductionDailyExportData({
+    process: 'holo',
+    date: '2026-03-10',
+    db,
+    helpers: {
+      resolveHoloIssueDetails: async () => ({
+        cutName: 'Trace Cut',
+        yarnName: 'Trace Yarn',
+      }),
+    },
+  });
+  assert.deepEqual(futureData.otherWastageSummary, [
+    { item: 'Core Waste', wastage: 0 },
   ]);
 });
 

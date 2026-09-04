@@ -3560,7 +3560,10 @@ router.get('/api/bootstrap', async (req, res) => {
       })
       : [];
     slices.holo_other_wastage_items = allowed.holo_other_wastage_items
-      ? await prisma.holoOtherWastageItem.findMany({ orderBy: { name: 'asc' } })
+      ? await prisma.holoOtherWastageItem.findMany({
+        where: { isActive: true },
+        orderBy: { name: 'asc' },
+      })
       : [];
     slices.cone_types = allowed.cone_types ? await prisma.coneType.findMany() : [];
     slices.wrappers = allowed.wrappers ? await prisma.wrapper.findMany() : [];
@@ -12657,6 +12660,7 @@ router.delete('/api/holo_production_per_hours/:id', requireDeletePermission('mas
 router.get('/api/holo_other_wastage_items', requirePermission('masters', PERM_READ), async (req, res) => {
   try {
     const rows = await prisma.holoOtherWastageItem.findMany({
+      where: { isActive: true },
       orderBy: { name: 'asc' },
     });
     res.json(rows);
@@ -12671,6 +12675,29 @@ router.post('/api/holo_other_wastage_items', requirePermission('masters', PERM_W
     const actorUserId = req.user?.id;
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const existing = await prisma.holoOtherWastageItem.findUnique({ where: { name } });
+    if (existing?.isActive) {
+      return res.status(400).json({ error: 'Other wastage item already exists' });
+    }
+    if (existing) {
+      const restored = await prisma.holoOtherWastageItem.update({
+        where: { id: existing.id },
+        data: {
+          isActive: true,
+          ...actorUpdateFields(actorUserId),
+        },
+      });
+      await logCrudWithActor(req, {
+        entityType: 'holo_other_wastage_item',
+        entityId: restored.id,
+        action: 'create',
+        before: existing,
+        after: restored,
+        payload: { restored: true, name: restored.name },
+      });
+      return res.json(restored);
+    }
 
     const created = await prisma.holoOtherWastageItem.create({
       data: {
@@ -12695,7 +12722,7 @@ router.put('/api/holo_other_wastage_items/:id', requireEditPermission('masters')
     if (!name) return res.status(400).json({ error: 'name is required' });
 
     const existing = await prisma.holoOtherWastageItem.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: 'Other wastage item not found' });
+    if (!existing?.isActive) return res.status(404).json({ error: 'Other wastage item not found' });
 
     const updated = await prisma.holoOtherWastageItem.update({
       where: { id },
@@ -12722,21 +12749,30 @@ router.put('/api/holo_other_wastage_items/:id', requireEditPermission('masters')
 
 router.delete('/api/holo_other_wastage_items/:id', requireDeletePermission('masters'), async (req, res) => {
   try {
+    const actorUserId = req.user?.id;
     const { id } = req.params;
     const existing = await prisma.holoOtherWastageItem.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: 'Other wastage item not found' });
+    if (!existing?.isActive) return res.status(404).json({ error: 'Other wastage item not found' });
 
-    await prisma.holoOtherWastageItem.delete({ where: { id } });
-    await logCrudWithActor(req, { entityType: 'holo_other_wastage_item', entityId: id, action: 'delete', payload: existing });
-    res.json({ ok: true });
+    const archived = await prisma.holoOtherWastageItem.update({
+      where: { id },
+      data: {
+        isActive: false,
+        ...actorUpdateFields(actorUserId),
+      },
+    });
+    await logCrudWithActor(req, {
+      entityType: 'holo_other_wastage_item',
+      entityId: id,
+      action: 'delete',
+      before: existing,
+      after: archived,
+      payload: { archived: true, name: existing.name },
+    });
+    res.json({ ok: true, archived: true });
   } catch (err) {
     console.error('Failed to delete holo other wastage item', err);
-    const isReferenced = err?.code === 'P2003' || String(err?.message || '').toLowerCase().includes('foreign key');
-    res.status(isReferenced ? 400 : 500).json({
-      error: isReferenced
-        ? 'Cannot delete this Other Wastage item because daily wastage entries exist for it'
-        : (err.message || 'Failed to delete holo other wastage item'),
-    });
+    res.status(500).json({ error: err.message || 'Failed to delete holo other wastage item' });
   }
 });
 
@@ -18705,7 +18741,10 @@ router.put('/api/reports/production/holo-other-wastage', requirePermission('repo
     }
 
     const items = await prisma.holoOtherWastageItem.findMany({
-      where: { id: { in: Array.from(itemIds) } },
+      where: {
+        id: { in: Array.from(itemIds) },
+        isActive: true,
+      },
       select: { id: true, name: true },
     });
     const itemMap = new Map(items.map((item) => [item.id, item]));

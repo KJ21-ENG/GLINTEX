@@ -4,7 +4,7 @@ set -Eeuo pipefail
 readonly app_dir=${1:?production app directory is required}
 readonly deploy_sha=${2:?exact deployment SHA is required}
 readonly expected_host_sha=${3:?exact currently deployed SHA is required}
-readonly server_override_sha=9dff653e26fba0f5c914eb6e1d3e460aba996efc0ef7cbe2d09e08ce22f1bd6e
+readonly server_override_sha=116afe82b8e28a22b61d2a8b5e96fcd5b1c7bfefdc8bf7fadeaba2e5d8f48b79
 
 [[ "$app_dir" = /* ]]
 [[ "$deploy_sha" =~ ^[0-9a-f]{40}$ ]]
@@ -65,6 +65,26 @@ build_compose=(
 )
 
 cutover_started=0
+agent_enabled=0
+build_services=(backend frontend)
+cutover_services=(frontend backend)
+startup_services=(frontend)
+
+live_rendered_compose=$("${live_compose[@]}" config --format json)
+if jq -e '.services | has("agent-api")' <<<"$live_rendered_compose" >/dev/null; then
+  agent_enabled=1
+  build_services+=(agent-api)
+  cutover_services=(frontend agent-api backend)
+  startup_services+=(agent-api)
+fi
+
+if ((agent_enabled)); then
+  jq -e '(.services | keys | sort) == ["agent-api", "backend", "db", "frontend"]' \
+    <<<"$live_rendered_compose" >/dev/null
+else
+  jq -e '(.services | keys | sort) == ["backend", "db", "frontend"]' \
+    <<<"$live_rendered_compose" >/dev/null
+fi
 
 cleanup() {
   if [[ -n "${source_dir:-}" && "$source_dir" == /var/tmp/glintex-* ]]; then
@@ -77,7 +97,7 @@ fail_closed() {
   trap - ERR EXIT HUP INT TERM
   set +e
   if ((cutover_started)); then
-    "${live_compose[@]}" stop frontend agent-api backend </dev/null
+    "${live_compose[@]}" stop "${cutover_services[@]}" </dev/null
     printf 'Deployment stopped after cutover began. External writers remain stopped; use the retained rollback images and predeploy manifest for recovery.\n' >&2
   fi
   cleanup
@@ -159,18 +179,23 @@ verify_migration_history() {
 
 old_backend_cid=$("${live_compose[@]}" ps -q backend)
 old_frontend_cid=$("${live_compose[@]}" ps -q frontend)
-old_agent_cid=$("${live_compose[@]}" ps -q agent-api)
 test -n "$old_backend_cid"
 test -n "$old_frontend_cid"
-test -n "$old_agent_cid"
 
 old_backend_image=$(docker inspect --format '{{.Image}}' "$old_backend_cid")
 old_frontend_image=$(docker inspect --format '{{.Image}}' "$old_frontend_cid")
-old_agent_image=$(docker inspect --format '{{.Image}}' "$old_agent_cid")
+old_agent_image=disabled
+if ((agent_enabled)); then
+  old_agent_cid=$("${live_compose[@]}" ps -q agent-api)
+  test -n "$old_agent_cid"
+  old_agent_image=$(docker inspect --format '{{.Image}}' "$old_agent_cid")
+fi
 rollback_tag="rollback-${stamp}-${previous_sha:0:12}"
 docker image tag "$old_backend_image" "glintex-app-backend:$rollback_tag"
 docker image tag "$old_frontend_image" "glintex-app-frontend:$rollback_tag"
-docker image tag "$old_agent_image" "glintex-app-agent-api:$rollback_tag"
+if ((agent_enabled)); then
+  docker image tag "$old_agent_image" "glintex-app-agent-api:$rollback_tag"
+fi
 
 identity_query='SELECT current_database(), current_user, system_identifier FROM pg_control_system();'
 expected_identity=$("${live_compose[@]}" exec -T db sh -lc \
@@ -216,28 +241,45 @@ printf 'Committed-only deployment context. No production backup data.\n' \
 
 source_real=$(realpath "$source_dir")
 rendered_compose=$("${build_compose[@]}" config --format json)
-jq -e --arg source "$source_real" '
-  ((.services | keys | sort) == ["agent-api", "backend", "db", "frontend"])
-  and ((.services | has("migrate")) | not)
-  and (((.services.db.ports // []) | length) == 0)
-  and (.services.backend.build.context == ($source + "/apps/backend"))
-  and (.services.frontend.build.context == ($source + "/apps/frontend"))
-  and (.services["agent-api"].build.context == $source)
-  and ([.services[] | .ports[]?
-        | select((.host_ip // "") != "127.0.0.1")] | length == 0)
-' <<<"$rendered_compose" >/dev/null
+if ((agent_enabled)); then
+  jq -e --arg source "$source_real" '
+    ((.services | keys | sort) == ["agent-api", "backend", "db", "frontend"])
+    and ((.services | has("migrate")) | not)
+    and (((.services.db.ports // []) | length) == 0)
+    and (.services.backend.build.context == ($source + "/apps/backend"))
+    and (.services.frontend.build.context == ($source + "/apps/frontend"))
+    and (.services["agent-api"].build.context == $source)
+    and ([.services[] | .ports[]?
+          | select((.host_ip // "") != "127.0.0.1")] | length == 0)
+  ' <<<"$rendered_compose" >/dev/null
+else
+  jq -e --arg source "$source_real" '
+    ((.services | keys | sort) == ["backend", "db", "frontend"])
+    and ((.services | has("migrate")) | not)
+    and (((.services.db.ports // []) | length) == 0)
+    and (.services.backend.build.context == ($source + "/apps/backend"))
+    and (.services.frontend.build.context == ($source + "/apps/frontend"))
+    and ([.services[] | .ports[]?
+          | select((.host_ip // "") != "127.0.0.1")] | length == 0)
+  ' <<<"$rendered_compose" >/dev/null
+fi
 verify_migration_history false
 
 export GLINTEX_DEPLOY_SHA="$deploy_sha"
-"${build_compose[@]}" build backend frontend agent-api </dev/null
+"${build_compose[@]}" build "${build_services[@]}" </dev/null
 
 candidate_backend_image=$(docker image inspect --format '{{.Id}}' glintex-app-backend:latest)
 candidate_frontend_image=$(docker image inspect --format '{{.Id}}' glintex-app-frontend:latest)
-candidate_agent_image=$(docker image inspect --format '{{.Id}}' glintex-app-agent-api:latest)
+candidate_agent_image=disabled
+if ((agent_enabled)); then
+  candidate_agent_image=$(docker image inspect --format '{{.Id}}' glintex-app-agent-api:latest)
+fi
 release_tag="release-${deploy_sha:0:12}"
 docker image tag "$candidate_backend_image" "glintex-app-backend:$release_tag"
 docker image tag "$candidate_frontend_image" "glintex-app-frontend:$release_tag"
-docker image tag "$candidate_agent_image" "glintex-app-agent-api:$release_tag"
+if ((agent_enabled)); then
+  docker image tag "$candidate_agent_image" "glintex-app-agent-api:$release_tag"
+fi
 
 docker run --rm --entrypoint sh "$candidate_backend_image" -ec \
   'test -f /app/backups/.release-context; test "$(find /app/backups -mindepth 1 -type f | wc -l)" -eq 1' \
@@ -249,16 +291,18 @@ docker run --rm --entrypoint sh "$candidate_backend_image" -ec \
 docker run --rm --entrypoint sh "$candidate_frontend_image" -ec \
   'nginx -t; nginx; wget -qO- http://127.0.0.1/ >/dev/null; nginx -s quit' \
   </dev/null
-"${build_compose[@]}" run --rm --no-deps -T agent-api \
-  node --input-type=module -e \
-  "import {createAgentApp} from './src/agentApp.js'; const app=createAgentApp(); const server=app.listen(0,'127.0.0.1',async()=>{try{const port=server.address().port;const response=await fetch('http://127.0.0.1:'+port+'/healthz');if(!response.ok)process.exitCode=1;}catch(error){console.error(error);process.exitCode=1;}finally{server.close();}});" \
-  </dev/null
+if ((agent_enabled)); then
+  "${build_compose[@]}" run --rm --no-deps -T agent-api \
+    node --input-type=module -e \
+    "import {createAgentApp} from './src/agentApp.js'; const app=createAgentApp(); const server=app.listen(0,'127.0.0.1',async()=>{try{const port=server.address().port;const response=await fetch('http://127.0.0.1:'+port+'/healthz');if(!response.ok)process.exitCode=1;}catch(error){console.error(error);process.exitCode=1;}finally{server.close();}});" \
+    </dev/null
+fi
 
 git checkout --detach "$deploy_sha"
 test "$(git rev-parse HEAD)" = "$deploy_sha"
 
 cutover_started=1
-"${live_compose[@]}" stop frontend agent-api </dev/null
+"${live_compose[@]}" stop "${startup_services[@]}" </dev/null
 "${live_compose[@]}" up -d --no-deps --no-build --force-recreate backend </dev/null
 wait_url http://127.0.0.1:4002/api/health
 
@@ -271,26 +315,30 @@ fi
 verify_migration_history true
 "${live_compose[@]}" exec -T backend npx prisma migrate status </dev/null
 
-"${live_compose[@]}" up -d --no-deps --no-build --force-recreate frontend agent-api \
+"${live_compose[@]}" up -d --no-deps --no-build --force-recreate "${startup_services[@]}" \
   </dev/null
 wait_url http://127.0.0.1:4173/
-wait_url http://127.0.0.1:4003/healthz
+if ((agent_enabled)); then
+  wait_url http://127.0.0.1:4003/healthz
+fi
 wait_url https://app.glintex.in/api/health
 wait_url https://app.glintex.in/
 
 backend_cid=$("${live_compose[@]}" ps -q backend)
 frontend_cid=$("${live_compose[@]}" ps -q frontend)
-agent_cid=$("${live_compose[@]}" ps -q agent-api)
 test "$(docker inspect --format '{{.Image}}' "$backend_cid")" = "$candidate_backend_image"
 test "$(docker inspect --format '{{.Image}}' "$frontend_cid")" = "$candidate_frontend_image"
-test "$(docker inspect --format '{{.Image}}' "$agent_cid")" = "$candidate_agent_image"
 test "$(docker port "$backend_cid" 4000/tcp)" = 127.0.0.1:4002
 test "$(docker port "$frontend_cid" 80/tcp)" = 127.0.0.1:4173
-test "$(docker port "$agent_cid" 4003/tcp)" = 127.0.0.1:4003
+if ((agent_enabled)); then
+  agent_cid=$("${live_compose[@]}" ps -q agent-api)
+  test "$(docker inspect --format '{{.Image}}' "$agent_cid")" = "$candidate_agent_image"
+  test "$(docker port "$agent_cid" 4003/tcp)" = 127.0.0.1:4003
 
-actual_deploy_sha=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
-  "$agent_cid" | sed -n 's/^GLINTEX_DEPLOY_SHA=//p')
-test "$actual_deploy_sha" = "$deploy_sha"
+  actual_deploy_sha=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    "$agent_cid" | sed -n 's/^GLINTEX_DEPLOY_SHA=//p')
+  test "$actual_deploy_sha" = "$deploy_sha"
+fi
 
 {
   printf 'candidate=%s\n' "$deploy_sha"

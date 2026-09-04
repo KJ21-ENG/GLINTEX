@@ -286,8 +286,9 @@ docker run --rm --entrypoint sh "$candidate_backend_image" -ec \
   </dev/null
 "${build_compose[@]}" run --rm --no-deps -T backend \
   npx prisma validate </dev/null
-"${build_compose[@]}" run --rm --no-deps -T backend \
-  npx prisma migrate status </dev/null
+# Pending migrations are expected before the candidate backend starts. Existing
+# migration history was verified above; complete application is required after
+# backend startup by verify_migration_history true and prisma migrate status.
 docker run --rm --entrypoint sh "$candidate_frontend_image" -ec \
   'nginx -t; nginx; wget -qO- http://127.0.0.1/ >/dev/null; nginx -s quit' \
   </dev/null

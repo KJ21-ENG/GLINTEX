@@ -14,6 +14,8 @@ import {
 import { cn } from '../lib/utils';
 import { useMobileDetect } from '../utils/useMobileDetect';
 import { MobileBarcodeHistory } from '../components/reports/MobileBarcodeHistory';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { WorkerMonthlyReport } from '../components/reports/WorkerMonthlyReport';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 
 const STAGE_ICONS = {
@@ -1496,7 +1498,15 @@ function ProductionReport() {
 }
 
 export function Reports() {
-    const [activeTab, setActiveTab] = useState('barcode');
+    const location = useLocation();
+    const navigate = useNavigate();
+    const requestedTab = new URLSearchParams(location.search).get('reportTab');
+    const activeTab = ['barcode', 'production', 'worker-monthly'].includes(requestedTab) ? requestedTab : 'barcode';
+    function setActiveTab(tab) {
+        const params = new URLSearchParams(location.search);
+        params.set('reportTab', tab);
+        navigate({ search: `?${params}` });
+    }
     const { isMobile, isTouchDevice } = useMobileDetect();
     const [useMobileMode, setUseMobileMode] = useState(false);
 
@@ -1530,6 +1540,10 @@ export function Reports() {
                         <span>Desktop View</span>
                     </Button>
                 </div>
+                <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={() => setActiveTab('production')}>Production Report</Button>
+                    <Button variant="outline" onClick={() => setActiveTab('worker-monthly')}>Worker Monthly Report</Button>
+                </div>
                 <MobileBarcodeHistory />
             </div>
         );
@@ -1548,7 +1562,7 @@ export function Reports() {
                 </div>
 
                 {/* Scanner Toggle + Tab Toggle */}
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2 min-w-0">
                     {activeTab === 'barcode' && (
                         <Button
                             variant={useMobileMode ? "default" : "outline"}
@@ -1562,7 +1576,7 @@ export function Reports() {
                     )}
 
                     {/* Tab Toggle */}
-                    <div className="flex p-1 bg-muted rounded-lg">
+                    <div className="flex flex-wrap p-1 bg-muted rounded-lg">
                         <button
                             onClick={() => setActiveTab('barcode')}
                             className={cn(
@@ -1587,12 +1601,16 @@ export function Reports() {
                             <Factory className="w-4 h-4" />
                             Production Report
                         </button>
+                        <button onClick={() => setActiveTab('worker-monthly')}
+                            className={cn("px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-2", activeTab === 'worker-monthly' ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground")}>
+                            <Users className="w-4 h-4" />Worker Monthly Report
+                        </button>
                     </div>
                 </div>
             </div>
 
             {/* Tab Content */}
-            {activeTab === 'barcode' ? <BarcodeHistory /> : <ProductionReport />}
+            {activeTab === 'barcode' ? <BarcodeHistory /> : activeTab === 'production' ? <ProductionReport /> : <WorkerMonthlyReport />}
         </div>
     );
 }

@@ -1,0 +1,54 @@
+# P2 local evidence: Coning monthly report exports
+
+Run: glintex-coning-monthly-20260906. Mode: thread-calling ONLY. Package: P2.
+Executor native task: 01a077cb-e7d5-7cb2-a3d9-914540798cfa.
+Root: /Volumes/MacSSD/Development/CursorAI_Project/GLINTEX.
+Ledger: .agent/sessions/20260906T173738Z-codex-46e8e4fe90ad.json.
+Capsule: 20260906T173846Z-coning-monthly-report-p2-exports.
+
+| Spec reference | Expected behavior | Implementation location | Validation evidence | Status |
+|---|---|---|---|---|
+| 1. §2/4 | Worker deliverable has exact Coning Monthly Work Statement title, company/worker/month/process/generated/current MTD header and stable reference | exportPdf.js header; exportWorkbook.js header; shared toWorkerStatement title | Rendered worker.pdf pages 1,2,8,16; current-unknown.pdf text verifies Month to date, cutoff and generated time; XLSX header reopened | PASS local export |
+| 2. §4/6 | PDF quality summary, chronological vertical ledger/machine/daily subtotals/month totals use consistent normalized units | exportPdf.js table/summary/ledger; exportCommon.js quantity formatting | 26 PDFs / 416 pages parsed: 1,872 ledger rows, every daily subtotal, two matching monthly totals per worker; 18,720 cones and 2,310.685 kg across formats | PASS |
+| 3. §6/AC08,11 | A4 legibility, long-name wrapping, repeated headings/page breaks, no clipped columns or orphan subtotal, actual-label font evidence | exportPdf.js wrapped variable-height rows and reserved subtotal space; assertPdfLabels | Poppler renders reviewed at pages 1,2,8,16 of 16-page worker fixture; A4 geometry and subtotal position checks on 416 archive pages; local-label specimen visually reviewed; 287 stored local labels all ASCII | PASS for synthetic layout and observed local labels; production repertoire unverified |
+| 4. §6/AC10 | One worker has private PDF/workbook; all-worker ZIP has separate files; PDF contains no other worker/internal diagnostics | exportDownload.js toWorkerStatement per entry; exportWorkbook.js explicit own-worker office filter | Real middleware download tests for single and all workers in both formats; ZIP contents 26 unique entries each; every workbook reference ID belongs to its worker; every PDF has only its own worker reference and no office IDs/provenance/diagnostics | PASS |
+| 5. §6/AC10 | Sanitized process/month/stable-worker filenames avoid collisions | exportCommon.js workerFilename | Duplicate display names, path traversal characters, sanitized ID collision test; full SHA256 of worker ID retained; 26 unique names in each archive | PASS |
+| 6. §6/AC11 | Workbook Summary/Daily Details/office detailed references preserve numeric quantities | exportWorkbook.js Summary, Daily Details, Office References | SheetJS and independent openpyxl reopen: three tabs, numeric cones/kg, 0.000 kg format, wrap/top alignment, no error cells; Artifact Tool imports and renders all three sheets; daily/quality/monthly totals reconcile | PASS |
+| 7. §6/AC09,11 | Preview/export share normalization; export retains full details independent of pagination and consistent source | routes/workerMonthlyReport.js download routes; existing buildWorkerMonthlyReport RepeatableRead; export functions only consume normalized report | Download tests with pageSize=1&page=999 still export all 15 selected rows; one build call per download; P1 full-source snapshot tests pass; all-worker workbook references contain all 1,872 rows | PASS |
+| 8. §6/AC13 | Generation/cutoff timestamps and honest mutable-source disclosure | exportCommon.js periodText/SOURCE_DISCLOSURE; PDF repeated footer; XLSX header; X-Report-Generated-At | current-unknown.pdf contains Month to date, 2026-09-06 cutoff, generated timestamp, unknown/incomplete known subtotals; all exports disclose that later edits can change regeneration | PASS |
+| 9. §7/AC12 | Every PDF/XLSX/ZIP download has report guard; unsupported process rejected; no unauthenticated export links | routes/workerMonthlyReport.js router-wide actual requireAuth and reports READ before /download/pdf and /download/xlsx | exports.test.js uses real middleware with only synthetic session lookup: 401 unauthenticated, 403 without reports, 200 with READ, 400 for Holo, both single/ZIP formats; zero source reads before guard; no DB opened by tests | PASS |
+| 10. §7/AC14 | Bounded all-worker generation memory/time measured for representative 1,871+ rows/26 workers/long groups/multiple sources without truncation | exportDownload.js sequential archive entries/backpressure/abort; __tests__/exportBenchmark.mjs | 1,872 rows, 26 workers, 11 source refs per issue, 7 long quality groups per worker: PDF ZIP 1,176 ms / 188 MiB peak RSS; XLSX ZIP 1,676 ms / 199 MiB peak RSS; 26 files each, full row/totals reconciliation; disconnect cancellation test passes | PASS synthetic generation; live query plans/source costs and mobile P3 |
+
+## Exact implementation and integration contract
+
+- `GET /api/reports/worker-monthly/download/pdf?month=YYYY-MM&process=coning&workerId=ID-or-all`
+- `GET /api/reports/worker-monthly/download/xlsx?month=YYYY-MM&process=coning&workerId=ID-or-all`
+- Specific worker: PDF or XLSX with Content-Disposition attachment. Explicit/default `all`: ZIP containing one file per eligible worker. No qualifying work: clear 400 JSON error. Existing four read endpoints are preserved.
+- Both use the existing `buildWorkerMonthlyReport(client, filters)` once, then `toWorkerStatement(report, workerId)`. No additional source query while rendering. Preview page/pageSize are ignored by downloads, not applied to source rows.
+- PDF A4 portrait, 9pt ledger text, measured line wrapping, repeated worker/period and table headings, daily/month totals, unknown quantities labeled, generation footer and page numbering. Worker PDFs use no office details.
+- XLSX uses existing `xlsx` dependency. Numbers are normalized service outputs, not formulas that could change snapshot totals or numeric strings. Existing SheetJS CE does not author wrap alignment, so its public CFB ZIP API adds wrap/top alignment to generated OOXML cell styles. The resulting workbook was reopened independently and rendered. No new dependencies.
+- Office References is restricted to the selected worker's qualified details, and preserves receive/issue IDs, lot/barcodes, machine, quality, cones/kg, weight source, JSON quality provenance and flags. Global exceptions and other workers never enter it.
+- ZIP generation waits for each archived worker before rendering the next. Client disconnect aborts the archive and outstanding entry wait. Source report remains in memory; measurements include the test sink retaining ZIP buffers and do not claim constant total memory with unbounded source size.
+
+## Validation commands and artifacts
+
+- `node --test apps/backend/src/services/workerMonthlyReport/__tests__/*.test.js`: P1 + P2 combined suite, 20 tests after final cancellation test, all pass.
+- `node apps/backend/src/services/workerMonthlyReport/__tests__/exportBenchmark.mjs`: synthetic export benchmark and archive/workbook row/privacy checks; 30-second synthetic per-format budget passed.
+- `git diff --check` and syntax checks of route/export modules: pass.
+- Final rendered workbook/data packet: `/Volumes/MacSSD/tmp/glintex-coning-p2-Y823Q6/`.
+  - `worker.pdf`, `worker.xlsx`, `current-unknown.pdf`, `all-workers-pdf.zip`, `all-workers-xlsx.zip`, extracted `archive-*.pdf` / `archive-worker-*.xlsx`, `normalized.json`, `measurements.json`.
+  - `file-verification.json` and `verify-files.py`: independent pypdf/openpyxl checks, 26 private PDFs, 416 pages, 1,872 PDF rows, matching totals, numeric/formatted/wrapped workbook values, current-month/incomplete labeling.
+  - `summary.png`, `daily.png`, `references.png`: imported workbook render of each tab. Initial Summary render clipped a final wrapped line; row height was corrected and all three final renders inspected successfully.
+  - `actual-local-label-specimen.pdf`, `actual-label-1.png`, `label-evidence.json`: stored-label font specimen and source identity. Specimen combines actual stored labels with synthetic quantities; it is not a production statement.
+- PDF visual pages: `/Volumes/MacSSD/tmp/glintex-coning-p2-WcGMxM/page-01.png`, `page-02.png`, `page-08.png`, `page-16.png`. This PDF renderer and input are unchanged in the final packet. All 16 pages were rendered; selected start/transition/middle/end pages were visually inspected, plus all 416 archive pages received structural/text checks.
+- Actual labels: local configured `glintex_dev`, postgres role, server `127.0.0.1:5432`; verified with current_database/current_user/inet_server_addr/inet_server_port inside `SET TRANSACTION READ ONLY`. Names-only reads bounded to 2,000 per master returned 102 operators, 129 items, 27 yarns, 8 cuts, 2 twists, 19 cone types. All 287 observed labels are ASCII and pass Helvetica preflight. Full local label sample stays outside Git at `/Volumes/MacSSD/tmp/glintex-coning-p2-WcGMxM/local-labels.json`. No production connection or data mutation.
+
+## Preservation, decisions and limitations
+
+- HEAD remains `984d936db801c73080c6b0e06434f7fb3c653f33` on main. Own startup ledger was read and verified against canonical root before work.
+- Baseline contained P1 routes/index.js, focused route, P1 service/tests/EVIDENCE.md, and the specification. Hash comparison after P2 shows only the explicitly owned focused route changed among baseline files. P1 modules, index.js and specification are byte-identical to P2 startup. Historical qa-evidence and dispatch-v2 documentation untouched.
+- Owned source changes: four `export*.js` modules; focused download additions in routes/workerMonthlyReport.js; `__tests__/exports.test.js`, `__tests__/exportFixtures.js`, `__tests__/exportBenchmark.mjs`; this EVIDENCE-P2.md. No other source/spec edits.
+- Adopted accepted packaging/unit/header defaults. Exact document title remains the shared spec title. Existing jspdf/xlsx/archiver dependencies only. No business schema or production behavior changes outside report downloads.
+- Core Helvetica supports observed local labels and WinAnsi. Future unsupported labels produce an explicit 400 PDF error with Excel alternative; Unicode XLSX preserves them. No claim of Gujarati/Hindi or production-font verification. Supporting a new PDF script would require a suitable embedded font and independent rendered evidence.
+- The workbook is intended for digital reconciliation; wide Office References is not claimed as an A4 print layout. XLSX opening was verified by two parsers and Artifact Tool rendering, not desktop Excel GUI.
+- No full repository test/build, browser/mobile UI integration, live production dataset, live query plans, deployment, commit, stage, push, PR, external send, or production mutation. P3 and independent Reviewer/Verifier acceptance remain separate gates. P2 implementation correction count: 0 before initial review.

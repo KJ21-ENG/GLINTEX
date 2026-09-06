@@ -761,3 +761,25 @@ export default {
   testTelegramCronPrimary,
   testTelegramCronReminder,
 };
+
+// Monthly statements are authenticated, freshly generated reads. Keep download
+// blobs in memory until the caller verifies that its filters are still current.
+export async function getWorkerMonthlyReport(endpoint, filters, { page = 1, signal } = {}) {
+  return workerMonthlyRequest(endpoint, filters, { page, signal });
+}
+async function workerMonthlyRequest(endpoint, filters, { page, signal, binary = false } = {}) {
+  const query = new URLSearchParams({ ...filters, ...(page ? { page: String(page), pageSize: '100' } : {}) });
+  const res = await fetch(`${BASE}/api/reports/worker-monthly/${endpoint}?${query}`, { credentials: 'include', signal });
+  if (!res.ok) {
+    if (res.status === 401) window.dispatchEvent(new CustomEvent('glintex:auth:unauthorized'));
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Report request failed (${res.status}). Please retry.`);
+  }
+  if (!binary) return res.json();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] || 'coning-monthly-report';
+  return { blob: await res.blob(), filename, generatedAt: res.headers.get('X-Report-Generated-At') };
+}
+export async function downloadWorkerMonthlyReport(format, filters, { signal } = {}) {
+  return workerMonthlyRequest(`download/${format}`, filters, { signal, binary: true });
+}

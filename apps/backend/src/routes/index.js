@@ -27,6 +27,7 @@ import { getBaseMachineName } from '../utils/machineGrouping.js';
 import { resolveUserFields, clearUserCache } from '../utils/userResolver.js';
 import v2Router from './v2.js';
 import contractorPaymentsRouter from './contractorPayments.js';
+import workerMonthlyReportRouter from './workerMonthlyReport.js';
 import { normalizeSide } from '../services/contractorPayments/calc.js';
 import { assertProductionRowsEditable, assertIssueEditable, lockSettlementLinesExclusive, lockItemNamesExclusive } from '../services/contractorPayments/service.js';
 import { perfLog, isPerfLogEnabled } from '../lib/perfLog.js';
@@ -65,6 +66,7 @@ router.use('/api/v2', v2Router);
 
 // Contractor KG payments (self-authenticating sub-router)
 router.use('/api/contractor-payments', contractorPaymentsRouter);
+router.use('/api/reports/worker-monthly', workerMonthlyReportRouter);
 
 function normalizeBarcodeInput(value) {
   return String(value || '').trim().toUpperCase();

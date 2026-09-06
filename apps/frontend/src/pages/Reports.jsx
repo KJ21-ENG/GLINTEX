@@ -16,6 +16,7 @@ import { useMobileDetect } from '../utils/useMobileDetect';
 import { MobileBarcodeHistory } from '../components/reports/MobileBarcodeHistory';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { WorkerMonthlyReport } from '../components/reports/WorkerMonthlyReport';
+import { SheetColumnFilter, applySheetFilters, isSheetFilterActive } from '../components/common/SheetColumnFilters';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 
 const STAGE_ICONS = {
@@ -374,7 +375,8 @@ function ProductionReport() {
     const [dateTo, setDateTo] = useState(todayISO());
     const [loading, setLoading] = useState(false);
     const [report, setReport] = useState(null);
-    const [rowFilter, setRowFilter] = useState('');
+    const [columnFilters, setColumnFilters] = useState({});
+    const [openFilterId, setOpenFilterId] = useState(null);
     const [exportModalOpen, setExportModalOpen] = useState(false);
     const [exportProcess, setExportProcess] = useState('cutter');
     const [exportFrom, setExportFrom] = useState('');
@@ -581,8 +583,9 @@ function ProductionReport() {
     }, [process, view, dateFrom, dateTo]);
 
     useEffect(() => {
-        setRowFilter('');
-    }, [process, view]);
+        setColumnFilters({});
+        setOpenFilterId(null);
+    }, [process, view, dateFrom, dateTo]);
 
     const getRowKey = (item, index) => {
         if (view === 'operator') return `op-${item.operatorId || index}`;
@@ -668,17 +671,26 @@ function ProductionReport() {
         return [item.machineNo || item.machineName || 'Unknown', formatKg(item.received), item.count || item.rollCount || item.coneCount || 0];
     };
 
-    const filteredReportData = useMemo(() => {
-        const normalizedFilter = rowFilter.trim().toLocaleLowerCase();
-        const rows = report?.data || [];
-        if (!normalizedFilter) return rows;
-
-        return rows.filter((item) => (
-            getRowData(item)
-                .map((value) => String(value ?? '').toLocaleLowerCase())
-                .some((value) => value.includes(normalizedFilter))
-        ));
-    }, [report?.data, rowFilter, view]);
+    const filterColumns = useMemo(() => {
+        const headers = getColumnHeaders();
+        return headers.map((label, index) => {
+            const kind = index >= headers.length - 2 ? 'number' : 'values';
+            const getValue = kind === 'number'
+                ? (item) => index === headers.length - 2 ? Number(item.received) || 0 : Number(item.count || item.rollCount || item.coneCount) || 0
+                : (item) => getRowData(item)[index];
+            return {
+                id: `${view}-${index}`, label, kind, getValue,
+                // Discover every value in this report, including values hidden by another filter.
+                ...(kind === 'values' ? { facetOptions: [...new Set((report?.data || []).map(getValue))].sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true })) } : {}),
+            };
+        });
+    }, [view, report?.data]);
+    const filteredReportData = useMemo(() => applySheetFilters(report?.data || [], filterColumns, columnFilters), [report?.data, filterColumns, columnFilters]);
+    const hasColumnFilters = Object.values(columnFilters).some(isSheetFilterActive);
+    const renderColumnFilter = (column, surface = 'desktop') => (
+        <SheetColumnFilter key={`${process}-${view}-${dateFrom}-${dateTo}-${column.id}`} column={column} rows={report?.data || []}
+            filters={columnFilters} setFilters={setColumnFilters} openId={openFilterId === `${surface}-${column.id}` ? column.id : null} setOpenId={(id) => setOpenFilterId(id ? `${surface}-${id}` : null)} />
+    );
 
     const grandTotals = filteredReportData.reduce((acc, item) => {
         acc.received += (Number(item.received) || 0);
@@ -878,16 +890,13 @@ function ProductionReport() {
                         {process === 'all' ? 'All Processes' : `${process.charAt(0).toUpperCase() + process.slice(1)} Production`}
                         {' '}- {view === 'operator' ? 'Operator-wise' : view === 'shift' ? 'Shift-wise' : view === 'item' ? 'Item-wise' : view === 'yarn' ? 'Yarn-wise' : 'Machine-wise'}
                     </CardTitle>
-                    <div className="relative w-full sm:hidden">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            value={rowFilter}
-                            onChange={(event) => setRowFilter(event.target.value)}
-                            placeholder={`Filter ${getColumnHeaders()[0].toLowerCase()}...`}
-                            className="h-9 pl-8"
-                            aria-label={`Filter report by ${getColumnHeaders()[0].toLowerCase()}`}
-                        />
+                    <div className="flex flex-wrap items-center gap-3 sm:hidden" aria-label="Production report column filters">
+                        {filterColumns.map(column => <div key={column.id} className="flex items-center gap-1 text-sm">{column.label}{renderColumnFilter(column, 'mobile')}</div>)}
                     </div>
+                    {hasColumnFilters && <div className="flex flex-wrap items-center gap-3 text-sm">
+                        <span>{filteredReportData.length} of {report?.data.length || 0} rows · Totals below reflect these filters</span>
+                        <Button variant="outline" size="sm" onClick={() => { setColumnFilters({}); setOpenFilterId(null); }}>Clear column filters</Button>
+                    </div>}
                 </CardHeader>
                 <CardContent>
                     {loading ? (
@@ -906,21 +915,11 @@ function ProductionReport() {
                                     <TableHeader>
                                         <TableRow>
                                             <TableHead className="w-10"></TableHead>
-                                            {getColumnHeaders().map((header, i) => (
-                                                <TableHead key={i} className={cn(i > 0 && 'text-right', i === 0 && 'min-w-[240px] py-2')}>
-                                                    <span>{header}</span>
-                                                    {i === 0 && (
-                                                        <div className="relative mt-2">
-                                                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                                                            <Input
-                                                                value={rowFilter}
-                                                                onChange={(event) => setRowFilter(event.target.value)}
-                                                                placeholder={`Filter ${header.toLowerCase()}...`}
-                                                                className="h-9 bg-background pl-8 font-normal"
-                                                                aria-label={`Filter report by ${header.toLowerCase()}`}
-                                                            />
-                                                        </div>
-                                                    )}
+                                            {filterColumns.map((column, i) => (
+                                                <TableHead key={column.id} className={cn(i > 0 && 'text-right')}>
+                                                    <div className={cn('flex items-center gap-1', i > 0 && 'justify-end')}>
+                                                        <span>{column.label}</span>{renderColumnFilter(column)}
+                                                    </div>
                                                 </TableHead>
                                             ))}
                                         </TableRow>
@@ -929,7 +928,7 @@ function ProductionReport() {
                                         {filteredReportData.length === 0 ? (
                                             <TableRow>
                                                 <TableCell colSpan={getColumnHeaders().length + 1} className="h-24 text-center text-muted-foreground">
-                                                    No rows match “{rowFilter}”.
+                                                    No rows match the selected column filters.
                                                 </TableCell>
                                             </TableRow>
                                         ) : filteredReportData.map((item, index) => {
@@ -1080,7 +1079,7 @@ function ProductionReport() {
                             <div className="block sm:hidden space-y-3">
                                 {filteredReportData.length === 0 ? (
                                     <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-                                        No rows match “{rowFilter}”.
+                                        No rows match the selected column filters.
                                     </div>
                                 ) : filteredReportData.map((item, index) => {
                                     const headers = getColumnHeaders();

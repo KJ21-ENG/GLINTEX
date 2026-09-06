@@ -1,4 +1,5 @@
 import XLSX from 'xlsx';
+import { workerCalendar, calendarDate } from './calendar.js';
 import { qualityText, completenessText, periodText, SOURCE_DISCLOSURE } from './exportCommon.js';
 
 export function exportWorkerWorkbook(statement, officeDetails = []) {
@@ -24,18 +25,41 @@ export function exportWorkerWorkbook(statement, officeDetails = []) {
     ws['!autofilter'] = { ref: XLSX.utils.encode_range({ r: firstDataRow - 1, c: 0 }, { r: rows.length - 1, c: widths.length - 1 }) };
     XLSX.utils.book_append_sheet(workbook, ws, name);
   }
-  const totals = total => [total.cones, total.netKg, completenessText(total)];
-  sheet('Summary', [...header, ['Quality details', 'Cones', 'Net kg', 'Completeness'],
-    ...statement.qualitySummary.map(group => [qualityText(group.quality), ...totals(group.totals)]),
-    ['Monthly total', ...totals(statement.monthlyTotals)]], [95, 16, 18, 65], [1, 2], 11, 2);
-  const days = new Map(statement.dailyTotals.map(day => [day.date, day.totals]));
-  const daily = [];
-  statement.rows.forEach((row, i) => {
-    daily.push([row.date, qualityText(row.quality), row.machine.name, row.cones, row.netKg, row.netKg == null ? 'Unknown weight' : '']);
-    if (statement.rows[i + 1]?.date !== row.date) daily.push([row.date, 'Daily subtotal', '', ...totals(days.get(row.date))]);
+  const calendar = workerCalendar(statement, statement.month);
+  const weight = total => !total ? '-' : total.unknownWeightRows === total.rowCount ? '?' : total.netKg;
+  const rows = [
+    [statement.companyName, 'Monthly work report'],
+    ['Worker', statement.worker.name], ['Month', statement.month],
+    ['Yarn columns show weight in kg. A dash (-) means no work recorded.'],
+    ['Date', ...calendar.columns.map(column => `${column.label} (kg)`), 'Total cones', 'Total kg'],
+    ...calendar.days.map(day => [calendarDate(day.date), ...day.cells.map(weight), day.totals?.cones ?? '-', weight(day.totals)]),
+    ['Total', ...calendar.columns.map(column => weight(column.totals)), calendar.totals.cones, weight(calendar.totals)],
+    [completenessText(calendar.totals)],
+    ['? = quantity not recorded. Incomplete totals include known quantities only.'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const count = calendar.columns.length + 3;
+  ws['!cols'] = [{ wch: 14 }, ...calendar.columns.map(() => ({ wch: 23 })), { wch: 14 }, { wch: 14 }];
+  ws['!rows'] = rows.map((_, index) => ({ hpt: index === 4 ? Math.max(32, ...calendar.columns.map(column => Math.ceil((column.label.length + 5) / 20) * 12)) : 18 }));
+  ws['!merges'] = [1, 2].map(r => ({ s: { r, c: 1 }, e: { r, c: count - 1 } }));
+  for (const r of [3, rows.length - 2, rows.length - 1]) ws['!merges'].push({ s: { r, c: 0 }, e: { r, c: count - 1 } });
+  for (let r = 5; r < rows.length - 2; r++) for (let c = 1; c < count; c++) {
+    const cell = ws[XLSX.utils.encode_cell({ r, c })];
+    if (cell?.t === 'n') cell.z = c === count - 2 ? '0' : '0.000';
+    const total = r === rows.length - 3 ? (c <= calendar.columns.length ? calendar.columns[c - 1].totals : calendar.totals) :
+      (c <= calendar.columns.length ? calendar.days[r - 5].cells[c - 1] : calendar.days[r - 5].totals);
+    if (cell?.t === 'n' && total && !(c === count - 2 ? total.conesComplete : total.weightComplete)) cell.z += '"*"';
+  }
+  const summaryStart = rows.length + 1;
+  const summaryRows = [['Yarn-wise total weight', ...Array(count - 2).fill(null), 'Total kg'], ...calendar.columns.map(column => [column.label, ...Array(count - 2).fill(null), weight(column.totals)])];
+  XLSX.utils.sheet_add_aoa(ws, summaryRows, { origin: { r: summaryStart, c: 0 } });
+  summaryRows.forEach((row, index) => {
+    ws['!rows'][summaryStart + index] = { hpt: Math.max(20, Math.ceil(String(row[0]).length / 40) * 14) };
+    ws['!merges'].push({ s: { r: summaryStart + index, c: 0 }, e: { r: summaryStart + index, c: count - 2 } });
+    const cell = ws[XLSX.utils.encode_cell({ r: summaryStart + index, c: count - 1 })];
+    if (cell?.t === 'n') cell.z = calendar.columns[index - 1].totals.weightComplete ? '0.000' : '0.000"*"';
   });
-  sheet('Daily Details', [...header, ['Date', 'Quality details', 'Machine', 'Cones', 'Net kg', 'Completeness'], ...daily,
-    ['', 'Monthly total', '', ...totals(statement.monthlyTotals)]], [16, 95, 30, 16, 18, 65], [3, 4], 11, 4);
+  XLSX.utils.book_append_sheet(workbook, ws, 'Monthly Work');
   // Explicit whitelist plus worker filter prevents bulk-report privacy leakage.
   const refs = officeDetails.filter(row => row.workerId === statement.worker.id).map(row => [row.date, row.receiveRowId, row.issueId,
     row.lotNo, row.receiveBarcode, row.issueBarcode, row.machine.name, qualityText(row.quality), row.cones, row.netKg,
@@ -51,5 +75,10 @@ export function exportWorkerWorkbook(statement, officeDetails = []) {
   const xml = Buffer.from(styles.content).toString('utf8').replace(/<cellXfs([^>]*)>([\s\S]*?)<\/cellXfs>/, (_all, attrs, body) =>
     `<cellXfs${attrs}>${body.replace(/<xf([^>]*?)\/>/g, '<xf$1 applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf>').replace(/<xf([^>]*?)>(?!<alignment)([\s\S]*?)<\/xf>/g, '<xf$1>$2<alignment wrapText="1" vertical="top"/></xf>')}</cellXfs>`);
   XLSX.CFB.utils.cfb_add(zip, '/xl/styles.xml', Buffer.from(xml));
+  const calendarSheet = XLSX.CFB.find(zip, '/xl/worksheets/sheet1.xml');
+  const sheetXml = Buffer.from(calendarSheet.content).toString('utf8')
+    .replace(/(<worksheet[^>]*>)/, '$1<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>')
+    .replace('</worksheet>', '<pageMargins left="0.25" right="0.25" top="0.3" bottom="0.3" header="0.1" footer="0.1"/><pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="1"/></worksheet>');
+  XLSX.CFB.utils.cfb_add(zip, '/xl/worksheets/sheet1.xml', Buffer.from(sheetXml));
   return XLSX.CFB.write(zip, { type: 'buffer', fileType: 'zip', compression: true });
 }

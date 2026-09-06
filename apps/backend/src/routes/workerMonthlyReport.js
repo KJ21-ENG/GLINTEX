@@ -4,6 +4,7 @@ import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { ACCESS_LEVELS } from '../utils/permissions.js';
 import { buildWorkerMonthlyReport } from '../services/workerMonthlyReport/service.js';
 import { sendReportDownload } from '../services/workerMonthlyReport/exportDownload.js';
+import { workerCalendar } from '../services/workerMonthlyReport/calendar.js';
 import { ReportInputError } from '../services/workerMonthlyReport/filters.js';
 
 function pagination(query) {
@@ -40,7 +41,7 @@ export function createWorkerMonthlyReportRouter({ client = prisma, authenticate 
           offset += statement.rows.length;
           const start = Math.max(0, (page - 1) * pageSize - begin);
           const end = Math.max(0, Math.min(statement.rows.length, page * pageSize - begin));
-          return { ...statement, rows: statement.rows.slice(start, end), totalRows: statement.rows.length };
+          return { ...statement, calendar: workerCalendar(statement, report.month), rows: statement.rows.slice(start, end), totalRows: statement.rows.length };
         });
         return res.json({ ...meta, workers: report.workerOptions, statements, page, pageSize, totalRows: rows.length,
           office: { totals: report.office.totals, selectedTotals: report.office.selectedTotals, reconciliation: report.office.reconciliation,

@@ -13,19 +13,6 @@ import {
 } from "./workerMonthlyReportState";
 
 const control = "w-full min-w-0 rounded-md border bg-background p-2 text-sm";
-const cell = "p-3 text-left align-top border-b break-words";
-function Quality({ quality: q }) {
-  return (
-    <div className="min-w-0 break-words">
-      <strong>{q.item.label}</strong>
-      <div className="text-sm text-muted-foreground">
-        Side: {q.side} · Yarn: {q.yarn.label} · Cut: {q.cut.label} · Twist:{" "}
-        {q.twist.label} · Cone: {q.coneType.label} · Target:{" "}
-        {q.targetSizeGrams == null ? "Unrecorded" : `${q.targetSizeGrams} g`}
-      </div>
-    </div>
-  );
-}
 function Totals({ value }) {
   return (
     <span>
@@ -37,132 +24,56 @@ function Totals({ value }) {
   );
 }
 function Statement({ statement: s, report }) {
-  const daily = new Map(s.dailyTotals.map((day) => [day.date, day.totals]));
-  const visibleDates = s.rows.reduce(
-    (counts, row) => counts.set(row.date, (counts.get(row.date) || 0) + 1),
-    new Map(),
-  );
+  const calendar = s.calendar;
+  const weight = (total) => !total ? "-" : total.unknownWeightRows === total.rowCount ? "?" : `${total.netKg.toFixed(3)}${total.weightComplete ? "" : "*"}`;
+  const cones = (total) => !total ? "-" : `${total.cones}${total.conesComplete ? "" : "*"}`;
+  const cell = "border px-3 py-1.5 text-right tabular-nums whitespace-nowrap";
   return (
-    <article
-      className="rounded-lg border bg-card p-4 sm:p-6 space-y-5 min-w-0"
-      aria-label={`Statement for ${s.worker.name} ${s.worker.reference}`}
-    >
-      <header className="break-words">
-        <p className="text-sm font-semibold">GLINTEX</p>
-        <h3 className="text-xl font-bold">Coning — Monthly Work Statement</h3>
-        <p className="font-semibold mt-2">{s.worker.name}</p>
-        <p className="text-sm">Worker reference: {s.worker.reference}</p>
-        <p>
-          {report.month} · Coning
-          {report.period.monthToDate
-            ? ` · Month to date · Cutoff ${report.period.cutoff}`
-            : ""}
-        </p>
-        <p className="text-sm text-muted-foreground">
-          Generated: {report.generatedAt}
-        </p>
+    <article className="rounded-lg border bg-card p-4 sm:p-6 space-y-4 min-w-0" aria-label={`Statement for ${s.worker.name} ${s.worker.reference}`}>
+      <header className="flex flex-wrap justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold tracking-widest text-muted-foreground">GLINTEX · CONING</p>
+          <h3 className="text-2xl font-bold mt-1">{s.worker.name}</h3>
+          <p className="text-sm text-muted-foreground">Monthly work report · {report.month}</p>
+        </div>
+        <div className="text-sm sm:text-right">
+          <p className="font-semibold">{calendar.workedDays} days with work recorded</p>
+          <p><Totals value={s.monthlyTotals} /></p>
+        </div>
       </header>
-      <div className="rounded-md bg-muted p-3 font-semibold">
-        Monthly total: <Totals value={s.monthlyTotals} />
+      <p className="text-sm text-muted-foreground">Yarn columns show weight in kg. A dash (-) means no work recorded.</p>
+      <div className="overflow-x-auto" tabIndex={0} aria-label="Monthly work calendar">
+        <table className="w-full text-sm border-collapse">
+          <thead className="bg-muted">
+            <tr>
+              <th className="border px-3 py-2 text-left min-w-20 sticky left-0 bg-muted">Date</th>
+              {calendar.columns.map(column => <th key={column.key} className="border px-3 py-2 text-center min-w-28 max-w-56 break-words">{column.label}<span className="block text-xs font-normal text-muted-foreground">kg</span></th>)}
+              <th className="border px-3 py-2 min-w-24">Total cones</th>
+              <th className="border px-3 py-2 min-w-24">Total kg</th>
+            </tr>
+          </thead>
+          <tbody>
+            {calendar.days.map(day => <tr key={day.date} className={day.totals ? "" : "bg-muted/20 text-muted-foreground"}>
+              <th scope="row" className="border px-3 py-1.5 text-left font-normal whitespace-nowrap sticky left-0 bg-card">{day.date.split('-').reverse().join('/')}</th>
+              {day.cells.map((total, index) => <td key={calendar.columns[index].key} className={cell}>{weight(total)}</td>)}
+              <td className={cell}>{cones(day.totals)}</td>
+              <td className={`${cell} font-medium`}>{weight(day.totals)}</td>
+            </tr>)}
+          </tbody>
+          <tfoot className="bg-muted font-semibold"><tr>
+            <th className="border px-3 py-2 text-left">Total</th>
+            {calendar.columns.map(column => <td key={column.key} className={cell}>{weight(column.totals)}</td>)}
+            <td className={cell}>{cones(calendar.totals)}</td><td className={cell}>{weight(calendar.totals)}</td>
+          </tr></tfoot>
+        </table>
       </div>
-      <section>
-        <h4 className="font-semibold mb-2">Monthly quality summary</h4>
-        <div className="space-y-2">
-          {s.qualitySummary.map((group) => (
-            <div key={group.key} className="border rounded-md p-3 space-y-2">
-              <Quality quality={group.quality} />
-              <p className="text-sm font-semibold">
-                <Totals value={group.totals} />
-              </p>
-            </div>
-          ))}
+      <section aria-label="Yarn-wise total weight">
+        <h4 className="font-semibold mb-2">Yarn-wise total weight</h4>
+        <div className="grid sm:grid-cols-2 gap-x-6">
+          {calendar.columns.map(column => <div key={column.key} className="flex justify-between gap-4 border-b py-2 text-sm"><span>{column.label}</span><strong className="whitespace-nowrap tabular-nums">{weight(column.totals)} kg</strong></div>)}
         </div>
       </section>
-      <section>
-        <h4 className="font-semibold">Date-wise ledger</h4>
-        <p className="text-sm text-muted-foreground mb-2">
-          {s.rows.length} of {s.totalRows} rows on this page. Daily and monthly
-          totals below include all recorded work.
-        </p>
-        <p className="sm:hidden text-xs text-muted-foreground mb-2">
-          Swipe the ledger sideways to see machine, cones and net kg.
-        </p>
-        {s.rows.length ? (
-          <div
-            className="overflow-x-auto"
-            tabIndex={0}
-            aria-label="Work ledger"
-          >
-            <table className="w-full text-sm table-fixed min-w-[560px]">
-              <thead>
-                <tr>
-                  <th className={`${cell} w-28`}>Work date</th>
-                  <th className={cell}>Quality details</th>
-                  <th className={`${cell} w-24`}>Machine</th>
-                  <th className={`${cell} w-20`}>Cones</th>
-                  <th className={`${cell} w-24`}>Net kg</th>
-                </tr>
-              </thead>
-              <tbody>
-                {s.rows.map((row, i) => (
-                  <React.Fragment key={i}>
-                    <tr>
-                      <td className={cell}>{row.date}</td>
-                      <td className={cell}>
-                        <Quality quality={row.quality} />
-                      </td>
-                      <td className={cell}>{row.machine.name}</td>
-                      <td className={cell}>{row.cones}</td>
-                      <td className={cell}>
-                        {row.netKg == null ? "Unknown" : row.netKg.toFixed(3)}
-                      </td>
-                    </tr>
-                    {s.rows[i + 1]?.date !== row.date && (
-                      <tr className="bg-muted/50">
-                        <td className={cell} colSpan={5}>
-                          <div className="flex flex-wrap justify-between gap-2 font-semibold">
-                            <span>
-                              {row.date} · Daily subtotal
-                              {visibleDates.get(row.date) !==
-                              daily.get(row.date).rowCount
-                                ? ` (full date; ${visibleDates.get(row.date)} of ${daily.get(row.date).rowCount} rows on this page)`
-                                : ""}
-                            </span>
-                            <Totals value={daily.get(row.date)} />
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="text-sm">
-            This worker’s ledger rows are on another page.
-          </p>
-        )}
-      </section>
-      <section>
-        <h4 className="font-semibold mb-2">
-          Daily subtotals · all work-recorded dates
-        </h4>
-        <div className="divide-y">
-          {s.dailyTotals.map((day) => (
-            <div
-              key={day.date}
-              className="py-2 flex flex-wrap justify-between gap-2 text-sm"
-            >
-              <span>{day.date}</span>
-              <Totals value={day.totals} />
-            </div>
-          ))}
-        </div>
-        <p className="border-t pt-3 font-semibold">
-          Monthly total: <Totals value={s.monthlyTotals} />
-        </p>
-      </section>
+      {(!calendar.totals.weightComplete || !calendar.totals.conesComplete) && <p className="text-xs">? = quantity not recorded. * = total includes known quantities only.</p>}
     </article>
   );
 }
@@ -310,7 +221,7 @@ export function WorkerMonthlyReport() {
         setDownload({ key, status: "failed", message: err.message });
     }
   }
-  async function loadOffice() {
+  async function loadOffice(page = 1) {
     const token = gate.current.start();
     controller.current?.abort();
     controller.current = new AbortController();
@@ -319,7 +230,7 @@ export function WorkerMonthlyReport() {
       const [exceptions, details] = await Promise.all(
         ["exceptions", "details"].map((endpoint) =>
           api.getWorkerMonthlyReport(endpoint, filters, {
-            page: report.page,
+            page,
             signal: controller.current.signal,
           }),
         ),
@@ -387,20 +298,20 @@ export function WorkerMonthlyReport() {
               {!workers.rows.some((worker) => worker.id === filters.workerId) &&
                 filters.workerId !== "all" && (
                   <option value={filters.workerId}>
-                    Selected reference: {filters.workerId}
+                    Selected worker
                   </option>
                 )}
               {workers.rows.map((worker) => (
                 <option key={worker.id} value={worker.id}>
-                  {worker.name} · {worker.reference}
+                  {worker.name}
                 </option>
               ))}
             </select>
           </label>
         </div>
         <p className="text-xs text-muted-foreground">
-          Historical receive workers, including previous process assignments.
-          Only dates with work recorded appear.
+          One calendar for each worker, with every date of the month.
+          Only yarns handled by that worker appear as columns.
         </p>
         {workers.status === "loading" && (
           <p role="status">Loading historical workers…</p>
@@ -482,43 +393,11 @@ export function WorkerMonthlyReport() {
               report={report}
             />
           ))}
-          {report.totalRows > report.pageSize && (
-            <nav
-              aria-label="Ledger pages"
-              className="flex flex-wrap gap-3 items-center"
-            >
-              <Button
-                variant="outline"
-                disabled={report.page <= 1 || busy}
-                onClick={() => load(report.page - 1)}
-              >
-                Previous ledger page
-              </Button>
-              <span>
-                Page {report.page} of{" "}
-                {Math.ceil(report.totalRows / report.pageSize)} ·{" "}
-                {report.totalRows} rows
-              </span>
-              <Button
-                variant="outline"
-                disabled={
-                  report.page * report.pageSize >= report.totalRows || busy
-                }
-                onClick={() => load(report.page + 1)}
-              >
-                Next ledger page
-              </Button>
-              <p className="text-xs w-full">
-                Changing pages refreshes this report. Totals and downloads
-                always include the full selection.
-              </p>
-            </nav>
-          )}
-          <section
+          <details
             className="border rounded-lg p-4 space-y-3"
             aria-label="Office reconciliation"
           >
-            <h3 className="font-semibold">Office reconciliation</h3>
+            <summary className="font-semibold cursor-pointer">Office reconciliation</summary>
             <p className="text-sm">
               Office use only. Exceptions and excluded stock are separate from
               worker statement totals; unassigned-period records do not belong
@@ -541,7 +420,7 @@ export function WorkerMonthlyReport() {
               {report.office.unassignedPeriodExceptionCount} unassigned-period
               exceptions · {report.office.excludedCount} excluded rows
             </p>
-            <Button variant="outline" disabled={busy} onClick={loadOffice}>
+            <Button variant="outline" disabled={busy} onClick={() => loadOffice()}>
               Load office diagnostics and references
             </Button>
             {office?.key === key &&
@@ -569,6 +448,10 @@ export function WorkerMonthlyReport() {
                     title="Selected-worker detailed references (office page)"
                     rows={office.details.rows}
                   />
+                  <nav aria-label="Office reference pages" className="flex gap-2 my-3">
+                    <Button variant="outline" disabled={busy || office.details.page <= 1} onClick={() => loadOffice(office.details.page - 1)}>Previous references</Button>
+                    <Button variant="outline" disabled={busy || office.details.page * office.details.pageSize >= office.details.totalRows} onClick={() => loadOffice(office.details.page + 1)}>Next references</Button>
+                  </nav>
                   <OfficeRows
                     title="Month exceptions (all workers)"
                     rows={office.exceptions.exceptions}
@@ -591,7 +474,7 @@ export function WorkerMonthlyReport() {
                   </p>
                 </div>
               ))}
-          </section>
+          </details>
         </>
       )}
     </div>

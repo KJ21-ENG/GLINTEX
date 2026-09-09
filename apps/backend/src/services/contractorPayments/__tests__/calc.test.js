@@ -236,3 +236,18 @@ test('summarizeLines aggregates kg and amount', () => {
   assert.equal(res.productionKg, 3.333);
   assert.equal(res.productionAmount, 30.75);
 });
+
+test('machine rates override generic qualities, fall back and reject ties', () => {
+  for (const process of ['cutter', 'holo', 'coning']) {
+    const keys = { yarnId: 'Y', side: 'SINGLE', itemId: 'I', cutId: 'C', twistId: 'T', coneTypeId: 'CT', machineId: 'M1' };
+    const generic = { ...keys, process, machineId: null, id: 'generic' };
+    const specific = { process, yarnId: 'Y', side: 'SINGLE', machineId: 'M1', id: 'specific' };
+    assert.equal(matchRate(process, [generic, specific], keys).rate.id, 'specific');
+    assert.equal(matchRate(process, [generic, specific], { ...keys, machineId: 'M2' }).rate.id, 'generic');
+    assert.equal(matchRate(process, [generic, specific], { ...keys, machineId: null }).rate.id, 'generic');
+    assert.equal(ratesConflict(process, generic, specific), false);
+    assert.equal(ratesConflict(process, specific, { ...specific, machineId: 'M2' }), false);
+    assert.equal(ratesConflict(process, specific, { ...specific, id: 'duplicate' }), true);
+    assert.equal(matchRate(process, [specific, { ...specific, id: 'duplicate' }], keys).reason, 'ambiguous_rate');
+  }
+});

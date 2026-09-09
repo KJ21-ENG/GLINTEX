@@ -161,6 +161,7 @@ function normalizeRatePayload(process, body) {
   const data = {
     process,
     ratePerKg,
+    machineId: cleanString(body.machineId, 40),
     itemId: null,
     yarnId: null,
     cutId: null,
@@ -193,6 +194,7 @@ function normalizeRatePayload(process, body) {
 // creating an unusable financial rate from a stale/crafted request.
 async function validateRateReferences(data) {
   const checks = [];
+  if (data.machineId) checks.push(prisma.machine.count({ where: { id: data.machineId, processType: { in: [data.process, "all"] } } }).then((n) => (n ? null : "Machine for this process")));
   if (data.itemId) checks.push(prisma.item.count({ where: { id: data.itemId } }).then((n) => (n ? null : 'Item')));
   if (data.yarnId) checks.push(prisma.yarn.count({ where: { id: data.yarnId } }).then((n) => (n ? null : 'Yarn')));
   if (data.cutId) checks.push(prisma.cut.count({ where: { id: data.cutId } }).then((n) => (n ? null : 'Cut')));

@@ -41,15 +41,17 @@ function buildUniqueNameIndex(rows) {
 
 // Load the master lookup maps used to snapshot names and resolve coning Side.
 export async function loadMasterMaps(prisma) {
-  const [items, yarns, cuts, twists, coneTypes] = await Promise.all([
+  const [items, yarns, cuts, twists, coneTypes, machines] = await Promise.all([
     prisma.item.findMany({ select: { id: true, name: true, side: true } }),
     prisma.yarn.findMany({ select: { id: true, name: true } }),
     prisma.cut.findMany({ select: { id: true, name: true } }),
     prisma.twist.findMany({ select: { id: true, name: true } }),
     prisma.coneType.findMany({ select: { id: true, name: true } }),
+    prisma.machine.findMany({ select: { id: true, name: true } }),
   ]);
   const toMap = (rows) => new Map(rows.map((r) => [r.id, r]));
   return {
+    machines: toMap(machines),
     items: toMap(items),
     yarns: toMap(yarns),
     cuts: toMap(cuts),
@@ -310,6 +312,8 @@ export function resolveRow(process, row, maps) {
   const productionDate = row.date || issue?.date || null;
   const netKg = resolveNetKg(process, row);
   const base = {
+    machineId: issue?.machineId || null,
+    machineName: issue?.machineId ? nameOf(maps.machines, issue.machineId) : null,
     sourceRowId: row.id,
     productionDate,
     netKg,
@@ -389,11 +393,12 @@ function resolveIssueCount(value) {
 
 // The row's quality keys required by matchRate for this process.
 function rowKeysForProcess(process, resolved) {
-  if (process === 'cutter') return { itemId: resolved.itemId, cutId: resolved.cutId };
+  if (process === 'cutter') return { itemId: resolved.itemId, cutId: resolved.cutId, machineId: resolved.machineId };
   if (process === 'holo') {
-    return { yarnId: resolved.yarnId, cutId: resolved.cutId, twistId: resolved.twistId };
+    return { yarnId: resolved.yarnId, cutId: resolved.cutId, twistId: resolved.twistId, machineId: resolved.machineId };
   }
   return {
+    machineId: resolved.machineId,
     yarnId: resolved.yarnId,
     cutId: resolved.cutId,
     side: resolved.side,
@@ -423,6 +428,7 @@ function buildLine(process, resolved, rate) {
   const amount = computeAmount(resolved.netKg, ratePerKg);
   return {
     process,
+    machineName: resolved.machineName,
     sourceRowId: resolved.sourceRowId,
     date: resolved.productionDate,
     quantity: resolved.quantity,
@@ -432,6 +438,7 @@ function buildLine(process, resolved, rate) {
     rateId: rate.id,
     itemId: resolved.itemId,
     itemName: resolved.itemName,
+    machineId: resolved.machineId,
     yarnId: resolved.yarnId,
     yarnName: resolved.yarnName,
     cutId: resolved.cutId,
@@ -577,6 +584,8 @@ export async function computePayablePreview(prisma, {
     const key = qualityGroupKey(process, line);
     const existing = qualityMap.get(key) || {
       key,
+      machineId: line.machineId,
+      machineName: line.machineName,
       itemName: line.itemName,
       yarnName: line.yarnName,
       cutName: line.cutName,
@@ -675,7 +684,8 @@ export function diffSettlementProduction(storedLines, currentLines) {
       || Math.abs(Number(cur.ratePerKg) - Number(line.ratePerKg)) > RATE_EPS
       || Math.abs(Number(cur.amount) - Number(line.amount)) > AMOUNT_EPS;
     const identityDrift = LINE_IDENTITY_KEYS.some((k) => identityValue(cur[k]) !== identityValue(line[k]));
-    if (financialDrift || identityDrift) {
+    const machineDrift = line.machineId != null && identityValue(cur.machineId) !== identityValue(line.machineId);
+    if (financialDrift || identityDrift || machineDrift) {
       mismatches.push({ sourceRowId: line.sourceRowId, barcode: label, reason: 'changed' });
     }
   }

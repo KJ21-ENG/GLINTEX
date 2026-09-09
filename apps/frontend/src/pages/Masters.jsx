@@ -91,7 +91,7 @@ export function Masters() {
             case 'contractors': return <ContractorsMasterCrud data={db.contractors || []} onCreate={createContractor} onUpdate={updateContractor} onDelete={deleteContractor} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'contractorAssignments': return <ContractorAssignmentsMasterCrud data={db.contractor_assignments || []} contractors={db.contractors || []} onCreate={createContractorAssignment} onUpdate={updateContractorAssignment} onDelete={deleteContractorAssignment} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'boilerSequence': return isAdmin ? <BoilerSequenceMaster /> : null;
-            case 'contractorRates': return <ContractorRatesMasterCrud data={db.contractor_rates || []} contractors={db.contractors || []} items={db.items || []} yarns={db.yarns || []} cuts={db.cuts || []} twists={db.twists || []} coneTypes={db.cone_types || []} onCreate={createContractorRate} onUpdate={updateContractorRate} onDelete={deleteContractorRate} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
+            case 'contractorRates': return <ContractorRatesMasterCrud machines={db.machines || []} data={db.contractor_rates || []} contractors={db.contractors || []} items={db.items || []} yarns={db.yarns || []} cuts={db.cuts || []} twists={db.twists || []} coneTypes={db.cone_types || []} onCreate={createContractorRate} onUpdate={updateContractorRate} onDelete={deleteContractorRate} loading={refreshing} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />;
             case 'combinedStock': return <CombinedStockMasterCrud data={db.combined_stock_views || []} config={(db.combined_stock_config || [])[0]} onUpdateView={updateCombinedStockView} onReorderViews={reorderCombinedStockViews} onUpdateConfig={updateCombinedStockConfig} loading={refreshing} canEdit={canEdit} />;
             default: return null;
         }
@@ -2286,8 +2286,8 @@ function MultiSelect({ options = [], selectedIds = [], onChange, disabled = fals
     );
 }
 
-function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twists, coneTypes, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
-    const empty = { contractorId: '', process: '', itemId: '', yarnIds: [], cutId: '', sides: [], twistId: '', coneTypeIds: [], ratePerKg: '' };
+function ContractorRatesMasterCrud({ machines, data, contractors, items, yarns, cuts, twists, coneTypes, onCreate, onUpdate, onDelete, loading, canCreate, canEdit, canDelete }) {
+    const empty = { machineId: '', contractorId: '', process: '', itemId: '', yarnIds: [], cutId: '', sides: [], twistId: '', coneTypeIds: [], ratePerKg: '' };
     const [form, setForm] = useState(empty);
     const [editingId, setEditingId] = useState(null);
     const [error, setError] = useState('');
@@ -2295,6 +2295,7 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
     const allowEdit = !!canEdit;
     const allowDelete = !!canDelete;
 
+    const machineName = nameMap(machines);
     const contractorName = nameMap(contractors);
     const itemName = nameMap(items);
     const yarnName = nameMap(yarns);
@@ -2313,6 +2314,7 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
             contractorId: form.contractorId,
             process: form.process,
             ratePerKg: rate,
+            machineId: form.machineId || null,
             itemId: form.process === 'cutter' ? (form.itemId || null) : null,
             cutId: form.cutId || null,
             twistId: form.process !== 'cutter' ? (form.twistId || null) : null,
@@ -2338,6 +2340,7 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
     const startEdit = (r) => {
         setEditingId(r.id);
         setForm({
+            machineId: r.machineId || '',
             contractorId: r.contractorId, process: r.process,
             itemId: r.itemId || '', yarnIds: r.yarnId ? [r.yarnId] : [], cutId: r.cutId || '', sides: r.side ? [r.side] : [],
             twistId: r.twistId || '', coneTypeIds: r.coneTypeId ? [r.coneTypeId] : [],
@@ -2347,7 +2350,7 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
     };
 
     const describeKeys = (r) => {
-        const parts = [];
+        const parts = [r.machineId ? `Machine:${machineName.get(r.machineId) || r.machineId}` : 'Any machine'];
         if (r.process === 'cutter') {
             parts.push(r.itemId ? `Item:${itemName.get(r.itemId) || '?'}` : 'Any item');
             parts.push(r.cutId ? `Cut:${cutName.get(r.cutId) || '?'}` : 'Any cut');
@@ -2385,13 +2388,21 @@ function ContractorRatesMasterCrud({ data, contractors, items, yarns, cuts, twis
                             </Select>
                         </div>
                         <div><Label className="text-xs">Process *</Label>
-                            <Select value={form.process} onChange={(e) => set('process', e.target.value)}>
+                            <Select value={form.process} onChange={(e) => setForm((f) => ({ ...f, process: e.target.value, machineId: '' }))}>
                                 <option value="">Select…</option>
                                 {CONTRACTOR_PROCESS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                             </Select>
                         </div>
                         <div><Label className="text-xs">Rate ₹/KG *</Label><Input type="number" step="0.0001" min="0" value={form.ratePerKg} onChange={(e) => set('ratePerKg', e.target.value)} /></div>
                     </div>
+
+                    {process && <div><Label className="text-xs">Machine (optional override)</Label>
+                        <Select aria-label="Rate machine" value={form.machineId} onChange={(e) => set('machineId', e.target.value)}>
+                            <option value="">Any machine</option>
+                            {(machines || []).filter((m) => !m.processType || m.processType === 'all' || m.processType === process).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                        </Select>
+                        <p className="mt-1 text-xs text-muted-foreground">A matching machine rate takes priority. Otherwise, the Any machine rate applies.</p>
+                    </div>}
 
                     {process && (
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">

@@ -49,10 +49,14 @@ async function start() {
     console.log(`GLINTEX backend listening on http://localhost:${PORT}`);
   });
 
-  startWhatsapp();
-  startTelegram();
-  await initBackupScheduler();
-  await initTelegramCronScheduler();
+  // Local feature testing can run without connecting messaging accounts or schedulers.
+  const localOnly = process.env.NODE_ENV !== 'production' && process.env.LOCAL_DISABLE_INTEGRATIONS === '1';
+  if (!localOnly) {
+    startWhatsapp();
+    startTelegram();
+    await initBackupScheduler();
+    await initTelegramCronScheduler();
+  }
 }
 
 start();

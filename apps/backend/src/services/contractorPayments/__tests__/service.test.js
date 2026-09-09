@@ -28,6 +28,7 @@ function makeStub({
     receiveFromConingMachineRow: { findMany: async (args) => rowsForDate(coningRows, args) },
     issueToHoloMachine: { findMany: async () => holoIssues },
     issueToConingMachine: { findMany: async () => coningIssues },
+    machine: { findMany: async () => [] },
     item: { findMany: async () => items },
     yarn: { findMany: async () => yarns },
     cut: { findMany: async () => cuts },
@@ -620,4 +621,10 @@ test('recomputeSettlementTotals sums lines and applies signed adjustments', () =
   assert.equal(totals.productionAmount, 125);
   assert.equal(totals.adjustmentsTotal, 15);
   assert.equal(totals.finalPayable, 140);
+});
+
+test('machine identity changes invalidate captured snapshots; legacy snapshots remain usable', () => {
+  const old = { sourceRowId: 'r', netKg: 10, ratePerKg: 8, amount: 80, machineId: 'M1' };
+  assert.equal(diffSettlementProduction([old], [{ ...old, machineId: 'M2' }])[0].reason, 'changed');
+  assert.deepEqual(diffSettlementProduction([{ ...old, machineId: null }], [old]), []);
 });

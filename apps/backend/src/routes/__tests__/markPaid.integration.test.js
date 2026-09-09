@@ -144,6 +144,43 @@ if (!TEST_DB) {
     }
   }
 
+  test('machine rate CRUD, fallback, immutable snapshots and stale-machine protection', async () => {
+    const { contractorId, rowA, rowB } = await seed();
+    const a = await prisma.machine.create({ data: { name: 'FIRKI QA', processType: 'coning' } });
+    const b = await prisma.machine.create({ data: { name: 'Other QA', processType: 'coning' } });
+    const wrong = await prisma.machine.create({ data: { name: 'Cutter QA', processType: 'cutter' } });
+    const rows = await prisma.receiveFromConingMachineRow.findMany({ where: { id: { in: [rowA, rowB] } } });
+    for (const row of rows) await prisma.issueToConingMachine.update({ where: { id: row.issueId }, data: { machineId: row.id === rowA ? a.id : b.id } });
+    const generic = await prisma.contractorRate.findFirst({ where: { contractorId } });
+    const payload = { contractorId, process: 'coning', yarnId: generic.yarnId, side: 'SINGLE', machineId: a.id, ratePerKg: 10 };
+    const invalid = await request(app).post(`${CP}/rates`).set('Authorization', auth).send({ ...payload, machineId: wrong.id });
+    assert.equal(invalid.status, 400);
+    const created = await request(app).post(`${CP}/rates`).set('Authorization', auth).send(payload);
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    assert.equal(created.body.machineId, a.id);
+    const duplicate = await request(app).post(`${CP}/rates`).set('Authorization', auth).send(payload);
+    assert.equal(duplicate.status, 409);
+    const preview = await request(app).get(`${CP}/preview`).query({ contractorId, ...base }).set('Authorization', auth);
+    assert.equal(preview.status, 200);
+    assert.equal(preview.body.lines.find(l => l.sourceRowId === rowA).ratePerKg, 10);
+    assert.equal(preview.body.lines.find(l => l.sourceRowId === rowB).ratePerKg, Number(generic.ratePerKg));
+    assert.equal(preview.body.lines.find(l => l.sourceRowId === rowA).machineName, 'FIRKI QA');
+    assert.equal(preview.body.qualityTotals.length, 2);
+    const draft = await request(app).post(`${CP}/settlements`).set('Authorization', auth).send({ contractorId, ...base, sourceRowIds: [rowA, rowB] });
+    assert.equal(draft.status, 200, JSON.stringify(draft.body));
+    const stored = await prisma.contractorSettlementLine.findMany({ where: { settlementId: draft.body.id } });
+    assert.equal(stored.find(l => l.sourceRowId === rowA).machineName, 'FIRKI QA');
+    const updated = await request(app).put(`${CP}/rates/${created.body.id}`).set('Authorization', auth).send({ ratePerKg: 11 });
+    assert.equal(updated.status, 200);
+    assert.equal(updated.body.machineId, a.id);
+    const unchanged = await prisma.contractorSettlementLine.findMany({ where: { settlementId: draft.body.id } });
+    assert.equal(Number(unchanged.find(l => l.sourceRowId === rowA).ratePerKg), 10);
+    const paid = await request(app).post(`${CP}/settlements/${draft.body.id}/mark-paid`).set('Authorization', auth).send({ paymentDate: '2026-03-16', paymentMode: 'Cash' });
+    assert.equal(paid.status, 409);
+    const removed = await request(app).delete(`${CP}/rates/${created.body.id}`).set('Authorization', auth);
+    assert.equal(removed.status, 200);
+  });
+
   test('preview surfaces the eligible coning row', async () => {
     const { contractorId, rowA } = await seed();
     const res = await request(app).get(`${CP}/preview`).query({ contractorId, ...base }).set('Authorization', auth);
@@ -398,7 +435,7 @@ if (!TEST_DB) {
       data: { issueId: childIssue.id, coneCount: 1, netWeight: 5, date: '2026-03-20', barcode: 'CR-T2', createdBy: 'manual' },
     });
     const draft = await request(app).post(`${CP}/settlements`).set('Authorization', auth)
-      .send({ contractorId, ...base, sourceRowIds: [childRow.id] });
+      .send({ contractorId, ...base, date: '2026-03-20', sourceRowIds: [childRow.id] });
     assert.equal(draft.status, 200);
     const paid = await request(app).post(`${CP}/settlements/${draft.body.id}/mark-paid`).set('Authorization', auth)
       .send({ paymentDate: '2026-04-01', paymentMode: 'Cash' });

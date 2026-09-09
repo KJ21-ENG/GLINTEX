@@ -174,9 +174,9 @@ export function isValidDateStr(value) {
 // wildcard when empty, while a rate pinning that key outranks a wildcard.
 // Cutter allows Item and Cut defaults; Holo and Coning allow Cut defaults.
 export const RATE_KEY_SPEC = {
-  cutter: { required: [], optional: ['itemId', 'cutId'] },
-  holo: { required: ['yarnId'], optional: ['cutId', 'twistId'] },
-  coning: { required: ['yarnId', 'side'], optional: ['cutId', 'twistId', 'coneTypeId'] },
+  cutter: { required: [], optional: ['itemId', 'cutId', 'machineId'] },
+  holo: { required: ['yarnId'], optional: ['cutId', 'twistId', 'machineId'] },
+  coning: { required: ['yarnId', 'side'], optional: ['cutId', 'twistId', 'coneTypeId', 'machineId'] },
 };
 
 function keyValue(obj, key) {
@@ -210,11 +210,12 @@ export function rateApplies(process, rate, rowKeys) {
   return true;
 }
 
-// Number of optional keys the rate pins down (its specificity).
+// Machine-specific rates take priority over every generic rate. Within each
+// tier, count quality overrides as before (at most three).
 function rateSpecificity(process, rate) {
   const spec = RATE_KEY_SPEC[process];
   if (!spec) return 0;
-  return spec.optional.reduce((acc, key) => acc + (keyValue(rate, key) === null ? 0 : 1), 0);
+  return spec.optional.reduce((acc, key) => acc + (keyValue(rate, key) === null ? 0 : key === 'machineId' ? 100 : 1), 0);
 }
 
 // Two rates CONFLICT when some production row could match both at the SAME

@@ -86,6 +86,7 @@ function groupSettlementLines(lines) {
   const map = new Map();
   for (const line of lines) {
     const key = [
+      line.machineId,
       line.itemId,
       line.yarnId,
       line.cutId,
@@ -96,6 +97,7 @@ function groupSettlementLines(lines) {
     ].join('|');
     const existing = map.get(key) || {
       key,
+      machineName: line.machineName,
       itemName: line.itemName,
       yarnName: line.yarnName,
       cutName: line.cutName,
@@ -177,11 +179,12 @@ function sortSettlementGroups(groups) {
 }
 
 function settlementQualityText(process, line) {
-  if (process === 'cutter') return line.itemName || '—';
-  if (process === 'holo') return [line.yarnName, line.itemName, line.twistName].filter(Boolean).join(' · ') || '—';
+  const machine = line.machineName ? ` · Machine:${line.machineName}` : '';
+  if (process === 'cutter') return (line.itemName || '—') + machine;
+  if (process === 'holo') return ([line.yarnName, line.itemName, line.twistName].filter(Boolean).join(' · ') || '—') + machine;
   const base = [line.yarnName, line.itemName, line.twistName].filter(Boolean).join(' · ');
   const cone = line.coneTypeName ? ` · Cone:${line.coneTypeName}` : '';
-  return (base + cone) || '—';
+  return (base + cone + machine) || '—';
 }
 
 function settlementSideText(side) {
@@ -201,11 +204,12 @@ function settlementDate(s) {
 }
 
 function qualityText(process, l) {
-  if (process === 'cutter') return [l.itemName, l.cutName].filter(Boolean).join(' · ') || '—';
+  const machine = l.machineName ? ` · Machine:${l.machineName}` : '';
+  if (process === 'cutter') return [l.itemName, l.cutName, l.machineName ? `Machine:${l.machineName}` : null].filter(Boolean).join(' · ') || '—';
   const base = [l.yarnName, l.cutName].filter(Boolean).join(' · ');
   const extra = l.twistName ? ` · T:${l.twistName}` : '';
   const cone = l.coneTypeName ? ` · Cone:${l.coneTypeName}` : '';
-  return (base + extra + cone) || '—';
+  return (base + extra + cone + machine) || '—';
 }
 function sideText(side) { return side === 'SINGLE' ? 'S/S' : side === 'BOTH' ? 'B/S' : '—'; }
 function blockerReasonLabel(reason) {

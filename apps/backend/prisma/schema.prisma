@@ -1018,6 +1018,7 @@ model ContractorAssignment {
 }
 
 model ContractorRate {
+  machineId       String? // null = any machine
   id              String     @id @default(cuid())
   contractorId    String
   process         String // 'cutter' | 'holo' | 'coning'
@@ -1072,6 +1073,8 @@ model ContractorSettlement {
 }
 
 model ContractorSettlementLine {
+  machineId    String?
+  machineName  String?
   id           String               @id @default(cuid())
   settlementId String
   process      String // 'cutter' | 'holo' | 'coning'

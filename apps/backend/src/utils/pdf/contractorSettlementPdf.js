@@ -62,13 +62,14 @@ function summarizeQuantities(lines) {
 
 // Quality label for a line/group depending on process.
 export function qualityLabel(process, item) {
-  if (process === 'cutter') return item.itemName || '-';
+  const machine = item.machineName ? ` · Machine:${item.machineName}` : '';
+  if (process === 'cutter') return (item.itemName || '-') + machine;
   if (process === 'holo') {
-    return [item.yarnName, item.itemName, item.twistName].filter(Boolean).join(' · ') || '-';
+    return ([item.yarnName, item.itemName, item.twistName].filter(Boolean).join(' · ') || '-') + machine;
   }
   const parts = [item.yarnName, item.itemName, item.twistName].filter(Boolean).join(' · ');
   const cone = item.coneTypeName ? ` · Cone:${item.coneTypeName}` : '';
-  return (parts + cone) || '-';
+  return (parts + cone + machine) || '-';
 }
 
 function sideLabel(side) {
@@ -83,8 +84,9 @@ function sideLabel(side) {
 export function groupLines(process, lines) {
   const map = new Map();
   for (const l of lines) {
-    const key = [l.itemId, l.yarnId, l.cutId, l.twistId, l.side, l.coneTypeId, l.ratePerKg].join('|');
+    const key = [l.machineId, l.itemId, l.yarnId, l.cutId, l.twistId, l.side, l.coneTypeId, l.ratePerKg].join('|');
     const existing = map.get(key) || {
+      machineName: l.machineName,
       itemName: l.itemName, yarnName: l.yarnName, cutName: l.cutName, twistName: l.twistName, side: l.side,
       coneTypeName: l.coneTypeName, ratePerKg: l.ratePerKg, netKg: 0, amount: 0, quantity: 0, quantityKnown: true,
     };

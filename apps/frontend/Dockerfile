@@ -1,4 +1,4 @@
-FROM node:20-bullseye AS build
+FROM node:20-bookworm AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci

@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "workflow_mode": "advanced",
+  "advanced_is_default": true,
+  "project_kind": "brownfield",
+  "archetype": "generic-software-project",
+  "workflow_maturity": "evidence-inferred",
+  "workflow_steward": "Kush",
+  "selected_at": "2026-09-15T12:47:13Z",
+  "selection_history": [
+    {
+      "mode": "advanced",
+      "at": "2026-09-15T12:47:13Z",
+      "selected_by": "Kush"
+    }
+  ],
+  "session_logging": {
+    "enabled": true,
+    "tracked_in_git": false,
+    "full_transcripts": false
+  },
+  "normal_mode_contract": "Minimal session logging and global safety only; no Advanced phases, capsules, checkpoints, or evolution."
+}

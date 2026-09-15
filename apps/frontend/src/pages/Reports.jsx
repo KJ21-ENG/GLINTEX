@@ -81,7 +81,7 @@ function buildHoloMetricsDraft({ from, to, baseMachines, savedRows = [] }) {
     return draft;
 }
 
-function buildHoloOtherWastageDraft({ from, to, items, savedRows = [] }) {
+function buildHoloOtherWastageDraft({ from, to, items, savedRows = [], categoryNameById = new Map() }) {
     const dates = [];
     if (from && to && from <= to) {
         const current = new Date(`${from}T00:00:00Z`);
@@ -101,6 +101,7 @@ function buildHoloOtherWastageDraft({ from, to, items, savedRows = [] }) {
                 date,
                 otherWastageItemId: item.id,
                 itemName: item.name || '',
+                categoryName: categoryNameById.get(item.categoryId) || 'Uncategorized',
                 wastage: saved && saved.wastage !== null && saved.wastage !== undefined ? String(saved.wastage) : '',
             });
         });
@@ -412,6 +413,10 @@ function ProductionReport() {
         [...(db?.holo_other_wastage_items || [])].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true, sensitivity: 'base' }))
     ), [db?.holo_other_wastage_items]);
 
+    const holoOtherWastageCategoryNames = useMemo(() => (
+        new Map((db?.holo_other_wastage_categories || []).map((category) => [category.id, category.name]))
+    ), [db?.holo_other_wastage_categories]);
+
     const getDefaultExportProcess = () => (
         process === 'cutter' || process === 'holo' || process === 'coning'
             ? process
@@ -519,6 +524,7 @@ function ProductionReport() {
                 to,
                 items: holoOtherWastageItems,
                 savedRows: res?.rows || [],
+                categoryNameById: holoOtherWastageCategoryNames,
             });
             setOtherWastageDraftRows(draft);
             setOtherWastageLoadedRange({ from, to });
@@ -1276,7 +1282,7 @@ function ProductionReport() {
                                 <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 space-y-2">
                                     <div className="font-medium text-slate-900">Other Wastage</div>
                                     <p>
-                                        Other wastage entries are captured per date and item. Saved values are added to the Holo daily export PDF for the selected date.
+                                        Other wastage entries are captured per date and item. Saved values are added to the Holo daily export PDF for the selected date, which prints one row per category (its items summed).
                                     </p>
                                     <div className="flex flex-col sm:flex-row gap-2">
                                         <Button type="button" variant="outline" onClick={openOtherWastageModal} disabled={exporting || otherWastageLoading}>
@@ -1455,6 +1461,7 @@ function ProductionReport() {
                                     <TableHeader>
                                         <TableRow>
                                             <TableHead>Date</TableHead>
+                                            <TableHead>Category</TableHead>
                                             <TableHead>Item</TableHead>
                                             <TableHead className="text-right">Wastage</TableHead>
                                         </TableRow>
@@ -1463,6 +1470,7 @@ function ProductionReport() {
                                         {otherWastageDraftRows.map((row, index) => (
                                             <TableRow key={`${row.date}-${row.otherWastageItemId}`}>
                                                 <TableCell>{formatDateDDMMYYYY(row.date)}</TableCell>
+                                                <TableCell>{row.categoryName || 'Uncategorized'}</TableCell>
                                                 <TableCell>{row.itemName}</TableCell>
                                                 <TableCell className="text-right">
                                                     <Input

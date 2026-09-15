@@ -286,15 +286,30 @@ model HoloDailyMetric {
   @@unique([date, baseMachine])
 }
 
-model HoloOtherWastageItem {
-  id              String                   @id @default(cuid())
-  name            String                   @unique
-  isActive        Boolean                  @default(true)
-  createdAt       DateTime                 @default(now())
-  updatedAt       DateTime                 @default(now()) @updatedAt
+model HoloOtherWastageCategory {
+  id              String                 @id @default(cuid())
+  name            String                 @unique
+  isActive        Boolean                @default(true)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @default(now()) @updatedAt
   createdByUserId String?
   updatedByUserId String?
+  items           HoloOtherWastageItem[]
+}
+
+model HoloOtherWastageItem {
+  id              String                    @id @default(cuid())
+  name            String                    @unique
+  categoryId      String?
+  isActive        Boolean                   @default(true)
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @default(now()) @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
+  category        HoloOtherWastageCategory? @relation(fields: [categoryId], references: [id])
   metrics         HoloOtherWastageMetric[]
+
+  @@index([categoryId])
 }
 
 model HoloOtherWastageMetric {

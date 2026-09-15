@@ -413,14 +413,13 @@ async function buildHoloHoursWastageSummary({ date, db }) {
   });
 }
 
+const UNCATEGORIZED_OTHER_WASTAGE_LABEL = 'Uncategorized';
+
 async function buildHoloOtherWastageSummary({ date, db }) {
   const [items, metrics] = await Promise.all([
     db.holoOtherWastageItem.findMany({
-      where: {
-        OR: [
-          { isActive: true },
-          { metrics: { some: { date } } },
-        ],
+      include: {
+        category: { select: { name: true } },
       },
       orderBy: { name: 'asc' },
     }),
@@ -431,10 +430,20 @@ async function buildHoloOtherWastageSummary({ date, db }) {
   ]);
 
   const metricMap = new Map(metrics.map((row) => [row.otherWastageItemId, row]));
-  return items.map((item) => ({
-    item: asTrimmedText(item.name, 'Unassigned'),
-    wastage: roundTo3Decimals(metricMap.get(item.id)?.wastage || 0),
-  }));
+  const totalsByCategory = new Map();
+
+  items.forEach((item) => {
+    const metric = metricMap.get(item.id);
+    // Same scope rule as before, now rolled up one level: an archived item only
+    // reaches the report for the dates where it has a saved metric.
+    if (!item.isActive && !metric) return;
+    const category = asTrimmedText(item.category?.name, UNCATEGORIZED_OTHER_WASTAGE_LABEL);
+    totalsByCategory.set(category, (totalsByCategory.get(category) || 0) + Number(metric?.wastage || 0));
+  });
+
+  return Array.from(totalsByCategory.entries())
+    .map(([category, wastage]) => ({ category, wastage: roundTo3Decimals(wastage) }))
+    .sort((left, right) => left.category.localeCompare(right.category, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
 export async function buildProductionDailyExportData({ process, date, helpers = {}, db } = {}) {

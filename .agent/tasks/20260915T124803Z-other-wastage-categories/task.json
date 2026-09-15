@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "task_id": "20260915T124803Z-other-wastage-categories",
+  "title": "Other wastage categories",
+  "objective": "Add a category master for Holo other-wastage items, let each item row select a category in Masters > Other Wastage, and replace the Holo daily export Others table with category rows plus totals. Ship to origin/main and production.",
+  "provider": "openclaw",
+  "provider_session_id": "096e766a-7fd2-4977-91bf-fbfa688c26ef",
+  "owner": "Kush",
+  "status": "active",
+  "created_at": "2026-09-15T12:48:05Z",
+  "updated_at": "2026-09-15T12:48:05Z",
+  "completed_at": null,
+  "start_commit": "097e669dc02e4a9ba0da5dbd12ec83d57ce09a81",
+  "end_commit": null,
+  "branch_at_start": "main",
+  "scope": [
+    "apps/backend/prisma/schema.prisma, apps/backend/prisma/migrations/*, apps/backend/src/routes/index.js, apps/backend/src/utils/pdf/productionDailyExportData.js, apps/backend/src/utils/pdf/productionDailyExportPdf.js, apps/backend/src/utils/__tests__/productionDailyExport.test.js, apps/frontend/src/pages/Masters.jsx, apps/frontend/src/pages/Reports.jsx, apps/frontend/src/api/client.js, apps/frontend/src/context/InventoryContext.jsx, apps/frontend/src/components/masters/*, docs/*"
+  ],
+  "baseline_worktree": {
+    ".agent/WORKFLOW_CHANGELOG.md": {
+      "status": "??",
+      "fingerprint": "file:0db02fcd8a92a1c90aba50c0a8055aa354cd2937417489671708aa82876a320f",
+      "source_path": null
+    },
+    ".agent/project.yaml": {
+      "status": "??",
+      "fingerprint": "file:29cb523440c01bb8567dd61692ee58bddc7e7bfecf68ea9f3e0c9253f7e837f3",
+      "source_path": null
+    },
+    ".agent/tasks/20260915T124803Z-other-wastage-categories/brief.md": {
+      "status": "??",
+      "fingerprint": "file:9dcbb97c05f54018aaa05c902569ce08ea736b1c0b1374120a1a99097def4839",
+      "source_path": null
+    },
+    ".agent/tasks/20260915T124803Z-other-wastage-categories/task.json": {
+      "status": "??",
+      "fingerprint": "file:895a735d775eb9d3620e201fe5c032a1a9c09c75ee9ed73ea85df4c0cdd672b8",
+      "source_path": null
+    },
+    ".agent/workflow-gaps.jsonl": {
+      "status": "??",
+      "fingerprint": "file:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_path": null
+    },
+    ".agent/workflows.yaml": {
+      "status": "??",
+      "fingerprint": "file:cd479ac4f0b27d529d31bf0377db13ec20e2bc403ebb2706806ab3011ea4b29b",
+      "source_path": null
+    },
+    "CLAUDE.md": {
+      "status": "??",
+      "fingerprint": "file:f59b607bbae9bc5fb8631cc450198d8a39f235399cdaa387a285a5333371bbbe",
+      "source_path": null
+    }
+  },
+  "owned_files": [],
+  "attribution_confidence": "task-baseline",
+  "conflicts": [],
+  "validation": [],
+  "external_actions": [],
+  "pending_authorizations": [],
+  "summary": null,
+  "next_action": null
+}

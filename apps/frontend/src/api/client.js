@@ -312,9 +312,19 @@ export async function createHoloProductionPerHour(payload) { return await reques
 export async function updateHoloProductionPerHour(id, payload) { return await request(`/api/holo_production_per_hours/${id}`, { method: 'PUT', body: payload }); }
 export async function deleteHoloProductionPerHour(id) { return await request(`/api/holo_production_per_hours/${id}`, { method: 'DELETE' }); }
 export async function listHoloOtherWastageItems() { return await request('/api/holo_other_wastage_items'); }
-export async function createHoloOtherWastageItem(name) { return await request('/api/holo_other_wastage_items', { method: 'POST', body: { name } }); }
-export async function updateHoloOtherWastageItem(id, name) { return await request(`/api/holo_other_wastage_items/${id}`, { method: 'PUT', body: { name } }); }
+export async function createHoloOtherWastageItem(name, categoryId) {
+  const body = categoryId === undefined ? { name } : { name, categoryId: categoryId || null };
+  return await request('/api/holo_other_wastage_items', { method: 'POST', body });
+}
+export async function updateHoloOtherWastageItem(id, name, categoryId) {
+  const body = categoryId === undefined ? { name } : { name, categoryId: categoryId || null };
+  return await request(`/api/holo_other_wastage_items/${id}`, { method: 'PUT', body });
+}
 export async function deleteHoloOtherWastageItem(id) { return await request(`/api/holo_other_wastage_items/${id}`, { method: 'DELETE' }); }
+export async function listHoloOtherWastageCategories() { return await request('/api/holo_other_wastage_categories'); }
+export async function createHoloOtherWastageCategory(name) { return await request('/api/holo_other_wastage_categories', { method: 'POST', body: { name } }); }
+export async function updateHoloOtherWastageCategory(id, name) { return await request(`/api/holo_other_wastage_categories/${id}`, { method: 'PUT', body: { name } }); }
+export async function deleteHoloOtherWastageCategory(id) { return await request(`/api/holo_other_wastage_categories/${id}`, { method: 'DELETE' }); }
 export async function listConeTypes() { return await request('/api/cone_types'); }
 export async function createConeType(name, weight) { return await request('/api/cone_types', { method: 'POST', body: { name, weight } }); }
 export async function deleteConeType(id) { return await request(`/api/cone_types/${id}`, { method: 'DELETE' }); }
@@ -724,6 +734,10 @@ export default {
   createHoloOtherWastageItem,
   updateHoloOtherWastageItem,
   deleteHoloOtherWastageItem,
+  listHoloOtherWastageCategories,
+  createHoloOtherWastageCategory,
+  updateHoloOtherWastageCategory,
+  deleteHoloOtherWastageCategory,
   listBoxes,
   createBox,
   deleteBox,

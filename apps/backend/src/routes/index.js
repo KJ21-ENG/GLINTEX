@@ -3517,6 +3517,7 @@ router.get('/api/bootstrap', async (req, res) => {
       roll_types: hasAnyReadPermission(req, ['receive.holo', 'stock', 'opening_stock', 'masters']),
       holo_production_per_hours: hasReadPermission(req, 'masters'),
       holo_other_wastage_items: hasReadPermission(req, 'masters'),
+      holo_other_wastage_categories: hasReadPermission(req, 'masters'),
       cone_types: hasAnyReadPermission(req, ['issue.coning', 'receive.coning', 'stock', 'opening_stock', 'masters']),
       wrappers: hasAnyReadPermission(req, ['issue.coning', 'receive.coning', 'stock', 'opening_stock', 'masters']),
       contractors: hasAnyReadPermission(req, ['masters', 'contractor_payments']),
@@ -3567,6 +3568,12 @@ router.get('/api/bootstrap', async (req, res) => {
         orderBy: { name: 'asc' },
       })
       : [];
+    slices.holo_other_wastage_categories = allowed.holo_other_wastage_categories
+      ? await prisma.holoOtherWastageCategory.findMany({
+        where: { isActive: true },
+        orderBy: { name: 'asc' },
+      })
+      : [];
     slices.cone_types = allowed.cone_types ? await prisma.coneType.findMany() : [];
     slices.wrappers = allowed.wrappers ? await prisma.wrapper.findMany() : [];
     slices.contractors = allowed.contractors ? await prisma.contractor.findMany({ orderBy: { name: 'asc' } }) : [];
@@ -3600,7 +3607,7 @@ router.get('/api/bootstrap', async (req, res) => {
       : [];
 
     // Resolve user fields for master data (for User columns in Masters page)
-    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'twist_mappings', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'holo_production_per_hours', 'holo_other_wastage_items', 'cone_types', 'wrappers', 'contractors', 'contractor_assignments', 'contractor_rates', 'combined_stock_views'];
+    const masterSliceKeys = ['items', 'yarns', 'cuts', 'twists', 'twist_mappings', 'firms', 'suppliers', 'customers', 'machines', 'workers', 'bobbins', 'boxes', 'roll_types', 'holo_production_per_hours', 'holo_other_wastage_items', 'holo_other_wastage_categories', 'cone_types', 'wrappers', 'contractors', 'contractor_assignments', 'contractor_rates', 'combined_stock_views'];
     for (const key of masterSliceKeys) {
       if (slices[key] && slices[key].length > 0) {
         slices[key] = await resolveUserFields(slices[key], ['createdByUserId', 'updatedByUserId']);
@@ -12659,6 +12666,138 @@ router.delete('/api/holo_production_per_hours/:id', requireDeletePermission('mas
   }
 });
 
+async function resolveHoloOtherWastageCategoryId(rawCategoryId) {
+  if (rawCategoryId === undefined || rawCategoryId === null) {
+    return { ok: true, provided: false, categoryId: null };
+  }
+  const categoryId = String(rawCategoryId).trim();
+  if (!categoryId) return { ok: true, provided: true, categoryId: null };
+  const category = await prisma.holoOtherWastageCategory.findUnique({ where: { id: categoryId } });
+  if (!category?.isActive) {
+    return { ok: false, provided: true, error: 'Other wastage category not found' };
+  }
+  return { ok: true, provided: true, categoryId };
+}
+
+router.get('/api/holo_other_wastage_categories', requirePermission('masters', PERM_READ), async (req, res) => {
+  try {
+    const rows = await prisma.holoOtherWastageCategory.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error('Failed to list holo other wastage categories', err);
+    res.status(500).json({ error: err.message || 'Failed to list holo other wastage categories' });
+  }
+});
+
+router.post('/api/holo_other_wastage_categories', requirePermission('masters', PERM_WRITE), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const existing = await prisma.holoOtherWastageCategory.findUnique({ where: { name } });
+    if (existing?.isActive) {
+      return res.status(400).json({ error: 'Other wastage category already exists' });
+    }
+    if (existing) {
+      const restored = await prisma.holoOtherWastageCategory.update({
+        where: { id: existing.id },
+        data: {
+          isActive: true,
+          ...actorUpdateFields(actorUserId),
+        },
+      });
+      await logCrudWithActor(req, {
+        entityType: 'holo_other_wastage_category',
+        entityId: restored.id,
+        action: 'create',
+        before: existing,
+        after: restored,
+        payload: { restored: true, name: restored.name },
+      });
+      return res.json(restored);
+    }
+
+    const created = await prisma.holoOtherWastageCategory.create({
+      data: {
+        name,
+        ...actorCreateFields(actorUserId),
+      },
+    });
+    await logCrudWithActor(req, { entityType: 'holo_other_wastage_category', entityId: created.id, action: 'create', payload: created });
+    res.json(created);
+  } catch (err) {
+    console.error('Failed to create holo other wastage category', err);
+    const isUnique = err?.code === 'P2002' || String(err?.message || '').includes('Unique constraint');
+    res.status(isUnique ? 400 : 500).json({ error: isUnique ? 'Other wastage category already exists' : (err.message || 'Failed to create holo other wastage category') });
+  }
+});
+
+router.put('/api/holo_other_wastage_categories/:id', requireEditPermission('masters'), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const existing = await prisma.holoOtherWastageCategory.findUnique({ where: { id } });
+    if (!existing?.isActive) return res.status(404).json({ error: 'Other wastage category not found' });
+
+    const updated = await prisma.holoOtherWastageCategory.update({
+      where: { id },
+      data: {
+        name,
+        ...actorUpdateFields(actorUserId),
+      },
+    });
+    await logCrudWithActor(req, {
+      entityType: 'holo_other_wastage_category',
+      entityId: id,
+      action: 'update',
+      before: existing,
+      after: updated,
+      payload: { oldName: existing.name, newName: updated.name },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('Failed to update holo other wastage category', err);
+    const isUnique = err?.code === 'P2002' || String(err?.message || '').includes('Unique constraint');
+    res.status(isUnique ? 400 : 500).json({ error: isUnique ? 'Other wastage category already exists' : (err.message || 'Failed to update holo other wastage category') });
+  }
+});
+
+router.delete('/api/holo_other_wastage_categories/:id', requireDeletePermission('masters'), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const { id } = req.params;
+    const existing = await prisma.holoOtherWastageCategory.findUnique({ where: { id } });
+    if (!existing?.isActive) return res.status(404).json({ error: 'Other wastage category not found' });
+
+    const archived = await prisma.holoOtherWastageCategory.update({
+      where: { id },
+      data: {
+        isActive: false,
+        ...actorUpdateFields(actorUserId),
+      },
+    });
+    await logCrudWithActor(req, {
+      entityType: 'holo_other_wastage_category',
+      entityId: id,
+      action: 'delete',
+      before: existing,
+      after: archived,
+      payload: { archived: true, name: existing.name, itemsKept: true },
+    });
+    res.json({ ok: true, archived: true });
+  } catch (err) {
+    console.error('Failed to delete holo other wastage category', err);
+    res.status(500).json({ error: err.message || 'Failed to delete holo other wastage category' });
+  }
+});
+
 router.get('/api/holo_other_wastage_items', requirePermission('masters', PERM_READ), async (req, res) => {
   try {
     const rows = await prisma.holoOtherWastageItem.findMany({
@@ -12678,6 +12817,11 @@ router.post('/api/holo_other_wastage_items', requirePermission('masters', PERM_W
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
 
+    const categoryResolution = await resolveHoloOtherWastageCategoryId(req.body?.categoryId);
+    if (!categoryResolution.ok) {
+      return res.status(400).json({ error: categoryResolution.error });
+    }
+
     const existing = await prisma.holoOtherWastageItem.findUnique({ where: { name } });
     if (existing?.isActive) {
       return res.status(400).json({ error: 'Other wastage item already exists' });
@@ -12687,6 +12831,7 @@ router.post('/api/holo_other_wastage_items', requirePermission('masters', PERM_W
         where: { id: existing.id },
         data: {
           isActive: true,
+          ...(categoryResolution.provided ? { categoryId: categoryResolution.categoryId } : {}),
           ...actorUpdateFields(actorUserId),
         },
       });
@@ -12704,6 +12849,7 @@ router.post('/api/holo_other_wastage_items', requirePermission('masters', PERM_W
     const created = await prisma.holoOtherWastageItem.create({
       data: {
         name,
+        categoryId: categoryResolution.categoryId,
         ...actorCreateFields(actorUserId),
       },
     });
@@ -12723,6 +12869,11 @@ router.put('/api/holo_other_wastage_items/:id', requireEditPermission('masters')
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
 
+    const categoryResolution = await resolveHoloOtherWastageCategoryId(req.body?.categoryId);
+    if (!categoryResolution.ok) {
+      return res.status(400).json({ error: categoryResolution.error });
+    }
+
     const existing = await prisma.holoOtherWastageItem.findUnique({ where: { id } });
     if (!existing?.isActive) return res.status(404).json({ error: 'Other wastage item not found' });
 
@@ -12730,6 +12881,7 @@ router.put('/api/holo_other_wastage_items/:id', requireEditPermission('masters')
       where: { id },
       data: {
         name,
+        ...(categoryResolution.provided ? { categoryId: categoryResolution.categoryId } : {}),
         ...actorUpdateFields(actorUserId),
       },
     });
@@ -12739,7 +12891,7 @@ router.put('/api/holo_other_wastage_items/:id', requireEditPermission('masters')
       action: 'update',
       before: existing,
       after: updated,
-      payload: { oldName: existing.name, newName: updated.name },
+      payload: { oldName: existing.name, newName: updated.name, oldCategoryId: existing.categoryId, newCategoryId: updated.categoryId },
     });
     res.json(updated);
   } catch (err) {

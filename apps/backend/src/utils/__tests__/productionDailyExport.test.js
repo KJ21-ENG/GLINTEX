@@ -65,18 +65,7 @@ function createDbStub({
       },
     },
     holoOtherWastageItem: {
-      findMany: async ({ where } = {}) => {
-        if (!where?.OR) return holoOtherWastageItems;
-        const historicalDate = where.OR
-          .map((condition) => condition?.metrics?.some?.date)
-          .find(Boolean);
-        return holoOtherWastageItems.filter((item) => (
-          item.isActive
-          || holoOtherWastageMetrics.some((metric) => (
-            metric.otherWastageItemId === item.id && metric.date === historicalDate
-          ))
-        ));
-      },
+      findMany: async () => holoOtherWastageItems,
     },
     holoOtherWastageMetric: {
       findMany: async ({ where } = {}) => {
@@ -313,9 +302,9 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
       { date: '2026-03-09', baseMachine: 'H1', hours: 12, wastage: 0.25 },
     ],
     holoOtherWastageItems: [
-      { id: 'other-2', name: 'Core Waste', isActive: true },
-      { id: 'other-1', name: 'Packing Damage', isActive: false },
-      { id: 'other-3', name: 'Retired Without History', isActive: false },
+      { id: 'other-2', name: 'Core Waste', isActive: true, category: { name: 'Coning' } },
+      { id: 'other-1', name: 'Packing Damage', isActive: false, category: { name: 'Cutter' } },
+      { id: 'other-3', name: 'Retired Without History', isActive: false, category: null },
     ],
     holoOtherWastageMetrics: [
       { date: '2026-03-09', otherWastageItemId: 'other-1', wastage: 0.75 },
@@ -370,8 +359,8 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
     { machine: 'H2', hours: 0, wastage: 0 },
   ]);
   assert.deepEqual(data.otherWastageSummary, [
-    { item: 'Core Waste', wastage: 0 },
-    { item: 'Packing Damage', wastage: 0.75 },
+    { category: 'Coning', wastage: 0 },
+    { category: 'Cutter', wastage: 0.75 },
   ]);
 
   const futureData = await buildProductionDailyExportData({
@@ -386,7 +375,39 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
     },
   });
   assert.deepEqual(futureData.otherWastageSummary, [
-    { item: 'Core Waste', wastage: 0 },
+    { category: 'Coning', wastage: 0 },
+  ]);
+});
+
+test('buildProductionDailyExportData rolls other wastage into categories with an Uncategorized bucket', async () => {
+  const db = createDbStub({
+    machines: [{ id: 'machine-1', name: 'H1-A1', processType: 'holo' }],
+    holoOtherWastageItems: [
+      { id: 'other-a', name: 'Firki Safai', isActive: true, category: { name: 'Holo Machine' } },
+      { id: 'other-b', name: 'Rolla Safai Wastage', isActive: true, category: { name: 'Holo Machine' } },
+      { id: 'other-c', name: 'Side Wastage', isActive: true, category: { name: 'Cutter' } },
+      { id: 'other-d', name: 'Loose Item', isActive: true, category: null },
+      { id: 'other-e', name: 'Untouched Category Item', isActive: true, category: { name: 'Retired Category' } },
+      { id: 'other-f', name: 'Archived With History', isActive: false, category: { name: 'Cutter' } },
+      { id: 'other-g', name: 'Archived Without History', isActive: false, category: { name: 'Coning' } },
+    ],
+    holoOtherWastageMetrics: [
+      { date: '2026-03-09', otherWastageItemId: 'other-a', wastage: 0.25 },
+      { date: '2026-03-09', otherWastageItemId: 'other-b', wastage: 0.75 },
+      { date: '2026-03-09', otherWastageItemId: 'other-c', wastage: 6.11 },
+      { date: '2026-03-09', otherWastageItemId: 'other-d', wastage: 1.5 },
+      { date: '2026-03-09', otherWastageItemId: 'other-f', wastage: 0.05 },
+      { date: '2026-03-08', otherWastageItemId: 'other-g', wastage: 9.94 },
+    ],
+  });
+
+  const data = await buildProductionDailyExportData({ process: 'holo', date: '2026-03-09', db });
+
+  assert.deepEqual(data.otherWastageSummary, [
+    { category: 'Cutter', wastage: 6.16 },
+    { category: 'Holo Machine', wastage: 1 },
+    { category: 'Retired Category', wastage: 0 },
+    { category: 'Uncategorized', wastage: 1.5 },
   ]);
 });
 
@@ -554,8 +575,8 @@ test('createProductionDailyExportPdfDocument renders Holo Hours & Wastage summar
       { machine: 'H2', hours: 0, wastage: 0 },
     ],
     otherWastageSummary: [
-      { item: 'Core Waste', wastage: 0.15 },
-      { item: 'Packing Damage', wastage: 0.35 },
+      { category: 'Coning', wastage: 0.15 },
+      { category: 'Cutter', wastage: 0.35 },
     ],
     meta: {
       noData: false,
@@ -573,8 +594,9 @@ test('createProductionDailyExportPdfDocument renders Holo Hours & Wastage summar
   assert.match(pdfText, /WASTAGE/);
   assert.match(pdfText, /H1/);
   assert.match(pdfText, /Others/);
-  assert.match(pdfText, /Core Waste/);
-  assert.match(pdfText, /Packing Damage/);
+  assert.match(pdfText, /CATEGORY/);
+  assert.match(pdfText, /Coning/);
+  assert.match(pdfText, /Cutter/);
 });
 
 test('createProductionDailyExportPdfDocument renders empty-state exports', async () => {

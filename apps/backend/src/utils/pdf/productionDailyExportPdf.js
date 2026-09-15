@@ -641,7 +641,7 @@ export async function createProductionDailyExportPdfDocument(data) {
     if (otherWastageEntries.length > 0) {
       const otherWastageRows = otherWastageEntries.map((entry) => ({
         cells: [
-          { text: entry.item || 'Unassigned', align: 'left', wrap: true },
+          { text: entry.category || 'Uncategorized', align: 'left', wrap: true },
           { text: formatOptionalWeight(entry.wastage), align: 'right' },
         ],
       }));
@@ -659,7 +659,7 @@ export async function createProductionDailyExportPdfDocument(data) {
         y,
         title: 'Others',
         headers: [
-          { text: 'ITEM', align: 'left', wrap: true },
+          { text: 'CATEGORY', align: 'left', wrap: true },
           { text: 'WASTAGE', align: 'right' },
         ],
         rows: otherWastageRows,

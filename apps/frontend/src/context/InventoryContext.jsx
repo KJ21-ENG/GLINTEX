@@ -30,6 +30,7 @@ const BOOTSTRAP_KEYS = [
   'roll_types',
   'holo_production_per_hours',
   'holo_other_wastage_items',
+  'holo_other_wastage_categories',
   'cone_types',
   'wrappers',
   'contractors',
@@ -58,6 +59,7 @@ const buildRawFromDb = (db) => ({
   roll_types: db?.rollTypes || [],
   holo_production_per_hours: db?.holo_production_per_hours || [],
   holo_other_wastage_items: db?.holo_other_wastage_items || [],
+  holo_other_wastage_categories: db?.holo_other_wastage_categories || [],
   cone_types: db?.cone_types || [],
   wrappers: db?.wrappers || [],
   contractors: db?.contractors || [],
@@ -552,9 +554,14 @@ export const InventoryProvider = ({ children }) => {
     deleteHoloProductionPerHour: async (id) => { await api.deleteHoloProductionPerHour(id); await refreshDb(); },
 
     // Masters - Holo Other Wastage
-    createHoloOtherWastageItem: async (name) => { await api.createHoloOtherWastageItem(name); await refreshDb(); },
-    updateHoloOtherWastageItem: async (id, name) => { await api.updateHoloOtherWastageItem(id, name); await refreshDb(); },
+    createHoloOtherWastageItem: async (name, categoryId) => { await api.createHoloOtherWastageItem(name, categoryId); await refreshDb(); },
+    updateHoloOtherWastageItem: async (id, name, categoryId) => { await api.updateHoloOtherWastageItem(id, name, categoryId); await refreshDb(); },
     deleteHoloOtherWastageItem: async (id) => { await api.deleteHoloOtherWastageItem(id); await refreshDb(); },
+
+    // Masters - Holo Other Wastage Categories
+    createHoloOtherWastageCategory: async (name) => { await api.createHoloOtherWastageCategory(name); await refreshDb(); },
+    updateHoloOtherWastageCategory: async (id, name) => { await api.updateHoloOtherWastageCategory(id, name); await refreshDb(); },
+    deleteHoloOtherWastageCategory: async (id) => { await api.deleteHoloOtherWastageCategory(id); await refreshDb(); },
 
     // Masters - ConeTypes
     createConeType: async (name, weight) => { await api.createConeType(name, weight); await refreshDb(); },

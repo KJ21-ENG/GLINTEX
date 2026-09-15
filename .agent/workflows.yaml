@@ -1,0 +1,155 @@
+{
+  "schema_version": 2,
+  "workflow_version": 1,
+  "status": "evidence-inferred",
+  "project_kind": "brownfield",
+  "archetype": "generic-software-project",
+  "generated_from": {
+    "observed_at": "2026-09-15T12:47:13Z",
+    "project_kind": "brownfield",
+    "commit_count": 617,
+    "detected_stacks": [
+      "javascript-or-typescript"
+    ],
+    "frameworks": [],
+    "package_scripts": [
+      "build:backend",
+      "build:frontend",
+      "dev:backend",
+      "dev:frontend",
+      "preview:frontend",
+      "start:backend"
+    ],
+    "composer_scripts": [],
+    "script_catalog": {
+      "npm": [
+        "build:backend",
+        "build:frontend",
+        "dev:backend",
+        "dev:frontend",
+        "preview:frontend",
+        "start:backend"
+      ],
+      "composer": []
+    },
+    "validation_commands": {
+      "targeted": [],
+      "full": [],
+      "security": [
+        "npm audit --package-lock-only"
+      ],
+      "operations": []
+    },
+    "ci_files": [
+      ".github/workflows/deploy-production.yml",
+      ".github/workflows/release.yml"
+    ],
+    "documentation": [
+      "README.md"
+    ],
+    "existing_agent_instructions": [
+      "AGENTS.md"
+    ],
+    "project_dossier": {
+      "ecosystems": [
+        "javascript-or-typescript"
+      ],
+      "frameworks": [],
+      "manifests": [
+        "package.json"
+      ],
+      "test_roots": [],
+      "database": {
+        "migrations_present": false,
+        "local_sqlite_present": false
+      },
+      "runtime_surfaces": [
+        "web-assets"
+      ]
+    }
+  },
+  "project_dossier": {
+    "ecosystems": [
+      "javascript-or-typescript"
+    ],
+    "frameworks": [],
+    "manifests": [
+      "package.json"
+    ],
+    "test_roots": [],
+    "database": {
+      "migrations_present": false,
+      "local_sqlite_present": false
+    },
+    "runtime_surfaces": [
+      "web-assets"
+    ]
+  },
+  "authority_classes": {
+    "observe": "Read-only inspection and analysis.",
+    "change-local": "Modify local project state within user-authorized scope.",
+    "validate": "Run safe checks proportional to risk.",
+    "change-external": "Requires explicit authorization for sends, posts, pushes, deploys, payments, or other external mutations.",
+    "monitor": "Observe over time without broadening mutation authority."
+  },
+  "phases": [
+    {
+      "id": "orient",
+      "goal": "Reconstruct current state from history, docs, scripts, CI, and verified recent sessions."
+    },
+    {
+      "id": "reproduce-or-scope",
+      "goal": "Establish the smallest evidence-backed change boundary and declare task scope."
+    },
+    {
+      "id": "implement",
+      "goal": "Change only the authorized scope and coordinate overlapping file ownership."
+    },
+    {
+      "id": "validate",
+      "goal": "Run project-native targeted, full, security, and operational checks proportional to risk."
+    },
+    {
+      "id": "handoff",
+      "goal": "Record verified outcome, task-owned files, residual risk, authority state, and next action."
+    }
+  ],
+  "commands": {
+    "script_catalog": {
+      "npm": [
+        "build:backend",
+        "build:frontend",
+        "dev:backend",
+        "dev:frontend",
+        "preview:frontend",
+        "start:backend"
+      ],
+      "composer": []
+    },
+    "validation": {
+      "targeted": [],
+      "full": [],
+      "security": [
+        "npm audit --package-lock-only"
+      ],
+      "operations": []
+    },
+    "ci_files": [
+      ".github/workflows/deploy-production.yml",
+      ".github/workflows/release.yml"
+    ],
+    "validation_policy": "Use project-native targeted checks first; run full, security, and operational gates in proportion to risk.",
+    "custom": {}
+  },
+  "quality_gates": {
+    "task-handoff": "Checkpoint summary, task-owned files, validation evidence, residual risk, and next action are recorded.",
+    "external-change": "External mutations are separately authorized and explicitly recorded with evidence.",
+    "release-readiness": "Project-specific full, security, and operational checks are satisfied or listed as residual risk."
+  },
+  "evolution": {
+    "gap_log": ".agent/workflow-gaps.jsonl",
+    "repeat_threshold": 2,
+    "steward_approval_required": true,
+    "protected_policy_approval_required": true
+  }
+}

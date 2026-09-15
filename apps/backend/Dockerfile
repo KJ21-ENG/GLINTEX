@@ -1,5 +1,7 @@
 # Build image for the backend API with puppeteer/whatsapp support
-FROM node:20-bullseye AS base
+# Base stays on Debian bookworm: bullseye is EOL and its security pool no longer
+# serves the packages this image installs.
+FROM node:20-bookworm AS base
 
 # Install Chromium and libraries required by whatsapp-web.js/puppeteer
 # Also install postgresql-client-17 for pg_dump backups (must match server version)

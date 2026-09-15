@@ -6,12 +6,12 @@
   "provider": "openclaw",
   "provider_session_id": "096e766a-7fd2-4977-91bf-fbfa688c26ef",
   "owner": "Kush",
-  "status": "active",
+  "status": "completed",
   "created_at": "2026-09-15T12:48:05Z",
-  "updated_at": "2026-09-15T12:48:05Z",
-  "completed_at": null,
+  "updated_at": "2026-09-15T13:47:24Z",
+  "completed_at": "2026-09-15T13:47:24Z",
   "start_commit": "097e669dc02e4a9ba0da5dbd12ec83d57ce09a81",
-  "end_commit": null,
+  "end_commit": "a170d45fe9514e0644c95638a5aa9c01fb02f2a8",
   "branch_at_start": "main",
   "scope": [
     "apps/backend/prisma/schema.prisma, apps/backend/prisma/migrations/*, apps/backend/src/routes/index.js, apps/backend/src/utils/pdf/productionDailyExportData.js, apps/backend/src/utils/pdf/productionDailyExportPdf.js, apps/backend/src/utils/__tests__/productionDailyExport.test.js, apps/frontend/src/pages/Masters.jsx, apps/frontend/src/pages/Reports.jsx, apps/frontend/src/api/client.js, apps/frontend/src/context/InventoryContext.jsx, apps/frontend/src/components/masters/*, docs/*"
@@ -54,11 +54,40 @@
     }
   },
   "owned_files": [],
-  "attribution_confidence": "task-baseline",
+  "attribution_confidence": "task-baseline-scope-constrained",
   "conflicts": [],
-  "validation": [],
-  "external_actions": [],
+  "validation": [
+    "backend node --test 148 pass/0 fail; vite build ok; live dev flow PDF Others table = Cutter 6.160 / Holo Machine 1.250 / Uncategorized 3.600 / TOTAL 11.010; Deploy Production run 34976058195 success; app.glintex.in /api/health 200; live bundle carries new UI strings"
+  ],
+  "external_actions": [
+    {
+      "kind": "reported",
+      "description": "git push origin main (097e669..a005aea)",
+      "recorded_at": "2026-09-15T13:12:04Z",
+      "confidence": "reported"
+    },
+    {
+      "kind": "push",
+      "target": "origin/main",
+      "evidence": "remote-tracking ref moved 097e669dc02e4a9ba0da5dbd12ec83d57ce09a81..a005aeae41c40036a83af110980649d6d698dd4f",
+      "recorded_at": "2026-09-15T13:12:04Z",
+      "confidence": "inferred-not-attributed"
+    },
+    {
+      "kind": "reported",
+      "description": "git push origin main a005aea, a170d45; Deploy Production workflow runs 34973502882 (fail, pre-cutover), 34973707809 (fail, pre-cutover), 34976058195 (success)",
+      "recorded_at": "2026-09-15T13:47:25Z",
+      "confidence": "reported"
+    },
+    {
+      "kind": "push",
+      "target": "origin/main",
+      "evidence": "remote-tracking ref moved 097e669dc02e4a9ba0da5dbd12ec83d57ce09a81..a170d45fe9514e0644c95638a5aa9c01fb02f2a8",
+      "recorded_at": "2026-09-15T13:47:25Z",
+      "confidence": "inferred-not-attributed"
+    }
+  ],
   "pending_authorizations": [],
-  "summary": null,
+  "summary": "Other wastage categories shipped to production as a170d45 (feature a005aea + bookworm base fix)",
   "next_action": null
 }

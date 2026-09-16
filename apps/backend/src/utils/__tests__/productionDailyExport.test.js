@@ -627,6 +627,146 @@ test('createProductionDailyExportPdfDocument renders Holo Hours & Wastage summar
   assert.match(pdfText, /Side Wastage/);
 });
 
+test('createProductionDailyExportPdfDocument keeps the Others table whole on the Holo Hours & Wastage page', async () => {
+  const rows = [{
+    yarn: 'Cotton 40s',
+    item: 'Item A',
+    cut: 'Cut 1',
+    machine: 'H3',
+    worker: 'Worker 1',
+    crates: 'Crate 1',
+    rollType: 'Roll A',
+    quantity: 4,
+    gross: 12.5,
+    tare: 1.25,
+    net: 11.25,
+  }];
+  const holoHoursWastageSummary = Array.from({ length: 8 }, (_, index) => ({
+    machine: `H${index + 3}`,
+    hours: 0,
+    wastage: 0,
+  }));
+  const otherWastageSummary = [
+    {
+      category: 'CONING MACHINE',
+      wastage: 19.6,
+      items: [
+        { item: 'PINEAPPLE CONING', wastage: 5.22 },
+        { item: 'Y-CONNING WASTAGE', wastage: 4.78 },
+      ],
+    },
+    {
+      category: 'CUTTER MACHINE',
+      wastage: 29.94,
+      items: [
+        { item: 'PANKEKE WASTAGE', wastage: 18.84 },
+        { item: 'SIDE WASTAGE', wastage: 11.1 },
+      ],
+    },
+    {
+      category: 'HOLO MACHINE',
+      wastage: 67.238,
+      items: [
+        { item: 'FIRKI SAFAI', wastage: 21.238 },
+        { item: 'HOLO MACHINE WASTAGE', wastage: 21.5 },
+        { item: 'ROLLA SAFAI WASTAGE', wastage: 12.25 },
+        { item: 'WINDING WASTAGE', wastage: 12.25 },
+      ],
+    },
+  ];
+
+  const doc = await createProductionDailyExportPdfDocument({
+    process: 'holo',
+    processLabel: 'Holo',
+    date: '2026-09-09',
+    rows,
+    machineSummary: buildMachineSummary(rows),
+    itemSummary: buildItemSummary(rows),
+    yarnSummary: buildYarnSummary(rows),
+    holoHoursWastageSummary,
+    otherWastageSummary,
+    meta: {
+      noData: false,
+      rowCount: 1,
+      totalQuantity: 4,
+      totalGross: 12.5,
+      totalTare: 1.25,
+      totalNet: 11.25,
+    },
+  });
+
+  const othersPages = getDocumentPageTexts(doc).filter((page) => page.includes('CATEGORY / ITEM'));
+
+  // The whole table renders once, so header and last row are never split apart,
+  // and it shares the page with the machine table it now sits beside.
+  assert.equal(othersPages.length, 1);
+  const othersPage = othersPages[0];
+  assert.match(othersPage, /CONING MACHINE/);
+  assert.match(othersPage, /PINEAPPLE CONING/);
+  assert.match(othersPage, /HOLO MACHINE WASTAGE/);
+  assert.match(othersPage, /WINDING WASTAGE/);
+  assert.match(othersPage, /116\.778/);
+  assert.match(othersPage, /Holo Hours & Wastage/);
+});
+
+test('createProductionDailyExportPdfDocument keeps the Others table whole beside a paginated Holo machine table', async () => {
+  const rows = [{
+    yarn: 'Cotton 40s',
+    item: 'Item A',
+    cut: 'Cut 1',
+    machine: 'H3-A1',
+    worker: 'Worker 1',
+    crates: 'Crate 1',
+    rollType: 'Roll A',
+    quantity: 4,
+    gross: 12.5,
+    tare: 1.25,
+    net: 11.25,
+  }];
+  const holoHoursWastageSummary = Array.from({ length: 24 }, (_, index) => ({
+    machine: `H${index + 3}`,
+    hours: 0,
+    wastage: 0,
+  }));
+  const otherWastageSummary = [
+    { category: 'CONING MACHINE', wastage: 19.6, items: [{ item: 'PINEAPPLE CONING', wastage: 5.22 }] },
+    { category: 'CUTTER MACHINE', wastage: 29.94, items: [{ item: 'SIDE WASTAGE', wastage: 11.1 }] },
+    { category: 'HOLO MACHINE', wastage: 67.238, items: [{ item: 'WINDING WASTAGE', wastage: 12.25 }] },
+  ];
+
+  const doc = await createProductionDailyExportPdfDocument({
+    process: 'holo',
+    processLabel: 'Holo',
+    date: '2026-09-09',
+    rows,
+    machineSummary: buildMachineSummary(rows),
+    itemSummary: buildItemSummary(rows),
+    yarnSummary: buildYarnSummary(rows),
+    holoHoursWastageSummary,
+    otherWastageSummary,
+    meta: {
+      noData: false,
+      rowCount: 1,
+      totalQuantity: 4,
+      totalGross: 12.5,
+      totalTare: 1.25,
+      totalNet: 11.25,
+    },
+  });
+
+  const pageTexts = getDocumentPageTexts(doc);
+  const othersPages = pageTexts.filter((page) => page.includes('CATEGORY / ITEM'));
+
+  // A machine table this long paginates, so the Others column follows it onto
+  // the final page instead of being split across two.
+  assert.ok(doc.getNumberOfPages() >= 2);
+  assert.equal(othersPages.length, 1);
+  const othersPage = othersPages[0];
+  assert.match(othersPage, /WINDING WASTAGE/);
+  assert.match(othersPage, /MACHINE/);
+  assert.match(othersPage, /TOTAL/);
+});
+
 test('createProductionDailyExportPdfDocument renders empty-state exports', async () => {
   const doc = await createProductionDailyExportPdfDocument({
     process: 'cutter',

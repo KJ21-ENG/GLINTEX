@@ -117,9 +117,11 @@ export function drawOverview(doc, { y, metrics, pageWidth }) {
  * Draw a professional data table
  * @param {object} doc - jsPDF document
  * @param {object} options - Table options
+ * @param {number} [options.x] - Left edge of the table (defaults to 15)
  * @returns {number} - New Y position after table
  */
 export function drawTable(doc, {
+    x,
     y,
     headers,
     rows,
@@ -133,7 +135,7 @@ export function drawTable(doc, {
     lineHeight = 3.5,
     pageStartY = 20,
 }) {
-    const startX = 15;
+    const startX = Number.isFinite(x) ? x : 15;
     const pageHeight = doc.internal.pageSize.getHeight();
 
     // Section title if provided

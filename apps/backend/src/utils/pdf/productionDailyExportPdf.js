@@ -19,6 +19,14 @@ const TABLE_ALT_FILL = [248, 249, 250];
 const TABLE_TOTAL_FILL = [233, 236, 239];
 const TABLE_BORDER = [200, 200, 200];
 
+// Holo exports print the machine table on the left and the Others table in the
+// empty column beside it, so the whole Others table stays on a single page.
+const HOLO_MACHINE_TABLE_X = 15;
+const HOLO_MACHINE_TABLE_COL_WIDTHS = [70, 32, 34];
+const OTHER_WASTAGE_COLUMN_GAP = 8;
+const OTHER_WASTAGE_VALUE_COL_WIDTH = 32;
+const MIN_OTHER_WASTAGE_COLUMN_WIDTH = 100;
+
 function getTableWidth(colWidths = []) {
   return colWidths.reduce((sum, width) => sum + width, 0);
 }
@@ -110,6 +118,68 @@ function resolveHeaderHeight(doc, headers, colWidths, {
   }, 1);
   const wrappedHeight = 2 + (maxLines * lineHeight) + 2;
   return Math.max(headerHeight, wrappedHeight);
+}
+
+// Mirrors how drawTable advances the cursor for a table so callers can decide
+// whether two tables fit side by side before committing to a layout.
+function estimateDrawTableHeight(doc, {
+  title,
+  headers,
+  rows,
+  colWidths,
+  rowHeight,
+  headerHeight,
+  padding,
+}) {
+  const titleHeight = title ? 6 : 0;
+  const rowsHeight = rows.reduce((sum, row) => sum + getRowHeight(doc, row, headers, colWidths, { rowHeight, padding }), 0);
+  return titleHeight + headerHeight + rowsHeight + 5;
+}
+
+// One table, two levels: each category prints its rolled-up total and then its
+// items with their own totals.
+function buildOtherWastageTable(entries) {
+  const rows = [];
+  entries.forEach((entry) => {
+    rows.push({
+      isGroup: true,
+      cells: [
+        { text: entry.category || 'Uncategorized', align: 'left', wrap: true },
+        { text: formatOptionalWeight(entry.wastage), align: 'right' },
+      ],
+    });
+    (entry.items || []).forEach((item) => {
+      rows.push({
+        cells: [
+          { text: `- ${item.item}`, align: 'left', wrap: true },
+          { text: formatOptionalWeight(item.wastage), align: 'right' },
+        ],
+      });
+    });
+  });
+
+  const totalWastage = entries.reduce((sum, entry) => sum + (Number(entry.wastage) || 0), 0);
+  rows.push({
+    isTotal: true,
+    cells: [
+      { text: 'TOTAL', align: 'left' },
+      { text: formatOptionalWeight(totalWastage), align: 'right' },
+    ],
+  });
+
+  return {
+    title: 'Others',
+    headers: [
+      { text: 'CATEGORY / ITEM', align: 'left', wrap: true },
+      { text: 'WASTAGE', align: 'right' },
+    ],
+    rows,
+    colWidths: [100, 36],
+    rowHeight: 5,
+    headerHeight: 7,
+    padding: 1.2,
+    lineHeight: 2.6,
+  };
 }
 
 function drawTableHeaderAt(doc, {
@@ -618,8 +688,7 @@ export async function createProductionDailyExportPdfDocument(data) {
       ],
     });
 
-    y = drawTable(doc, {
-      y,
+    const holoHoursWastageTable = {
       title: 'Holo Hours & Wastage',
       headers: [
         { text: 'MACHINE', align: 'left', wrap: true },
@@ -627,65 +696,73 @@ export async function createProductionDailyExportPdfDocument(data) {
         { text: 'WASTAGE', align: 'right' },
       ],
       rows: holoHoursWastageRows,
-      colWidths: [70, 32, 34],
-      pageWidth,
+      colWidths: HOLO_MACHINE_TABLE_COL_WIDTHS,
       rowHeight: 5,
       headerHeight: 7,
       padding: 1.2,
       lineHeight: 2.6,
+    };
+
+    const otherWastageEntries = data.otherWastageSummary || [];
+    const otherWastageTable = otherWastageEntries.length > 0
+      ? buildOtherWastageTable(otherWastageEntries)
+      : null;
+
+    const sectionStartY = y;
+    const othersColumnX = HOLO_MACHINE_TABLE_X + getTableWidth(HOLO_MACHINE_TABLE_COL_WIDTHS) + OTHER_WASTAGE_COLUMN_GAP;
+    const othersColumnWidth = pageWidth - PAGE_MARGIN - othersColumnX;
+    const pageLimitY = pageHeight - SUMMARY_BOTTOM_MARGIN;
+    const otherWastageHeight = otherWastageTable ? estimateDrawTableHeight(doc, otherWastageTable) : 0;
+
+    const pagesBeforeMachineTable = doc.getNumberOfPages();
+    const machineTableEndY = drawTable(doc, {
+      ...holoHoursWastageTable,
+      y: sectionStartY,
+      pageWidth,
       bottomMargin: SUMMARY_BOTTOM_MARGIN,
       pageStartY: COMPACT_PAGE_START_Y,
     });
+    y = machineTableEndY;
 
-    const otherWastageEntries = data.otherWastageSummary || [];
-    if (otherWastageEntries.length > 0) {
-      // One table, two levels: each category prints its rolled-up total and then
-      // its items with their own totals.
-      const otherWastageRows = [];
-      otherWastageEntries.forEach((entry) => {
-        otherWastageRows.push({
-          isGroup: true,
-          cells: [
-            { text: entry.category || 'Uncategorized', align: 'left', wrap: true },
-            { text: formatOptionalWeight(entry.wastage), align: 'right' },
-          ],
+    if (otherWastageTable) {
+      // The machine table has already claimed its pages, so the empty column to
+      // its right is free and the Others table can sit there whole. Line it up
+      // with the machine table when it did not paginate, and with the top of the
+      // final page when it did.
+      const machineTablePaginated = doc.getNumberOfPages() > pagesBeforeMachineTable;
+      const fitsBeside = (startY) => othersColumnWidth >= MIN_OTHER_WASTAGE_COLUMN_WIDTH
+        && startY + otherWastageHeight <= pageLimitY;
+      const preferredStartY = machineTablePaginated ? COMPACT_PAGE_START_Y : sectionStartY;
+      const othersStartY = fitsBeside(preferredStartY) ? preferredStartY : COMPACT_PAGE_START_Y;
+
+      if (fitsBeside(othersStartY)) {
+        drawTable(doc, {
+          ...otherWastageTable,
+          x: othersColumnX,
+          colWidths: [othersColumnWidth - OTHER_WASTAGE_VALUE_COL_WIDTH, OTHER_WASTAGE_VALUE_COL_WIDTH],
+          y: othersStartY,
+          pageWidth,
+          bottomMargin: SUMMARY_BOTTOM_MARGIN,
+          pageStartY: COMPACT_PAGE_START_Y,
         });
-        (entry.items || []).forEach((item) => {
-          otherWastageRows.push({
-            cells: [
-              { text: `- ${item.item}`, align: 'left', wrap: true },
-              { text: formatOptionalWeight(item.wastage), align: 'right' },
-            ],
-          });
+        y = Math.max(y, othersStartY + otherWastageHeight);
+      } else {
+        // No room beside the machine table: keep the table whole on a fresh page
+        // instead of letting it split.
+        if (y + otherWastageHeight > pageLimitY) {
+          doc.addPage();
+          doc.setFillColor(255, 255, 255);
+          doc.rect(0, 0, pageWidth, pageHeight, 'F');
+          y = COMPACT_PAGE_START_Y;
+        }
+        y = drawTable(doc, {
+          ...otherWastageTable,
+          y,
+          pageWidth,
+          bottomMargin: SUMMARY_BOTTOM_MARGIN,
+          pageStartY: COMPACT_PAGE_START_Y,
         });
-      });
-
-      const totalOtherWastage = otherWastageEntries.reduce((sum, entry) => sum + (Number(entry.wastage) || 0), 0);
-      otherWastageRows.push({
-        isTotal: true,
-        cells: [
-          { text: 'TOTAL', align: 'left' },
-          { text: formatOptionalWeight(totalOtherWastage), align: 'right' },
-        ],
-      });
-
-      y = drawTable(doc, {
-        y,
-        title: 'Others',
-        headers: [
-          { text: 'CATEGORY / ITEM', align: 'left', wrap: true },
-          { text: 'WASTAGE', align: 'right' },
-        ],
-        rows: otherWastageRows,
-        colWidths: [100, 36],
-        pageWidth,
-        rowHeight: 5,
-        headerHeight: 7,
-        padding: 1.2,
-        lineHeight: 2.6,
-        bottomMargin: SUMMARY_BOTTOM_MARGIN,
-        pageStartY: COMPACT_PAGE_START_Y,
-      });
+      }
     }
   }
 

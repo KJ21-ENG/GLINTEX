@@ -269,6 +269,9 @@ export function drawTable(doc, {
             doc.setFillColor(233, 236, 239);
             doc.rect(startX, y, tableWidth, rowHeightDynamic, 'F');
             doc.setFont('helvetica', 'bold');
+        } else if (row.isGroup) {
+            // Group header row (for example a category above its items).
+            doc.setFont('helvetica', 'bold');
         }
 
         doc.setTextColor(44, 62, 80);
@@ -298,7 +301,7 @@ export function drawTable(doc, {
             }
         });
 
-        if (isTotalsRow) {
+        if (isTotalsRow || row.isGroup) {
             doc.setFont('helvetica', 'normal');
         }
 

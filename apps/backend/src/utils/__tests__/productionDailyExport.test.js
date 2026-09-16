@@ -359,8 +359,8 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
     { machine: 'H2', hours: 0, wastage: 0 },
   ]);
   assert.deepEqual(data.otherWastageSummary, [
-    { category: 'Coning', wastage: 0 },
-    { category: 'Cutter', wastage: 0.75 },
+    { category: 'Coning', wastage: 0, items: [{ item: 'Core Waste', wastage: 0 }] },
+    { category: 'Cutter', wastage: 0.75, items: [{ item: 'Packing Damage', wastage: 0.75 }] },
   ]);
 
   const futureData = await buildProductionDailyExportData({
@@ -375,7 +375,7 @@ test('buildProductionDailyExportData normalizes holo rows using trace fallbacks'
     },
   });
   assert.deepEqual(futureData.otherWastageSummary, [
-    { category: 'Coning', wastage: 0 },
+    { category: 'Coning', wastage: 0, items: [{ item: 'Core Waste', wastage: 0 }] },
   ]);
 });
 
@@ -404,10 +404,36 @@ test('buildProductionDailyExportData rolls other wastage into categories with an
   const data = await buildProductionDailyExportData({ process: 'holo', date: '2026-03-09', db });
 
   assert.deepEqual(data.otherWastageSummary, [
-    { category: 'Cutter', wastage: 6.16 },
-    { category: 'Holo Machine', wastage: 1 },
-    { category: 'Retired Category', wastage: 0 },
-    { category: 'Uncategorized', wastage: 1.5 },
+    {
+      category: 'Cutter',
+      wastage: 6.16,
+      items: [
+        { item: 'Archived With History', wastage: 0.05 },
+        { item: 'Side Wastage', wastage: 6.11 },
+      ],
+    },
+    {
+      category: 'Holo Machine',
+      wastage: 1,
+      items: [
+        { item: 'Firki Safai', wastage: 0.25 },
+        { item: 'Rolla Safai Wastage', wastage: 0.75 },
+      ],
+    },
+    {
+      category: 'Retired Category',
+      wastage: 0,
+      items: [
+        { item: 'Untouched Category Item', wastage: 0 },
+      ],
+    },
+    {
+      category: 'Uncategorized',
+      wastage: 1.5,
+      items: [
+        { item: 'Loose Item', wastage: 1.5 },
+      ],
+    },
   ]);
 });
 
@@ -575,8 +601,8 @@ test('createProductionDailyExportPdfDocument renders Holo Hours & Wastage summar
       { machine: 'H2', hours: 0, wastage: 0 },
     ],
     otherWastageSummary: [
-      { category: 'Coning', wastage: 0.15 },
-      { category: 'Cutter', wastage: 0.35 },
+      { category: 'Coning', wastage: 0.15, items: [{ item: 'Cone Wastage', wastage: 0.15 }] },
+      { category: 'Cutter', wastage: 0.35, items: [{ item: 'Side Wastage', wastage: 0.35 }] },
     ],
     meta: {
       noData: false,
@@ -594,9 +620,11 @@ test('createProductionDailyExportPdfDocument renders Holo Hours & Wastage summar
   assert.match(pdfText, /WASTAGE/);
   assert.match(pdfText, /H1/);
   assert.match(pdfText, /Others/);
-  assert.match(pdfText, /CATEGORY/);
+  assert.match(pdfText, /CATEGORY \/ ITEM/);
   assert.match(pdfText, /Coning/);
   assert.match(pdfText, /Cutter/);
+  assert.match(pdfText, /Cone Wastage/);
+  assert.match(pdfText, /Side Wastage/);
 });
 
 test('createProductionDailyExportPdfDocument renders empty-state exports', async () => {

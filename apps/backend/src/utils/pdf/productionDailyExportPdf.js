@@ -639,12 +639,26 @@ export async function createProductionDailyExportPdfDocument(data) {
 
     const otherWastageEntries = data.otherWastageSummary || [];
     if (otherWastageEntries.length > 0) {
-      const otherWastageRows = otherWastageEntries.map((entry) => ({
-        cells: [
-          { text: entry.category || 'Uncategorized', align: 'left', wrap: true },
-          { text: formatOptionalWeight(entry.wastage), align: 'right' },
-        ],
-      }));
+      // One table, two levels: each category prints its rolled-up total and then
+      // its items with their own totals.
+      const otherWastageRows = [];
+      otherWastageEntries.forEach((entry) => {
+        otherWastageRows.push({
+          isGroup: true,
+          cells: [
+            { text: entry.category || 'Uncategorized', align: 'left', wrap: true },
+            { text: formatOptionalWeight(entry.wastage), align: 'right' },
+          ],
+        });
+        (entry.items || []).forEach((item) => {
+          otherWastageRows.push({
+            cells: [
+              { text: `- ${item.item}`, align: 'left', wrap: true },
+              { text: formatOptionalWeight(item.wastage), align: 'right' },
+            ],
+          });
+        });
+      });
 
       const totalOtherWastage = otherWastageEntries.reduce((sum, entry) => sum + (Number(entry.wastage) || 0), 0);
       otherWastageRows.push({
@@ -659,7 +673,7 @@ export async function createProductionDailyExportPdfDocument(data) {
         y,
         title: 'Others',
         headers: [
-          { text: 'CATEGORY', align: 'left', wrap: true },
+          { text: 'CATEGORY / ITEM', align: 'left', wrap: true },
           { text: 'WASTAGE', align: 'right' },
         ],
         rows: otherWastageRows,

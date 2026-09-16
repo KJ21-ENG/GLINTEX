@@ -430,19 +430,29 @@ async function buildHoloOtherWastageSummary({ date, db }) {
   ]);
 
   const metricMap = new Map(metrics.map((row) => [row.otherWastageItemId, row]));
-  const totalsByCategory = new Map();
+  const itemsByCategory = new Map();
 
   items.forEach((item) => {
     const metric = metricMap.get(item.id);
-    // Same scope rule as before, now rolled up one level: an archived item only
-    // reaches the report for the dates where it has a saved metric.
+    // Same scope rule as before, now carried down to the item rows: an archived
+    // item only reaches the report for the dates where it has a saved metric.
     if (!item.isActive && !metric) return;
     const category = asTrimmedText(item.category?.name, UNCATEGORIZED_OTHER_WASTAGE_LABEL);
-    totalsByCategory.set(category, (totalsByCategory.get(category) || 0) + Number(metric?.wastage || 0));
+    if (!itemsByCategory.has(category)) itemsByCategory.set(category, []);
+    itemsByCategory.get(category).push({
+      item: asTrimmedText(item.name),
+      wastage: roundTo3Decimals(Number(metric?.wastage || 0)),
+    });
   });
 
-  return Array.from(totalsByCategory.entries())
-    .map(([category, wastage]) => ({ category, wastage: roundTo3Decimals(wastage) }))
+  return Array.from(itemsByCategory.entries())
+    .map(([category, categoryItems]) => {
+      const sortedItems = [...categoryItems].sort((left, right) => left.item.localeCompare(right.item, undefined, { numeric: true, sensitivity: 'base' }));
+      // Sum the rounded item rows so the printed rows always add up to the
+      // printed category total.
+      const wastage = roundTo3Decimals(sortedItems.reduce((sum, entry) => sum + entry.wastage, 0));
+      return { category, wastage, items: sortedItems };
+    })
     .sort((left, right) => left.category.localeCompare(right.category, undefined, { numeric: true, sensitivity: 'base' }));
 }
 

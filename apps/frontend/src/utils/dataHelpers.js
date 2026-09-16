@@ -29,6 +29,7 @@ export function normalizeDb(raw) {
   const rollTypes = ensureArr(raw?.roll_types);
   const holoProductionPerHours = ensureArr(raw?.holo_production_per_hours);
   const holoOtherWastageItems = ensureArr(raw?.holo_other_wastage_items);
+  const holoOtherWastageCategories = ensureArr(raw?.holo_other_wastage_categories);
   const coneTypes = ensureArr(raw?.cone_types);
   const wrappers = ensureArr(raw?.wrappers);
   const contractors = ensureArr(raw?.contractors);
@@ -89,6 +90,7 @@ export function normalizeDb(raw) {
     rollTypes,
     holo_production_per_hours: holoProductionPerHours,
     holo_other_wastage_items: holoOtherWastageItems,
+    holo_other_wastage_categories: holoOtherWastageCategories,
     cone_types: coneTypes,
     wrappers,
     contractors,

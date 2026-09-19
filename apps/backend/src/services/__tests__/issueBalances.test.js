@@ -179,6 +179,34 @@ test('cutter: no piece ids => skips fallback + challan queries', async () => {
   assert.equal(b.receivedWeight, 0.5);
 });
 
+test('coning: active take-backs shrink net issued so wastage cannot swallow returned yarn (ico-4564)', async () => {
+  // Production case ico-4564: 70.235 kg issued, 22.975 kg taken back to Holo stock,
+  // 46.990 kg received, so only 0.270 kg was genuinely pending. The coning
+  // mark_wastage route used to compute 70.235 - 46.990 = 23.245 kg, absorbing the
+  // take-back into wastage and closing the issue at 0.000 pending.
+  const issues = [{
+    id: 'ico-4564',
+    receivedRowRefs: [
+      { rowId: 'r1', issueRolls: 94, issueWeight: 23.245 },
+      { rowId: 'r2', issueRolls: 192, issueWeight: 46.99 },
+    ],
+    rollsIssued: 286,
+  }];
+  const stub = makeStub({
+    takeBacks: [{ issueId: 'ico-4564', totalCount: 94, totalWeight: 22.975 }],
+    coningRows: [{ issueId: 'ico-4564', netWeight: 46.99, sourceRowRefs: [{ rolls: 192 }] }],
+    coningPieceTotals: [{ pieceId: 'ico-4564', wastageNetWeight: 0 }],
+  });
+  const result = await computeIssueBalancesBatch(stub, 'coning', issues);
+  const b = result.get('ico-4564');
+  assert.ok(Math.abs(b.originalWeight - 70.235) < 1e-6, `originalWeight ${b.originalWeight}`);
+  assert.equal(b.takeBackWeight, 22.975);
+  assert.ok(Math.abs(b.netIssuedWeight - 47.26) < 1e-6, `netIssuedWeight ${b.netIssuedWeight}`);
+  assert.ok(Math.abs(b.receivedWeight - 46.99) < 1e-6, `receivedWeight ${b.receivedWeight}`);
+  assert.ok(Math.abs(b.pendingWeight - 0.27) < 1e-6, `pendingWeight ${b.pendingWeight}`);
+  assert.notEqual(b.pendingWeight, 23.245, 'take-back weight must never surface as pending');
+});
+
 test('finalizeBalance clamps small negatives to zero', async () => {
   const issues = [{ id: 'h1', receivedRowRefs: [], metallicBobbins: 1, metallicBobbinsWeight: 1.0 }];
   const stub = makeStub({

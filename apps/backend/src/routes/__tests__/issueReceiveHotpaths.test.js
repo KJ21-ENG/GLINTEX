@@ -88,6 +88,21 @@ test('Holo and Coning receive writes return their authoritative updated totals',
   assert.match(coning, /pieceTotal,/);
 });
 
+test('Coning wastage marks against net issued weight, never the raw refs total', () => {
+  const route = section(
+    indexSource,
+    "router.post('/api/receive_from_coning_machine/mark_wastage'",
+    "router.post('/api/receive_from_coning_machine/revert_wastage'",
+  );
+  // Net issued (original minus active take-backs) is the only correct base: yarn taken
+  // back to Holo stock is already accounted for and must not be wastified again.
+  assert.match(route, /computeIssueBalancesBatch\(prisma, 'coning', \[issue\]\)/);
+  assert.match(route, /const netIssuedWeight = Number\(balance\?\.netIssuedWeight \|\| 0\)/);
+  assert.match(route, /Math\.max\(0, netIssuedWeight - received - existingWastage\)/);
+  assert.doesNotMatch(route, /issuedWeight - received - existingWastage/);
+  assert.doesNotMatch(route, /Math\.max\(0, issuedWeight/);
+});
+
 test('Coning source accounting joins expanded refs to a hashed target set', () => {
   const helper = section(indexSource, 'async function buildHoloIssuedToConingMap', 'function getHoloRowNetWeight');
   assert.match(helper, /WITH target_rows AS/);

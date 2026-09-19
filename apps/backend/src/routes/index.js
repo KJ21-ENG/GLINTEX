@@ -11128,24 +11128,16 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
     if (!issue) return res.status(404).json({ error: 'Coning issue not found' });
     if (issue.isDeleted) return res.status(400).json({ error: 'Issue has been deleted' });
 
-    // 2. Calculate total issued weight from receivedRowRefs
-    let issuedWeight = 0;
-    try {
-      const refs = typeof issue.receivedRowRefs === 'string'
-        ? JSON.parse(issue.receivedRowRefs)
-        : issue.receivedRowRefs;
-      if (Array.isArray(refs)) {
-        issuedWeight = refs.reduce((sum, ref) => {
-          // Prefer stamped issueWeight, fallback to lookup
-          if (ref.issueWeight) return sum + Number(ref.issueWeight);
-          return sum;
-        }, 0);
-      }
-    } catch (e) {
-      console.error('Error parsing receivedRowRefs for coning wastage', e);
-    }
-
-    if (issuedWeight <= 0) {
+    // 2. Net issued weight = original allocation (receivedRowRefs) MINUS active take-backs.
+    //    Yarn taken back to Holo stock is already accounted for; wastifying it double-counts
+    //    the same weight and closes the issue with an inflated wastage figure.
+    //    Read it from the same balance service the Receive screen renders
+    //    (issueBalances.finalizeBalance) so the marked amount can never drift from the
+    //    pending weight the operator sees on screen.
+    const balances = await computeIssueBalancesBatch(prisma, 'coning', [issue]);
+    const balance = balances.get(issueId) || null;
+    const netIssuedWeight = Number(balance?.netIssuedWeight || 0);
+    if (netIssuedWeight <= 0) {
       return res.status(400).json({ error: 'Unable to determine issued weight for this issue' });
     }
 
@@ -11156,8 +11148,8 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
     const received = currentTotal ? Number(currentTotal.totalNetWeight || 0) : 0;
     const existingWastage = currentTotal ? Number(currentTotal.wastageNetWeight || 0) : 0;
 
-    // 4. Calculate remaining pending weight
-    const remaining = roundTo3Decimals(Math.max(0, issuedWeight - received - existingWastage));
+    // 4. Calculate remaining pending weight against the net issued weight
+    const remaining = roundTo3Decimals(Math.max(0, netIssuedWeight - received - existingWastage));
     if (remaining <= 0) {
       return res.status(400).json({ error: 'No remaining pending weight to mark as wastage' });
     }
@@ -11191,7 +11183,7 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
       const itemRec = issue.itemId ? await prisma.item.findUnique({ where: { id: issue.itemId } }) : null;
       const itemName = itemRec ? itemRec.name || '' : '';
       const wastageFormatted = Number(remaining).toFixed(3);
-      const wastagePercent = issuedWeight > 0 ? ((remaining / issuedWeight) * 100).toFixed(2) : '0.00';
+      const wastagePercent = netIssuedWeight > 0 ? ((remaining / netIssuedWeight) * 100).toFixed(2) : '0.00';
       sendNotification('piece_wastage_marked_coning', {
         pieceId: issueId,
         lotNo: issue.lotNo || issue.lotLabel || '',

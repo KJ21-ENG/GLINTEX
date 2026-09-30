@@ -7,6 +7,8 @@ import * as api from '../../api';
 import { Scan, Save, Trash2, Plus } from 'lucide-react';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, makeReceiveBarcode, parseReceiveCrateIndex } from '../../utils/labelPrint';
 import { InfoPopover } from '../common/InfoPopover';
+import { ConfirmDialog } from '../common/ConfirmDialog';
+import { Dialog, DialogContent } from '../ui/Dialog';
 import { CatchWeightButton } from '../common/CatchWeightButton';
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
@@ -26,6 +28,9 @@ export function CutterReceiveForm() {
     const [barcode, setBarcode] = useState('');
     const [loading, setLoading] = useState(false);
     const [template, setTemplate] = useState(null);
+    const [pendingPrint, setPendingPrint] = useState(null);
+    const [feedback, setFeedback] = useState(null);
+    const showMessage = (message) => setFeedback({ title: 'Check receive details', message });
 
     // Form State
     const [issueRecord, setIssueRecord] = useState(null);
@@ -33,6 +38,7 @@ export function CutterReceiveForm() {
 
     // Fields
     const [cutId, setCutId] = useState('');
+    const [operatorId, setOperatorId] = useState('');
     const [shift, setShift] = useState('');
     const [helperId, setHelperId] = useState('');
     const [bobbinId, setBobbinId] = useState('');
@@ -44,6 +50,22 @@ export function CutterReceiveForm() {
     const [pendingWastageContext, setPendingWastageContext] = useState(null);
 
     const [cart, setCart] = useState([]);
+    const workerGroups = useMemo(() => {
+        const groups = new Map();
+        cart.forEach((entry) => {
+            const key = JSON.stringify([entry.operatorId, entry.helperId || '', entry.cutId || '', entry.receiveDate]);
+            if (!groups.has(key)) groups.set(key, {
+                key, operatorName: entry.operatorName || '—', helperName: entry.helperName || '—',
+                crates: 0, netWeight: 0,
+            });
+            if (!entry.isWastage) {
+                const group = groups.get(key);
+                group.crates += 1;
+                group.netWeight += Number(entry.netWeight) || 0;
+            }
+        });
+        return [...groups.values()];
+    }, [cart]);
     const [saving, setSaving] = useState(false);
     const [, wrapScan] = useSubmitLock();
     const [addLocked, wrapAdd] = useSubmitLock();
@@ -118,6 +140,7 @@ export function CutterReceiveForm() {
                         const enriched = enrichIssueWithBalance(res);
                         setIssueRecord(enriched);
                         setCutId(enriched.cutId || '');
+                        setOperatorId(enriched.operatorId || '');
                         setHelperId('');
                         setBobbinId('');
                         setBoxId('');
@@ -125,12 +148,12 @@ export function CutterReceiveForm() {
                         setGrossWeight('');
                         setIsWastage(false);
                     } else {
-                        alert('Barcode not found or invalid');
+                        showMessage('Barcode not found or invalid');
                         setIssueRecord(null);
                     }
                 })
                 .catch(err => {
-                    alert(err.message || 'Failed to fetch barcode details');
+                    showMessage(err.message || 'Failed to fetch barcode details');
                 })
                 .finally(() => {
                     setLoading(false);
@@ -153,6 +176,7 @@ export function CutterReceiveForm() {
                 // Auto-fill known fields if available/logical
                 // Auto-fill cut from issue, reset other fields
                 setCutId(enriched.cutId || '');
+                setOperatorId(enriched.operatorId || '');
                 setHelperId('');
                 setBobbinId('');
                 setBoxId('');
@@ -160,11 +184,11 @@ export function CutterReceiveForm() {
                 setGrossWeight('');
                 setIsWastage(false);
             } else {
-                alert('Barcode not found or invalid');
+                showMessage('Barcode not found or invalid');
                 setIssueRecord(null);
             }
         } catch (err) {
-            alert(err.message || 'Failed to fetch barcode details');
+            showMessage(err.message || 'Failed to fetch barcode details');
         } finally {
             setLoading(false);
         }
@@ -367,24 +391,29 @@ export function CutterReceiveForm() {
         if (!issueRecord) return;
 
         if (!pieceIdToUse) {
-            alert('No piece ID found in issue record');
+            showMessage('No piece ID found in issue record');
+            return;
+        }
+
+        if (!operatorId) {
+            showMessage('Please select the operator for this crate.');
             return;
         }
 
         if (isWastageClosed) {
-            alert('This piece is already marked as wastage. Receiving is closed.');
+            showMessage('This piece is already marked as wastage. Receiving is closed.');
             return;
         }
 
         if (pieceStatus.hasWastageInCart) {
-            alert('Wastage is already queued for this piece. Remove it to continue.');
+            showMessage('Wastage is already queued for this piece. Remove it to continue.');
             return;
         }
 
         if (isWastage) {
             const closeWeight = Math.min(pieceStatus.pendingWeight, pendingWeight);
             if (closeWeight <= 0) {
-                alert('Piece has no pending weight remaining.');
+                showMessage('Piece has no pending weight remaining.');
                 return;
             }
 
@@ -399,7 +428,7 @@ export function CutterReceiveForm() {
 
         // Validation: Cut, Bobbin, Box, Qty, Gross Weight are mandatory. Helper and Shift are optional.
         if (!cutId || !bobbinId || !boxId || !bobbinQty || !grossWeight) {
-            alert('Please fill all fields (Cut, Bobbin, Box, Qty, Gross Weight)');
+            showMessage('Please fill all fields (Cut, Bobbin, Box, Qty, Gross Weight)');
             return;
         }
 
@@ -407,20 +436,20 @@ export function CutterReceiveForm() {
         const bobbinWeightRaw = selectedBobbin?.weight;
         const bobbinWeight = Number(bobbinWeightRaw);
         if (bobbinWeightRaw == null || !Number.isFinite(bobbinWeight) || bobbinWeight < 0) {
-            alert('Bobbin weight is missing. Please update the bobbin first.');
+            showMessage('Bobbin weight is missing. Please update the bobbin first.');
             return;
         }
 
         // Validate box weight is set
         const boxWeight = Number(selectedBox?.weight);
         if (!Number.isFinite(boxWeight) || boxWeight <= 0) {
-            alert('Box weight is missing. Please update the box first.');
+            showMessage('Box weight is missing. Please update the box first.');
             return;
         }
 
         // Validate net weight is positive
         if (!Number.isFinite(netWeight) || netWeight <= 0) {
-            alert('Computed net weight must be positive. Check weights and quantity.');
+            showMessage('Computed net weight must be positive. Check weights and quantity.');
             return;
         }
 
@@ -429,22 +458,22 @@ export function CutterReceiveForm() {
         const piecePendingWeight = pieceStatus.pendingWeight;
 
         if (pendingWeight <= 0) {
-            alert('Issue has no pending weight remaining.');
+            showMessage('Issue has no pending weight remaining.');
             return;
         }
 
         if (piecePendingWeight <= 0) {
-            alert('Piece has no pending weight remaining.');
+            showMessage('Piece has no pending weight remaining.');
             return;
         }
 
         if (netWeight > pendingWeight + 0.001) {
-            alert(`Net weight (${netWeight.toFixed(3)} kg) exceeds issue pending weight (${pendingWeight.toFixed(3)} kg).`);
+            showMessage(`Net weight (${netWeight.toFixed(3)} kg) exceeds issue pending weight (${pendingWeight.toFixed(3)} kg).`);
             return;
         }
 
         if (netWeight > piecePendingWeight + 0.001) {
-            alert(`Net weight (${netWeight.toFixed(3)} kg) exceeds piece pending weight (${piecePendingWeight.toFixed(3)} kg).`);
+            showMessage(`Net weight (${netWeight.toFixed(3)} kg) exceeds piece pending weight (${piecePendingWeight.toFixed(3)} kg).`);
             return;
         }
 
@@ -460,7 +489,7 @@ export function CutterReceiveForm() {
             pieceId: pieceIdToUse,
             lotNo: issueRecord.lotNo,
             itemId: issueRecord.itemId,
-            operatorId: issueRecord.operatorId, // Capture operator from issue
+            operatorId,
             cutId, helperId, shift, bobbinId, boxId, bobbinQty, grossWeight, isWastage, receiveDate,
             netWeight: netWeight,
             barcode: receiveBarcode,
@@ -471,43 +500,35 @@ export function CutterReceiveForm() {
             cut: cutName,
             helperName: helperName,
             shiftName: shift,
-            operatorName: db.workers.find(o => o.id === issueRecord.operatorId)?.name,
+            operatorName: db.workers.find(o => o.id === operatorId)?.name,
             bobbinName: selectedBobbin?.name,
             boxName: selectedBox?.name
         }]);
 
         const tpl = template || (await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE));
         if (tpl && receiveBarcode) {
-            const confirmPrint = window.confirm('Print sticker for this crate?');
-            if (confirmPrint) {
-                const itemName = db.items.find(i => i.id === issueRecord.itemId)?.name;
-                const machineName = db.machines.find(m => m.id === issueRecord.machineId)?.name;
-                const tareWeight = ((selectedBox?.weight || 0) + (selectedBobbin?.weight || 0) * Number(bobbinQty)).toFixed(3);
-
-                await printStageTemplate(
-                    LABEL_STAGE_KEYS.CUTTER_RECEIVE,
-                    {
-                        lotNo: issueRecord.lotNo,
-                        itemName,
-                        pieceId: pieceIdToUse,
-                        barcode: receiveBarcode,
-                        netWeight: netWeight,
-                        grossWeight,
-                        tareWeight,
-                        bobbinQty,
-                        bobbinName: selectedBobbin?.name,
-                        boxName: selectedBox?.name,
-                        cut: cutName,
-                        cutName,
-                        machineName,
-                        helperName,
-                        operatorName: db.workers.find((o) => o.id === issueRecord.operatorId)?.name,
-                        shift,
-                        date: receiveDate,
-                    },
-                    { template: tpl },
-                );
-            }
+            setPendingPrint({
+                template: tpl,
+                data: {
+                    lotNo: issueRecord.lotNo,
+                    itemName: db.items.find(i => i.id === issueRecord.itemId)?.name,
+                    pieceId: pieceIdToUse,
+                    barcode: receiveBarcode,
+                    netWeight,
+                    grossWeight,
+                    tareWeight: ((selectedBox?.weight || 0) + (selectedBobbin?.weight || 0) * Number(bobbinQty)).toFixed(3),
+                    bobbinQty,
+                    bobbinName: selectedBobbin?.name,
+                    boxName: selectedBox?.name,
+                    cut: cutName,
+                    cutName,
+                    machineName: db.machines.find(m => m.id === issueRecord.machineId)?.name,
+                    helperName,
+                    operatorName: db.workers.find(o => o.id === operatorId)?.name,
+                    shift,
+                    date: receiveDate,
+                },
+            });
         }
 
         // Reset fields for next box
@@ -521,6 +542,7 @@ export function CutterReceiveForm() {
         setSaving(true);
         try {
             const entries = cart.map(entry => ({
+                issueId: entry.issueId,
                 pieceId: entry.pieceId,
                 lotNo: entry.lotNo,
                 bobbinId: entry.bobbinId,
@@ -546,11 +568,15 @@ export function CutterReceiveForm() {
             setCart([]);
             setIssueRecord(null);
             setBarcode('');
-            const challanNo = res?.challan?.challanNo;
-            alert(challanNo ? `Received successfully. Challan ${challanNo} generated.` : 'Received successfully');
+            const challans = res?.challans || (res?.challan ? [res.challan] : []);
+            setFeedback({
+                title: 'Received successfully',
+                message: `${cart.filter(entry => !entry.isWastage).length} crates saved. ${challans.length} ${challans.length === 1 ? 'challan' : 'challans'} generated.`,
+                challans,
+            });
             barcodeInputRef.current?.focus();
         } catch (e) {
-            alert(e.message);
+            showMessage(e.message);
         } finally {
             setSaving(false);
         }
@@ -584,7 +610,7 @@ export function CutterReceiveForm() {
                                     <ReceiveSummaryMetricCard label="Lot" value={issueRecord.lotNo || '—'} />
                                     <ReceiveSummaryMetricCard label="Item" value={db.items.find(i => i.id === issueRecord.itemId)?.name || '—'} />
                                     <ReceiveSummaryMetricCard label="Machine" value={db.machines.find(m => m.id === issueRecord.machineId)?.name || '—'} />
-                                    <ReceiveSummaryMetricCard label="Operator" value={db.workers.find(o => o.id === issueRecord.operatorId)?.name || '—'} />
+                                    <ReceiveSummaryMetricCard label="Issue Operator" value={db.workers.find(o => o.id === issueRecord.operatorId)?.name || '—'} />
                                 </div>
                             </ReceiveSummaryGroup>
 
@@ -719,28 +745,35 @@ export function CutterReceiveForm() {
                 <Card className="fade-in">
                     <CardHeader><CardTitle>Receive Details</CardTitle></CardHeader>
                     <CardContent className="space-y-4">
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                             <div>
-                                <Label>Date</Label>
-                                <Input type="date" value={receiveDate} onChange={e => setReceiveDate(e.target.value)} disabled={receiveFieldsDisabled} />
+                                <Label htmlFor="cutter-receive-date">Date</Label>
+                                <Input id="cutter-receive-date" type="date" value={receiveDate} onChange={e => setReceiveDate(e.target.value)} disabled={receiveFieldsDisabled} />
                             </div>
                             <div>
-                                <Label>Cut</Label>
-                                <Select value={cutId} onChange={e => setCutId(e.target.value)} disabled={receiveFieldsDisabled}>
+                                <Label htmlFor="cutter-receive-cut">Cut</Label>
+                                <Select id="cutter-receive-cut" value={cutId} onChange={e => setCutId(e.target.value)} disabled={receiveFieldsDisabled}>
                                     <option value="">Select Cut</option>
                                     {db.cuts?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                 </Select>
                             </div>
                             <div>
-                                <Label>Helper (Optional)</Label>
-                                <Select value={helperId} onChange={e => setHelperId(e.target.value)} disabled={receiveFieldsDisabled}>
+                                <Label htmlFor="cutter-receive-operator">Operator</Label>
+                                <Select id="cutter-receive-operator" value={operatorId} onChange={e => setOperatorId(e.target.value)} disabled={receiveFieldsDisabled}>
+                                    <option value="">Select Operator</option>
+                                    {(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                </Select>
+                            </div>
+                            <div>
+                                <Label htmlFor="cutter-receive-helper">Helper (Optional)</Label>
+                                <Select id="cutter-receive-helper" value={helperId} onChange={e => setHelperId(e.target.value)} disabled={receiveFieldsDisabled}>
                                     <option value="">Select Helper</option>
                                     {(db.helpers || []).filter(h => h.processType === 'all' || h.processType === 'cutter').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                                 </Select>
                             </div>
                             <div>
-                                <Label>Shift (Optional)</Label>
-                                <Select value={shift} onChange={e => setShift(e.target.value)} disabled={receiveFieldsDisabled}>
+                                <Label htmlFor="cutter-receive-shift">Shift (Optional)</Label>
+                                <Select id="cutter-receive-shift" value={shift} onChange={e => setShift(e.target.value)} disabled={receiveFieldsDisabled}>
                                     <option value="">Select Shift</option>
                                     <option value="Day">Day</option>
                                     <option value="Night">Night</option>
@@ -750,27 +783,27 @@ export function CutterReceiveForm() {
 
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                             <div>
-                                <Label>Bobbin Type</Label>
-                                <Select value={bobbinId} onChange={e => setBobbinId(e.target.value)} disabled={receiveFieldsDisabled}>
+                                <Label htmlFor="cutter-receive-bobbin">Bobbin Type</Label>
+                                <Select id="cutter-receive-bobbin" value={bobbinId} onChange={e => setBobbinId(e.target.value)} disabled={receiveFieldsDisabled}>
                                     <option value="">Select Bobbin</option>
                                     {db.bobbins?.map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
                                 </Select>
                             </div>
                             <div>
-                                <Label>Box Type</Label>
-                                <Select value={boxId} onChange={e => setBoxId(e.target.value)} disabled={receiveFieldsDisabled}>
+                                <Label htmlFor="cutter-receive-box">Box Type</Label>
+                                <Select id="cutter-receive-box" value={boxId} onChange={e => setBoxId(e.target.value)} disabled={receiveFieldsDisabled}>
                                     <option value="">Select Box</option>
                                     {(db.boxes || []).filter(b => b.processType === 'all' || b.processType === 'cutter').map(b => <option key={b.id} value={b.id}>{b.name} ({b.weight}kg)</option>)}
                                 </Select>
                             </div>
                             <div>
-                                <Label>Bobbin Qty</Label>
-                                <Input type="number" value={bobbinQty} onChange={e => setBobbinQty(e.target.value)} disabled={receiveFieldsDisabled} />
+                                <Label htmlFor="cutter-receive-qty">Bobbin Qty</Label>
+                                <Input id="cutter-receive-qty" type="number" value={bobbinQty} onChange={e => setBobbinQty(e.target.value)} disabled={receiveFieldsDisabled} />
                             </div>
                             <div>
-                                <Label>Gross Weight</Label>
+                                <Label htmlFor="cutter-receive-gross">Gross Weight</Label>
                                 <div className="flex gap-2">
-                                    <Input type="number" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} className="flex-1" disabled={receiveFieldsDisabled} />
+                                    <Input id="cutter-receive-gross" type="number" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} className="flex-1" disabled={receiveFieldsDisabled} />
                                     <CatchWeightButton
                                         onWeightCaptured={(wt) => setGrossWeight(wt.toFixed(3))}
                                         disabled={receiveFieldsDisabled}
@@ -810,6 +843,8 @@ export function CutterReceiveForm() {
                                     <TableRow>
                                         <TableHead>Lot</TableHead>
                                         <TableHead>Details</TableHead>
+                                        <TableHead>Operator</TableHead>
+                                        <TableHead>Helper</TableHead>
                                         <TableHead className="text-right">Net Weight</TableHead>
                                         <TableHead className="w-[50px]"></TableHead>
                                     </TableRow>
@@ -833,10 +868,11 @@ export function CutterReceiveForm() {
                                                     <div>
                                                         {entry.bobbinQty} x {entry.bobbinName}
                                                         {entry.cutName && ` | ${entry.cutName}`}
-                                                        {entry.helperName && ` | ${entry.helperName}`}
                                                     </div>
                                                 )}
                                             </TableCell>
+                                            <TableCell>{entry.operatorName || '—'}</TableCell>
+                                            <TableCell>{entry.helperName || '—'}</TableCell>
                                             <TableCell className="text-right tabular-nums whitespace-nowrap">{formatKg(entry.netWeight)}</TableCell>
                                             <TableCell>
                                                 <Button variant="ghost" size="icon" onClick={() => setCart(c => c.filter(x => x.id !== entry.id))} className="h-6 w-6 text-destructive">
@@ -848,6 +884,36 @@ export function CutterReceiveForm() {
                                 </TableBody>
                             </Table>
                         </div>
+                        <div className="mt-4 rounded-md border bg-muted/30 p-3 space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <h3 className="text-sm font-semibold">Summary by worker</h3>
+                                <span className="text-sm text-muted-foreground">
+                                    {cart.filter(entry => !entry.isWastage).length} crates · {workerGroups.length} {workerGroups.length === 1 ? 'challan' : 'challans'}
+                                </span>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Operator</TableHead>
+                                            <TableHead>Helper</TableHead>
+                                            <TableHead className="text-right">Crates</TableHead>
+                                            <TableHead className="text-right">Net Weight</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {workerGroups.map(group => (
+                                            <TableRow key={group.key}>
+                                                <TableCell>{group.operatorName}</TableCell>
+                                                <TableCell>{group.helperName}</TableCell>
+                                                <TableCell className="text-right">{group.crates}</TableCell>
+                                                <TableCell className="text-right tabular-nums">{formatKg(group.netWeight)}</TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        </div>
                         <div className="mt-4 flex justify-end">
                             <Button onClick={handleSave} disabled={saving}>
                                 {saving ? 'Saving...' : <><Save className="w-4 h-4 mr-2" /> Save All</>}
@@ -857,6 +923,42 @@ export function CutterReceiveForm() {
                 </Card>
             )}
 
+            <ConfirmDialog
+                open={!!pendingPrint}
+                title="Print crate sticker"
+                message="Print sticker for this crate?"
+                confirmLabel="Print sticker"
+                cancelLabel="Skip printing"
+                destructive={false}
+                onCancel={() => setPendingPrint(null)}
+                onConfirm={async () => {
+                    const job = pendingPrint;
+                    setPendingPrint(null);
+                    try {
+                        await printStageTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE, job.data, { template: job.template });
+                    } catch (error) {
+                        showMessage(error.message || 'Failed to print sticker');
+                    }
+                }}
+            />
+            <Dialog open={!!feedback} onOpenChange={() => setFeedback(null)}>
+                <DialogContent title={feedback?.title} onOpenChange={() => setFeedback(null)} role="dialog" aria-label={feedback?.title}>
+                    <div className="space-y-4">
+                        <p className="text-sm whitespace-pre-line">{feedback?.message}</p>
+                        {feedback?.challans?.length > 0 && (
+                            <ul className="space-y-2 text-sm">
+                                {feedback.challans.map(challan => (
+                                    <li key={challan.id} className="rounded-md border p-3 flex flex-wrap justify-between gap-2">
+                                        <span className="font-medium">{challan.challanNo}</span>
+                                        <span>{db.workers.find(worker => worker.id === challan.operatorId)?.name || '—'} · {formatKg(challan.totalNetWeight)} kg</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                        <div className="flex justify-end"><Button onClick={() => setFeedback(null)}>Done</Button></div>
+                    </div>
+                </DialogContent>
+            </Dialog>
             <WastageNoteDialog
                 open={wastageDialogOpen}
                 onOpenChange={(open) => {
@@ -879,10 +981,10 @@ export function CutterReceiveForm() {
                         pieceId: pendingWastageContext.pieceId,
                         lotNo: issueRecord.lotNo,
                         itemId: issueRecord.itemId,
-                        operatorId: issueRecord.operatorId,
-                        cutId: '',
-                        helperId: '',
-                        shift: '',
+                        operatorId,
+                        cutId,
+                        helperId,
+                        shift,
                         bobbinId: '',
                         boxId: '',
                         bobbinQty: '',
@@ -893,11 +995,11 @@ export function CutterReceiveForm() {
                         netWeight: pendingWastageContext.closeWeight,
                         barcode: '',
                         itemName: db.items.find(i => i.id === issueRecord.itemId)?.name,
-                        cutName: '',
-                        cut: '',
-                        helperName: '',
+                        cutName: db.cuts.find(c => c.id === cutId)?.name,
+                        cut: db.cuts.find(c => c.id === cutId)?.name,
+                        helperName: db.workers.find(o => o.id === helperId)?.name,
                         shiftName: '',
-                        operatorName: db.workers.find(o => o.id === issueRecord.operatorId)?.name,
+                        operatorName: db.workers.find(o => o.id === operatorId)?.name,
                         bobbinName: '',
                         boxName: '',
                     }]);

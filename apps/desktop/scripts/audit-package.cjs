@@ -22,10 +22,10 @@ async function audit(directory) {
   const files = asar.listPackage(archive).map(name => name.replaceAll('\\', '/'));
   for (const name of ['src/updates/controller.cjs','src/updates/safety.cjs','src/updates/protocol.cjs']) {
     assert.ok(files.includes('/'+name), name + ' absent from packaged app');
-    assert.ok(asar.extractFile(archive, name).equals(fs.readFileSync(path.join(__dirname, '..', name))), name + ' differs from tested source');
+    assert.ok(asar.extractFile(archive, path.join(...name.split('/'))).equals(fs.readFileSync(path.join(__dirname, '..', name))), name + ' differs from tested source');
   }
   const native = files.find(name => /bindings-cpp\/prebuilds\/win32-x64\/.*\.node$/.test(name)); assert.ok(native, 'Windows x64 native SerialPort binding absent');
-  const binary = asar.extractFile(archive, native.replace(/^\//,''));
+  const binary = asar.extractFile(archive, path.join(...native.replace(/^\//,'').split('/')));
   assert.equal(binary.subarray(0,2).toString(), 'MZ'); assert.equal(binary.readUInt16LE(binary.readUInt32LE(0x3c)+4), 0x8664);
   return { passed: true, version: packageJson.version, sourceCommit: info.sourceCommit, externalKitFiles: hashes, windowsSerialBindingPresent: true, cacheIncluded: false, proprietaryDriverBinariesIncluded: false, updaterModulesIncluded: true };
 }

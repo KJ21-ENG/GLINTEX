@@ -35,7 +35,7 @@ function Invoke-Bounded([string]$File, [string[]]$Arguments, [int]$Timeout=120) 
     $process = Start-Process -FilePath $File -ArgumentList $Arguments -PassThru -RedirectStandardOutput ($logStem + '.stdout.txt') -RedirectStandardError ($logStem + '.stderr.txt')
     if (-not $process.WaitForExit($Timeout * 1000)) { $process.Kill($true); throw "Timed out: $([IO.Path]::GetFileName($File))" }
     $process.Refresh()
-    if ($process.ExitCode -ne 0) { throw "Process exited $($process.ExitCode): $([IO.Path]::GetFileName($File))" }
+    if ($process.ExitCode -ne 0) { Get-Content -Tail 18 ($logStem + '.stderr.txt') | Write-Host; throw "Process exited $($process.ExitCode): $([IO.Path]::GetFileName($File))" }
   } finally { if ($isSetup) { Remove-Item Env:GLINTEX_INSTALL_TEST -ErrorAction SilentlyContinue } }
 }
 function Stop-TestApp {
@@ -63,17 +63,18 @@ function Invoke-Uninstall([string]$Name) {
   $result.scope = 'Application registration, shortcuts and processes removed; Squirrel dead cache files explicitly recorded.'
   return $result
 }
-function Invoke-Smoke([string]$Exe, [string]$Name, [string]$Data) {
-  Invoke-SelfTest $Exe $Name $Data
+function Invoke-Smoke([string]$Exe, [string]$Name, [string]$Data, [bool]$ExpectRestoredSession=$false) {
+  Invoke-SelfTest $Exe $Name $Data $ExpectRestoredSession
   $result = Get-Content -Raw (Join-Path $OutputDirectory "$Name-reports/packaged-second.json") | ConvertFrom-Json
   if (-not $result.passed -or -not $result.packaged -or $result.platform -ne 'win32' -or $result.arch -ne 'x64') { throw "Invalid $Name report" }
   $result | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $OutputDirectory ($Name + '.json'))
 }
-function Invoke-SelfTest([string]$Exe, [string]$Name, [string]$Data) {
+function Invoke-SelfTest([string]$Exe, [string]$Name, [string]$Data, [bool]$ExpectRestoredSession=$false) {
   $env:GLINTEX_TEST_DATA = $Data
   $env:GLINTEX_TEST_REPORTS = Join-Path $OutputDirectory ($Name + '-reports')
   New-Item -ItemType Directory -Force $env:GLINTEX_TEST_REPORTS | Out-Null
-  foreach ($phase in @('first', 'second')) {
+  $firstPhase = if ($ExpectRestoredSession) { 'restored' } else { 'first' }
+  foreach ($phase in @($firstPhase, 'second')) {
     $env:GLINTEX_TEST_PHASE = $phase
     Invoke-Bounded $Exe @('--self-test') 180
   }
@@ -124,7 +125,10 @@ try {
     Start-Sleep -Seconds 8
     Stop-TestApp
     $upgradedExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    Invoke-Smoke $upgradedExe.FullName 'upgraded-smoke' $userData
+    Invoke-Smoke $upgradedExe.FullName 'upgraded-smoke' $userData $true
+    $restored = Get-Content -Raw (Join-Path $OutputDirectory 'upgraded-smoke-reports/packaged-restored.json') | ConvertFrom-Json
+    if (-not $restored.passed -or -not $restored.restoredSession -or $restored.checks -notcontains 'restored-session-after-authenticated-upgrade') { throw 'Upgrade did not preserve the authenticated session' }
+    $report.upgradeSessionPreserved = $true
     $firstVersion = (Get-Content -Raw (Join-Path $OutputDirectory 'installed-smoke.json') | ConvertFrom-Json).version
     $nextVersion = (Get-Content -Raw (Join-Path $OutputDirectory 'upgraded-smoke.json') | ConvertFrom-Json).version
     if ([version]$nextVersion -le [version]$firstVersion) { throw 'Upgrade fixture did not increase version' }

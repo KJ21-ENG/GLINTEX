@@ -114,7 +114,8 @@ async function runSelfTest({
     evaluate(
       `return (await fetch(${JSON.stringify(route)},{credentials:'include'})).status`,
     );
-  if (phase === "first" || phase === "update") {
+  if (["first", "update", "restored"].includes(phase)) {
+    if (phase !== "restored") {
     await waitFor("document.querySelector('input[type=password]')!==null");
     await assert.rejects(
       evaluate("return window.glintexDesktop.printers.listJobs()"),
@@ -129,8 +130,9 @@ async function runSelfTest({
     await evaluate(
       "document.querySelector('form button[type=submit]').click();return true;",
     );
+    }
     await waitFor("document.body.innerText.includes('Workstation setup')");
-    assert.equal(await fetchStatus("/api/auth/me"), 200);
+    assert.equal(await fetchStatus("/api/auth/me"), 200, "existing session must survive the authenticated upgrade");
     const cookies = await session.cookies.get({ name: "glintex_fixture" });
     assert.equal(cookies[0].httpOnly, true);
     assert.equal(cookies[0].sameSite, "lax");
@@ -178,6 +180,7 @@ async function runSelfTest({
     await window.reload();
     await waitFor("document.querySelector('input[type=password]')!==null");
   }
+  await session.cookies.flushStore();
   await fs.mkdir(reportDirectory, { recursive: true });
   await new Promise((resolve) => setTimeout(resolve, 400));
   const image = await window.webContents.capturePage();
@@ -190,6 +193,7 @@ async function runSelfTest({
     phase,
     version: app.getVersion(),
     sourceCommit: require('../build-info.json').sourceCommit,
+    restoredSession: phase === "restored",
     packaged: app.isPackaged,
     platform: process.platform,
     arch: process.arch,
@@ -202,7 +206,8 @@ async function runSelfTest({
       "httponly-samesite-cookie",
       "hardware-auth-gate",
       "same-origin-challan-frame-no-bridge",
-      ["first", "update"].includes(phase) ? "setup-panel" : "expiry-logout-foreign-redirect",
+      ["first", "update", "restored"].includes(phase) ? "setup-panel" : "expiry-logout-foreign-redirect",
+      ...(phase === "restored" ? ["restored-session-after-authenticated-upgrade"] : []),
       ...(phase === "update" ? ["authenticated-release-discovery", "private-installer-download-and-sha256", "later-no-install", "explicit-arm-cancel-arm", "main-process-mid-save-close-block", "fixture-only-close-confirmation-and-silent-install"] : []),
     ],
     at: new Date().toISOString(),

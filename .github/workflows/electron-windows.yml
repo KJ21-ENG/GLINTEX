@@ -1,6 +1,12 @@
-name: Electron Windows private test installer
+name: Electron Windows test installer
 on:
   workflow_dispatch:
+    inputs:
+      allow_public_artifacts:
+        description: 'Only enable after explicit owner approval: artifacts from this public repository may be accessible to authenticated repository readers.'
+        type: boolean
+        required: true
+        default: false
   push:
     branches: ['codex/electron-*']
     paths:
@@ -17,6 +23,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   windows-x64:
+    # Public repositories do not provide owner-private Actions artifact delivery.
+    # This input records an already obtained approval; it does not grant consent.
+    if: github.event.repository.private == true || (github.event_name == 'workflow_dispatch' && inputs.allow_public_artifacts == true)
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -85,7 +94,7 @@ jobs:
           $upgrade = Get-ChildItem apps/desktop/out/make/squirrel.windows/x64/*Setup.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           $packaged = Get-ChildItem apps/desktop/out/base-package/GLINTEX.exe | Select-Object -First 1
           ./apps/desktop/scripts/windows-verify.ps1 -PackagedExe $packaged.FullName -Installer $installer.FullName -UpgradeInstaller $upgrade.FullName
-      - name: Upload private installer and verification evidence
+      - name: Upload installer and verification evidence
         if: success()
         uses: actions/upload-artifact@v7
         with:

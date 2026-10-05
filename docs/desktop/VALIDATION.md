@@ -15,7 +15,7 @@ This is a local software checkpoint, **not a Windows release approval**.
 
 ## Not executed / blocked
 
-- Windows Setup.exe build, install, upgrade, uninstall/reinstall and actual packaged browser-cookie/visual tests: require Windows execution. The isolated workflow and verifier are prepared but have **not run**. GitHub CLI authentication was blocked by the VM's API network policy. No push, dispatch, publication or deployment occurred.
+- Windows Setup.exe build, install, upgrade, uninstall/reinstall and actual packaged browser-cookie/visual tests: require Windows execution. The artifact-visibility-gated workflow and verifier are prepared but have **not run**. GitHub CLI authentication was blocked by the VM's API network policy. No push, dispatch, publication or deployment occurred.
 - Linux graphical Electron launch terminated with exit 139 under denied DBus/NETLINK runtime operations. The sandbox was not disabled. The supported cloud browser also rejected the loopback visual fixture. These do not establish a Windows defect or a graphical pass.
 - Native Chromium screenshots, raster glyph quality and temporal/device behavior remain pending the Windows fixture. Recorded canvas mocks do not prove actual glyph appearance.
 - Physical scale protocol/model/accuracy, Windows driver media alignment and actual barcode scans are the owner's checklist in `../desktop-windows.md`.

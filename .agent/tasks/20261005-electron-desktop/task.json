@@ -27,7 +27,8 @@
   "external_actions": [],
   "pending_authorizations": [
     "Supported Windows execution / GitHub CLI network access",
-    "Explicit branch push and private Windows build authorization after local review"
+    "Explicit branch push and Windows build authorization after local review",
+    "Genuinely private artifact route, or explicit approval for public-repository artifact accessibility"
   ],
   "workflow_gap": "Global project-workflow skill and CLI unavailable in this VM; own provider-native thread identity recorded, no authority changes.",
   "phase": "handoff",
@@ -37,7 +38,8 @@
     "No physical scale or printer available; owner acceptance pending",
     "Existing monorepo dependency advisories remain: original49/current48; desktop production audit0",
     "Precise capture provenance stored in best-effort audit; backward-compatible backend deployment separately gated",
-    "No signing certificate configured; intended unsigned test installer"
+    "No signing certificate configured; intended unsigned test installer",
+    "Repository is public: Actions artifacts are not owner-private; workflow is fail-closed without a private repository or separately approved public-artifact manual run."
   ],
   "next_action": "Run final source checkpoint Linux packaging; retain exact source commit in artifact manifest; resume Windows build through supported authorized execution.",
   "owned_files": [

@@ -267,6 +267,7 @@ async function start() {
       mainWindow.close();
     })().catch(async error => {
       await updater.disarm();
+      if (selfTest) { console.error(error); app.exit(1); return; }
       await dialog.showMessageBox(mainWindow, { type: "error", title: "Update stopped", message: error.message });
     }).finally(() => {
       closeChecking = false;
@@ -454,6 +455,14 @@ async function start() {
     app.quit();
   }
 }
+// Quit must wait for asynchronous close preflight/helper acknowledgement just
+// like clicking the window's close button. Re-enter quit only after approval.
+app.on('before-quit', event => {
+  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && ['armed','installing'].includes(updater?.status().state)) {
+    event.preventDefault();
+    mainWindow.close();
+  }
+});
 app.on("will-quit", () => {
   for (const timer of updateTimers) { clearTimeout(timer); clearInterval(timer); }
   fixtureServer?.close();

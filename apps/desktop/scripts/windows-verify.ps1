@@ -171,6 +171,8 @@ try {
   $report.passed = $true
 } catch { $report.error = $_.Exception.Message; throw }
 finally {
+  $helperStatus = Join-Path $userData 'updates/install-status.json'
+  if (Test-Path $helperStatus) { Copy-Item $helperStatus (Join-Path $OutputDirectory 'update-helper-status.json') }
   foreach ($log in @((Join-Path $env:LOCALAPPDATA 'SquirrelTemp/SquirrelSetup.log'), (Join-Path $env:TEMP 'SquirrelTemp/SquirrelSetup.log'), (Join-Path $env:TEMP 'SquirrelSetup.log'), (Join-Path $installRoot 'SquirrelSetup.log'))) {
     if (Test-Path $log) { Copy-Item $log (Join-Path $OutputDirectory ('squirrel-' + (Split-Path (Split-Path $log) -Leaf) + '.txt')) }
   }

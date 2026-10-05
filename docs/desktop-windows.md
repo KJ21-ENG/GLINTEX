@@ -168,7 +168,7 @@ refresh/push or dispatch a new release.
 
 ## Upgrade, rollback and recovery
 
-Version 1.1.0 checks the private first-party service after startup (30 seconds) and every six hours, with **Check for updates** in the GLINTEX menu/workstation panel. It shows offline, sign-in, unavailable and no-new-version states. Discovery never downloads or installs automatically. **Later** hides that version's prompt for six hours; a manual check can show it sooner.
+Version 1.1.0 checks the private first-party service after startup (30 seconds) and every six hours, with **Check for updates** in the GLINTEX menu/workstation panel. It shows offline, sign-in, unavailable and no-new-version states. Discovery never downloads or installs automatically. **Later** hides that version's prompt for six hours in the current session; a manual check can show it sooner.
 
 Choose **Download update** to use the existing HttpOnly session at the fixed HTTPS installer endpoint. Redirects, other origins, unsupported manifests, downgrades, wrong size and SHA-256 mismatches are rejected. Interrupted/cancelled downloads are not installable. Release version/date/notes appear first. No GitHub token or signing secret is in the client. The candidate is an **unsigned test installer**: trusted HTTPS and hash validation establish source/integrity, not Windows publisher signing; OS warnings remain enabled.
 

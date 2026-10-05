@@ -111,6 +111,7 @@ export default function DesktopWorkstation() {
         {update.state === 'ready' && <button type="button" className={buttonClass} onClick={() => updateAction(bridge.updates.arm)}>Install after I close GLINTEX</button>}
         {update.state === 'armed' && <button type="button" className={buttonClass} onClick={() => updateAction(bridge.updates.disarm)}>Cancel installation choice</button>}
         {['available','ready','error'].includes(update.state) && <button type="button" className={buttonClass} onClick={() => updateAction(bridge.updates.later)}>Later</button>}
+        {!update.release && ['current','signin','unavailable'].includes(update.state) && update.prompt && <button type="button" className={buttonClass} onClick={() => updateAction(bridge.updates.later)}>Dismiss</button>}
       </div>
       {update.release && <p className="text-xs">Private download uses your GLINTEX sign-in and verifies installer size and SHA-256. This is an unsigned test installer. Finish and save work, disconnect the scale and check the Windows print queue before closing; a final confirmation is required. Windows will not be restarted.</p>}
     </section>}

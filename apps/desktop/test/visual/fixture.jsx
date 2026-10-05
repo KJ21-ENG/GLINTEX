@@ -29,6 +29,7 @@ window.fixtureScaleConnected = value => { connected = value; };
 window.glintexDesktop.getController = async () => ({ version: '1.1.0-fixture', scaleDriver: { available: true } });
 let updateState = { state: 'current', installedVersion: '1.1.0', message: 'No newer version is available.' }, updateListener;
 const setUpdate = values => { updateState = { ...updateState, ...values }; updateListener?.(updateState); return updateState; };
+window.fixtureUpdateFeedback = state => setUpdate({ state, release: null, prompt: true, message: ({current:'No newer version is available.',signin:'Sign in again to check private updates.',unavailable:'Private update hosting is unavailable.',error:'Could not check for updates. Check your connection and retry.'})[state] });
 window.fixtureUpdateChoice = 0;
 window.glintexDesktop.updates = {
   status: async () => updateState, onStatus: callback => { updateListener = callback; return () => { updateListener = null; }; },

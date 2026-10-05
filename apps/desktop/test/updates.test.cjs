@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
-const { UpdateController } = require('../src/updates/controller.cjs');
+const { UpdateController, launchCommand } = require('../src/updates/controller.cjs');
 const { validateRelease, compareVersions } = require('../src/updates/protocol.cjs');
 const { updateBlockReason } = require('../src/updates/safety.cjs');
 const bytes = Buffer.from('disposable Windows installer fixture');
@@ -68,6 +68,34 @@ test('cached-file tampering, redirects and unsupported platform stop installatio
 });
 test('same-version and rollback manifests cannot become download authority', async t => {
   for (const version of ['1.1.0','1.0.9']) { const { c } = await fixture(t, () => new Response(JSON.stringify({ ...release, version }))); assert.equal((await c.check()).state, 'current'); await assert.rejects(c.download()); }
+});
+test('manual checks expose no-update, expired-session, unavailable and offline feedback', async t => {
+  for (const status of [204,401,503]) {
+    const { c } = await fixture(t, () => new Response(null, { status }));
+    assert.equal((await c.check({ manual: true })).prompt, true);
+    c.later(); assert.equal(c.status().prompt, false);
+  }
+  const { c } = await fixture(t, () => { throw Error('offline'); });
+  assert.equal((await c.check({ manual: true })).state, 'error'); assert.equal(c.status().prompt, true);
+});
+test('Windows handoff waits for the parent, rehashes and records installer failure without renderer commands', () => {
+  const script = launchCommand({ file: "C:\\Users\\O'Brien\\updates\\Setup.exe", marker: 'C:\\updates\\approved.json', statusFile: 'C:\\updates\\status.json', parentPid: 123, release });
+  assert.ok(script.includes("O''Brien")); assert.ok(script.includes('Get-Process -Id 123'));
+  assert.ok(script.includes('Get-FileHash')); assert.ok(script.includes("Report 'waiting'")); assert.ok(script.includes("Report 'failed'"));
+  assert.ok(script.includes('-PassThru -Wait')); assert.equal(script.includes('--silent'), false);
+});
+test('failed helper status stays visible on next launch but cannot supply installation authority', async t => {
+  const { c, directory } = await fixture(t); await c.check(); await c.download();
+  await fs.writeFile(path.join(directory,'install-status.json'), JSON.stringify({ state:'failed', version:release.version, command:'do not run', message:'do not display' }));
+  const restarted = await new UpdateController({ version:'1.1.0', directory, supported:true, fetch:async()=>new Response(JSON.stringify(release)) }).initialize();
+  assert.equal(restarted.status().state,'error'); assert.equal(restarted.status().prompt,true);
+  assert.equal(restarted.status().message.includes('do not'),false); await assert.rejects(restarted.arm(),/verified/);
+  assert.equal((await restarted.check({manual:true})).state,'ready');
+});
+test('helper startup failure cancels the install marker and retains the verified cache', async t => {
+  const { c } = await fixture(t,null,{launch:async()=>{throw Error('helper did not acknowledge');}});
+  await c.check();await c.download();await c.arm();await assert.rejects(c.installAfterExit({safety:()=>null}),/acknowledge/);
+  await assert.rejects(fs.stat(c.marker),{code:'ENOENT'});assert.equal(c.status().state,'ready');assert.equal(await c.verified(),true);
 });
 test('cancelled transfer removes the partial file and remains retryable', async t => {
   let downloadStarted;

@@ -13,12 +13,36 @@ async function hashFile(file) {
   return hash.digest("hex");
 }
 const quote = value => "'" + String(value).replaceAll("'", "''") + "'";
-function launchAfterExit({ file, release, marker, parentPid, silent = false }) {
+function launchCommand({ file, release, marker, parentPid, silent = false, statusFile }) {
   // Fixed PowerShell command, no renderer paths/arguments; rehash after app exit.
-  const command = `$ErrorActionPreference='Stop'; $deadline=(Get-Date).AddSeconds(120); while(Get-Process -Id ${parentPid} -ErrorAction SilentlyContinue){if(-not(Test-Path -LiteralPath ${quote(marker)}) -or (Get-Date) -gt $deadline){exit 2}; Start-Sleep -Milliseconds 250}; if(-not(Test-Path -LiteralPath ${quote(marker)})){exit 2}; if((Get-Item -LiteralPath ${quote(file)}).Length -ne ${release.bytes} -or (Get-FileHash -LiteralPath ${quote(file)} -Algorithm SHA256).Hash -ine '${release.sha256}'){throw 'Update integrity check failed'}; Remove-Item -LiteralPath ${quote(marker)}; Start-Process -FilePath ${quote(file)}${silent ? " -ArgumentList '--silent'" : ""}`;
+  return `$ErrorActionPreference='Stop'; function Report([string]$state,[string]$message=''){ @{state=$state; message=$message; version=${quote(release.version)}; parentPid=${parentPid}; at=(Get-Date).ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress | Set-Content -LiteralPath ${quote(statusFile)} -Encoding UTF8 }; try { Report 'waiting'; $deadline=(Get-Date).AddSeconds(120); while(Get-Process -Id ${parentPid} -ErrorAction SilentlyContinue){if(-not(Test-Path -LiteralPath ${quote(marker)}) -or (Get-Date) -gt $deadline){Report 'cancelled'; exit 2}; Start-Sleep -Milliseconds 250}; if(-not(Test-Path -LiteralPath ${quote(marker)})){Report 'cancelled'; exit 2}; Report 'parent-closed'; if((Get-Item -LiteralPath ${quote(file)}).Length -ne ${release.bytes} -or (Get-FileHash -LiteralPath ${quote(file)} -Algorithm SHA256).Hash -ine '${release.sha256}'){throw 'Update integrity check failed'}; Remove-Item -LiteralPath ${quote(marker)}; Report 'verified'; $installer=Start-Process -FilePath ${quote(file)} -WorkingDirectory ${quote(path.win32.dirname(file))}${silent ? " -ArgumentList '--silent'" : ""} -PassThru -Wait; if($installer.ExitCode -ne 0){throw ('Installer exited '+$installer.ExitCode)}; Report 'completed' } catch { Report 'failed' $_.Exception.Message; exit 1 }`;
+}
+async function launchAfterExit(options) {
+  const statusFile = path.join(path.dirname(options.marker), 'install-status.json');
+  await fs.rm(statusFile, { force: true });
+  const command = launchCommand({ ...options, statusFile });
   const executable = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const child = spawn(executable, ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")], { detached: true, windowsHide: true, stdio: "ignore" });
-  return new Promise((resolve, reject) => { child.once("error", reject); child.once("spawn", () => { child.unref(); resolve(); }); });
+  // A successful spawn does not prove PowerShell parsed/started the helper. Keep
+  // the application open until the helper acknowledges it is waiting for us.
+  let failure;
+  child.once('error', error => { failure = error; });
+  child.once('exit', code => { failure = new Error(`Update helper exited before acknowledgement (${code})`); });
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (failure) throw failure;
+    try {
+      const text = await fs.readFile(statusFile, 'utf8');
+      if (text.length <= 4096) {
+        const status = JSON.parse(text.replace(/^\uFEFF/, ''));
+        if (status.state === 'waiting' && status.parentPid === options.parentPid && status.version === options.release.version) { child.unref(); return; }
+        if (status.state === 'failed') throw new Error('The Windows update helper could not start. GLINTEX remains open.');
+      }
+    } catch (error) { if (!['ENOENT'].includes(error.code) && !(error instanceof SyntaxError)) { child.kill(); throw error; } }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  child.kill();
+  throw new Error('The Windows update helper did not acknowledge startup. GLINTEX remains open.');
 }
 class UpdateController extends EventEmitter {
   constructor({ version, directory, fetch, origin = "https://app.glintex.in", supported = process.platform === "win32" && process.arch === "x64", fixture = false, launch = launchAfterExit, clock = Date.now }) {
@@ -39,6 +63,11 @@ class UpdateController extends EventEmitter {
       const release = validateRelease(JSON.parse(await fs.readFile(path.join(this.directory, "ready.json"), "utf8")));
       if (compareVersions(release.version, this.version) > 0 && await this.verified(release)) this.set({ state: "ready", release, message: "Previously downloaded update verified. Installation requires your choice." });
     } catch { /* Missing/damaged cached metadata is never installation authority. */ }
+    try {
+      const text = await fs.readFile(path.join(this.directory, 'install-status.json'), 'utf8');
+      const status = text.length <= 4096 && JSON.parse(text.replace(/^\uFEFF/, ''));
+      if (status?.state === 'failed' && status.version === this.data.release?.version) this.set({ state: 'error', prompt: true, message: 'The previous update did not complete. GLINTEX is still on the installed version. Check for updates and retry; local details are in updates/install-status.json.' });
+    } catch { /* Diagnostic status never supplies a command or install authority. */ }
     return this;
   }
   file(release = this.data.release) { return path.join(this.directory, `GLINTEX-${release.version}-x64-Setup.exe`); }
@@ -64,7 +93,7 @@ class UpdateController extends EventEmitter {
     return this.checking;
   }
   async performCheck(manual) {
-    this.set({ state: "checking", message: "Checking the private GLINTEX release service…" });
+    this.set({ state: "checking", ...(manual ? { prompt: true } : {}), message: "Checking the private GLINTEX release service…" });
     try {
       const response = await this.request("/latest", AbortSignal.timeout(10000));
       if (response.status === 204) return this.set({ state: "current", release: null, checkedAt: this.clock(), message: "No published update is available." });
@@ -147,4 +176,4 @@ class UpdateController extends EventEmitter {
     return this.status();
   }
 }
-module.exports = { UpdateController, hashFile, launchAfterExit };
+module.exports = { UpdateController, hashFile, launchAfterExit, launchCommand };

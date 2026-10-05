@@ -13,7 +13,9 @@ async function main() {
     bundle: true,
     outdir: output,
     format: "esm",
-    define: { "import.meta.env": '{VITE_API_BASE:"http://127.0.0.1:4188"}' },
+    define: {
+      "import.meta.env": JSON.stringify({ VITE_API_BASE: "http://127.0.0.1:4188" }),
+    },
     loader: { ".woff2": "file", ".woff": "file" },
     nodePaths: [
       path.join(root, "apps/frontend/node_modules"),

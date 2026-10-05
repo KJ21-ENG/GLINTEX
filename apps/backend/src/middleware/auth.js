@@ -101,6 +101,36 @@ export function requirePermission(permissionKey, minLevel = ACCESS_LEVELS.READ) 
   };
 }
 
+const STICKER_TEMPLATE_PERMISSIONS = {
+  inbound: 'inbound',
+  cutter_issue: 'issue.cutter',
+  cutter_issue_small: 'issue.cutter',
+  holo_issue: 'issue.holo',
+  coning_issue: 'issue.coning',
+  cutter_receive: 'receive.cutter',
+  holo_receive: 'receive.holo',
+  coning_receive: 'receive.coning',
+  coning_receive_small: 'receive.coning',
+};
+
+export function requireStickerTemplateRead(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'unauthorized' });
+  const stageKey = String(req.params.stageKey || '').trim();
+  if (!Object.prototype.hasOwnProperty.call(STICKER_TEMPLATE_PERMISSIONS, stageKey)) {
+    return res.status(404).json({ error: 'Template not found' });
+  }
+  const stagePermission = STICKER_TEMPLATE_PERMISSIONS[stageKey];
+  // Stock/history readers can print; opening stock uses inbound/receive artwork.
+  // Reading that artwork grants no Settings or receipt mutation authority.
+  const allowed = hasPermissionLevel(req, 'settings', ACCESS_LEVELS.READ)
+    || hasPermissionLevel(req, stagePermission, ACCESS_LEVELS.READ)
+    || hasPermissionLevel(req, 'stock', ACCESS_LEVELS.READ)
+    || ((stagePermission === 'inbound' || stagePermission.startsWith('receive.'))
+      && hasPermissionLevel(req, 'opening_stock', ACCESS_LEVELS.READ));
+  if (!allowed) return res.status(403).json({ error: 'forbidden' });
+  next();
+}
+
 function requireActionPermission(baseKey, actionKey) {
   return function requireActionPermissionMiddleware(req, res, next) {
     if (!req.user) return res.status(401).json({ error: 'unauthorized' });

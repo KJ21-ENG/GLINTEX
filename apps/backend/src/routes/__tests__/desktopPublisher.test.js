@@ -18,6 +18,12 @@ test('publisher verifies private candidate, rejects higher fixture/failed tests 
   await fs.writeFile(verification,JSON.stringify({...report,passed:false})); await assert.rejects(publishDesktopRelease(args),/Verified/);
   await fs.writeFile(verification,JSON.stringify({...report,bootstrapTo:'1.1.1'})); await assert.rejects(publishDesktopRelease(args),/Verified/);
   for(const patch of [{sourceCommit:'c'.repeat(40)},{installerSha256:'c'.repeat(64)},{runId:'other'},{sourceTree:'c'.repeat(40)},{installerBytes:bytes.length+1}]) { await fs.writeFile(verification,JSON.stringify({...report,...patch})); await assert.rejects(publishDesktopRelease(args),/evidence/); }
+  for(const sourceTree of [undefined, 'invalid']) {
+    await fs.writeFile(path.join(delivery,'release-identity.json'),JSON.stringify({...identity,sourceTree}));
+    await fs.writeFile(verification,JSON.stringify({...report,sourceTree}));
+    await assert.rejects(publishDesktopRelease(args),/evidence/);
+  }
+  await fs.writeFile(path.join(delivery,'release-identity.json'),JSON.stringify(identity));
   await fs.writeFile(verification,JSON.stringify(report)); await fs.writeFile(path.join(delivery,name),'wrong'); await assert.rejects(publishDesktopRelease(args),/integrity/);
   await fs.writeFile(path.join(delivery,name),bytes); const release = await publishDesktopRelease(args); assert.equal(release.version,'1.1.0');
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(directory,'latest.json'))),{version:'1.1.0'});

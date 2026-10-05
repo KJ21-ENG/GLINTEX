@@ -63,6 +63,16 @@ function Invoke-Uninstall([string]$Name) {
   $result.scope = 'Application registration, shortcuts and processes removed; Squirrel dead cache files explicitly recorded.'
   return $result
 }
+function Get-InstalledVersionExe([string]$Version) {
+  $exe = Join-Path $installRoot "app-$Version/GLINTEX.exe"
+  if (-not (Test-Path $exe)) { throw "Expected installed application $Version is missing" }
+  $registration = @(Get-ChildItem 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall' -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DisplayName -eq 'GLINTEX' })
+  if ($registration.Count -ne 1 -or $registration[0].DisplayVersion -ne $Version) { throw "Windows application registration does not select $Version" }
+  $index = Join-Path $installRoot 'packages/RELEASES'
+  $versions = @(Get-Content $index | ForEach-Object { if ($_ -match '(?<version>\d+\.\d+\.\d+)-full\.nupkg') { [version]$Matches.version } } | Sort-Object -Descending)
+  if ($versions.Count -eq 0 -or $versions[0].ToString() -ne $Version) { throw "Squirrel release index does not select $Version" }
+  return Get-Item $exe
+}
 function Invoke-Smoke([string]$Exe, [string]$Name, [string]$Data, [bool]$ExpectRestoredSession=$false) {
   Invoke-SelfTest $Exe $Name $Data $ExpectRestoredSession
   $result = Get-Content -Raw (Join-Path $OutputDirectory "$Name-reports/packaged-second.json") | ConvertFrom-Json
@@ -90,7 +100,8 @@ try {
   Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
   Start-Sleep -Seconds 8
   Stop-TestApp
-  $installedExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object FullName -Descending | Select-Object -First 1
+  $candidateVersion = (Get-Content -Raw (Join-Path $sourceRoot 'apps/desktop/package.json') | ConvertFrom-Json).version
+  $installedExe = Get-InstalledVersionExe $candidateVersion
   if (-not $installedExe) { throw 'Installed executable missing' }
   Invoke-Smoke $installedExe.FullName 'installed-smoke' $userData
   if ((Get-Content -Raw (Join-Path $OutputDirectory 'installed-smoke.json') | ConvertFrom-Json).sourceCommit -ne $report.sourceCommit) { throw 'Installed runtime source identity mismatch' }
@@ -124,7 +135,7 @@ try {
     while (-not (Test-Path (Join-Path $installRoot "app-$next/GLINTEX.exe"))) { if ((Get-Date) -gt $deadline) { throw 'User-controlled update installer did not create the next-version application' }; Start-Sleep -Seconds 2 }
     Start-Sleep -Seconds 8
     Stop-TestApp
-    $upgradedExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $upgradedExe = Get-InstalledVersionExe $next
     Invoke-Smoke $upgradedExe.FullName 'upgraded-smoke' $userData $true
     $restored = Get-Content -Raw (Join-Path $OutputDirectory 'upgraded-smoke-reports/packaged-restored.json') | ConvertFrom-Json
     if (-not $restored.passed -or -not $restored.restoredSession -or $restored.checks -notcontains 'restored-session-after-authenticated-upgrade') { throw 'Upgrade did not preserve the authenticated session' }
@@ -144,7 +155,7 @@ try {
   Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
   Start-Sleep -Seconds 8
   Stop-TestApp
-  $reinstalledExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  $reinstalledExe = Get-InstalledVersionExe $candidateVersion
   Invoke-Smoke $reinstalledExe.FullName 'reinstalled-smoke' $userData
   $originalVersion = (Get-Content -Raw (Join-Path $OutputDirectory 'installed-smoke.json') | ConvertFrom-Json).version
   $reinstalledVersion = (Get-Content -Raw (Join-Path $OutputDirectory 'reinstalled-smoke.json') | ConvertFrom-Json).version
@@ -161,7 +172,7 @@ try {
     if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-1.0.0.json') | ConvertFrom-Json).version -ne '1.0.0') { throw 'Bootstrap fixture is not the delivered 1.0.0' }
     Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
     Start-Sleep -Seconds 8; Stop-TestApp
-    $bootstrappedExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $bootstrappedExe = Get-InstalledVersionExe $candidateVersion
     Invoke-Smoke $bootstrappedExe.FullName 'bootstrap-upgraded' $userData
     if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-upgraded.json') | ConvertFrom-Json).version -ne $originalVersion) { throw 'Manual 1.0.0 bootstrap did not select the candidate' }
     if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Manual bootstrap changed workstation settings or queue' }

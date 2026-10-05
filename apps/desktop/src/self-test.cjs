@@ -68,6 +68,9 @@ async function runSelfTest({
   reportDirectory,
   phase = "first",
 }) {
+  // An explicit disposable self-test needs painted screenshots of current UI.
+  // Normal launches never enter this fixture function.
+  window.showInactive();
   const evaluate = (code) =>
     window.webContents.executeJavaScript(`(async()=>{${code}})()`);
   const waitFor = async (code) => {
@@ -139,6 +142,7 @@ async function runSelfTest({
     await waitFor("document.querySelector('input[type=password]')!==null");
   }
   await fs.mkdir(reportDirectory, { recursive: true });
+  await new Promise((resolve) => setTimeout(resolve, 400));
   const image = await window.webContents.capturePage();
   await fs.writeFile(
     path.join(reportDirectory, `packaged-${phase}.png`),

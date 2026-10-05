@@ -34,8 +34,8 @@ async function run(){
   const printed=full.getContext('2d').getImageData(Math.round((template.dimensions.marginLeft||0)*203/25.4),Math.round((template.dimensions.marginTop||0)*203/25.4),p.canvas.width,p.canvas.height).data;
   let different=0;for(let i=0;i<preview.length;i++)if(preview[i]!==printed[i])different++;
   const section=document.createElement('section');section.className='label-card';section.innerHTML=`<h2>${stage}</h2><p>${a.widthMm} × ${a.heightMm} mm / ${img.width} × ${img.height} pixels / 203 dpi / differing bytes: ${different}</p>`;img.style.width=Math.round(a.widthMm*3.78)+'px';img.alt=stage+' canonical print artifact';section.append(img);document.getElementById('labels').append(section);
-  await fetch('/results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:stage,png:a.pages[0].pngDataUrl,dimensions:{widthMm:a.widthMm,heightMm:a.heightMm,widthPx:img.width,heightPx:img.height},different})});
-  results.push({stage,different,width:img.width,height:img.height});
+  await fetch('/results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:stage,png:a.pages[0].pngDataUrl,dimensions:{widthMm:a.widthMm,heightMm:a.heightMm,widthPx:img.naturalWidth,heightPx:img.naturalHeight},different})});
+  results.push({stage,different,width:img.naturalWidth,height:img.naturalHeight});
  }
  const status=document.getElementById('results');status.textContent=JSON.stringify({completed:results.length,results});status.dataset.finished='true';
 }

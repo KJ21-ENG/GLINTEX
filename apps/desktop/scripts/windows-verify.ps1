@@ -30,6 +30,26 @@ function Stop-TestApp {
   Get-Process -Name GLINTEX -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force
   Start-Sleep -Seconds 2
 }
+function Invoke-Uninstall([string]$Name) {
+  Invoke-Bounded (Join-Path $installRoot 'Update.exe') @('--uninstall','--silent')
+  $remaining = @()
+  for ($attempt = 0; $attempt -lt 30; $attempt++) {
+    $remaining = @(Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Directory.Name -like 'app-*' })
+    if ($remaining.Count -eq 0) { break }
+    Start-Sleep -Seconds 2
+  }
+  $shortcuts = @(Get-ChildItem (Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs'), ([Environment]::GetFolderPath('Desktop')) -Filter '*GLINTEX*.lnk' -Recurse -ErrorAction SilentlyContinue)
+  $registration = @(Get-ChildItem 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall' -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DisplayName -eq 'GLINTEX' -or ($_.UninstallString -and $_.UninstallString.Contains($installRoot)) })
+  $processes = @(Get-Process -Name GLINTEX -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase) })
+  $allExecutables = @(Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+  $dead = Test-Path (Join-Path $installRoot '.dead')
+  $result = @{ versionedExecutables=@($remaining | ForEach-Object { $_.FullName }); remainingLaunchers=$allExecutables; deadMarker=$dead; shortcutCount=$shortcuts.Count; registrationCount=$registration.Count; runningProcessCount=$processes.Count }
+  $result | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $OutputDirectory ($Name + '.json'))
+  if ($remaining.Count -gt 0) { throw 'Uninstall left versioned application executables' }
+  if ($shortcuts.Count -gt 0 -or $registration.Count -gt 0 -or $processes.Count -gt 0) { throw 'Uninstall left an active shortcut, registration or process' }
+  if ($allExecutables.Count -gt 0 -and -not $dead) { throw 'Retained launcher lacks the Squirrel dead marker' }
+  return $result
+}
 function Invoke-Smoke([string]$Exe, [string]$Name, [string]$Data) {
   Invoke-SelfTest $Exe $Name $Data
   $result = Get-Content -Raw (Join-Path $OutputDirectory "$Name-reports/packaged-second.json") | ConvertFrom-Json
@@ -84,9 +104,7 @@ try {
     $report.upgradePreserved = $true
     $report.upgradeFrom = $firstVersion; $report.upgradeTo = $nextVersion
   }
-  Invoke-Bounded (Join-Path $installRoot 'Update.exe') @('--uninstall','--silent')
-  Start-Sleep -Seconds 5
-  if (Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse -ErrorAction SilentlyContinue) { throw 'Uninstall left application executables' }
+  $report.uninstallDetails = Invoke-Uninstall 'uninstall-details'
   if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Uninstall removed or changed retained workstation data' }
   $report.uninstall = $true
   # Reinstall the original candidate after uninstall, retaining profile/queue data.
@@ -97,10 +115,16 @@ try {
   Invoke-Smoke $reinstalledExe.FullName 'reinstalled-smoke' $userData
   if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Reinstall changed retained settings or queue marker' }
   $report.reinstallPreserved = $true
-  Invoke-Bounded (Join-Path $installRoot 'Update.exe') @('--uninstall','--silent')
+  $report.finalUninstallDetails = Invoke-Uninstall 'final-uninstall-details'
+  if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Final uninstall changed retained settings or queue marker' }
+  $report.installerSignature = (Get-AuthenticodeSignature ([IO.Path]::GetFullPath($Installer))).Status.ToString()
+  $report.settingsSha256 = $beforeSettings.ToLower(); $report.queueMarkerSha256 = $beforeQueue.ToLower()
   $report.passed = $true
 } catch { $report.error = $_.Exception.Message; throw }
 finally {
+  foreach ($log in @((Join-Path $env:LOCALAPPDATA 'SquirrelTemp/SquirrelSetup.log'), (Join-Path $installRoot 'SquirrelSetup.log'))) {
+    if (Test-Path $log) { Copy-Item $log (Join-Path $OutputDirectory ('squirrel-' + (Split-Path (Split-Path $log) -Leaf) + '.txt')) }
+  }
   $report.completedAt = (Get-Date).ToUniversalTime().ToString('o')
   $report | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $OutputDirectory 'windows-verification.json')
   Remove-Item Env:GLINTEX_TEST_DATA, Env:GLINTEX_SMOKE_REPORT, Env:GLINTEX_TEST_REPORTS, Env:GLINTEX_TEST_PHASE -ErrorAction SilentlyContinue

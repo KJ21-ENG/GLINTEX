@@ -66,6 +66,7 @@ async function main() {
     console.log("Visual renderer:", message || details?.message || details);
   });
   await win.loadURL(origin + "/");
+  win.showInactive();
   let result;
   for (let i = 0; i < 120; i++) {
     result = await win.webContents.executeJavaScript(

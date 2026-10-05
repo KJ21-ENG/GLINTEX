@@ -21,10 +21,18 @@ async function launchAfterExit(options) {
   const statusFile = path.join(path.dirname(options.marker), 'install-status.json');
   await fs.rm(statusFile, { force: true });
   const command = launchCommand({ ...options, statusFile });
-  const executable = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  // Windows detached-console mode makes Windows PowerShell exit before executing.
-  // An unreferenced hidden process with ignored stdio survives our exit.
-  const child = spawn(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")], { windowsHide: true, stdio: "ignore" });
+  const hostDirectory = options.hostDirectory || path.join(process.resourcesPath, 'update-host');
+  const identity = JSON.parse(await fs.readFile(path.join(hostDirectory, 'identity.json'), 'utf8'));
+  const bundledHost = path.join(hostDirectory, 'GLINTEXUpdateHost.exe');
+  if (!/^[a-f0-9]{64}$/.test(identity.binarySha256) || identity.bytes > 1024 * 1024 || (await fs.stat(bundledHost)).size !== identity.bytes || await hashFile(bundledHost) !== identity.binarySha256) throw Error('Bundled Windows update host failed integrity verification');
+  // Copy outside Squirrel's installation folders so the installer cannot kill
+  // or remove its own waiting helper. The name/hash never comes from a renderer.
+  const executable = path.join(path.dirname(options.marker), `GLINTEXUpdateHost-${identity.binarySha256.slice(0,16)}.exe`);
+  try { if (await hashFile(executable) !== identity.binarySha256) await fs.copyFile(bundledHost, executable); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; await fs.copyFile(bundledHost, executable); }
+  // A GUI host can detach without a console. It starts PowerShell outside the
+  // libuv job that is otherwise terminated when this application exits.
+  const child = spawn(executable, [Buffer.from(command, "utf16le").toString("base64")], { detached: true, windowsHide: true, stdio: "ignore" });
   // A successful spawn does not prove PowerShell parsed/started the helper. Keep
   // the application open until the helper acknowledges it is waiting for us.
   let failure;

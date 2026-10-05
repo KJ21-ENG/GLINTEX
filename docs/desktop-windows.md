@@ -107,6 +107,8 @@ No automatic update feed is configured. Finish capture/save/print, close GLINTEX
 
 To roll back, preserve current data and note uncertain jobs, uninstall through Windows Apps & Features and install the prior verified release. Restore an appropriate backup only if its settings/queue schema is compatible. Never delete the profile as an upgrade shortcut or replay uncertain jobs automatically. Cloud/database rollback is outside this workstation procedure.
 
+Squirrel uninstallation removes application registration and shortcuts, and marks the install directory `.dead`. Its best-effort cleanup can leave cached application files. Verification reports list any residual executables and distinguish registered-app removal from complete file removal; they also require no running GLINTEX process and verify the original version after reinstall. Residual cache files must not be described as fully removed. Do not manually delete the separate `%APPDATA%\GLINTEX` workstation profile during routine uninstall or rollback.
+
 - Server/session failure: reconnect/sign in; do not disable web security or alter cookies manually
 - Scale busy/unavailable: verify exact identity and close competing software; unsupported frames need documented protocol work
 - Wrong label size: confirm physical roll/DPI/driver stock/margins and calibration offsets; do not add preview-only scaling

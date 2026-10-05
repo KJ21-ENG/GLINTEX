@@ -20,7 +20,9 @@ function Invoke-Bounded([string]$File, [string[]]$Arguments, [int]$Timeout=120) 
   $isSetup = [IO.Path]::GetFileName($File) -like '*Setup.exe'
   if ($isSetup) { $env:GLINTEX_INSTALL_TEST = '1' }
   try {
-    $process = Start-Process -FilePath $File -ArgumentList $Arguments -PassThru
+    $script:processSequence++
+    $logStem = Join-Path $OutputDirectory ("process-$script:processSequence-" + [IO.Path]::GetFileName($File))
+    $process = Start-Process -FilePath $File -ArgumentList $Arguments -PassThru -RedirectStandardOutput ($logStem + '.stdout.txt') -RedirectStandardError ($logStem + '.stderr.txt')
     if (-not $process.WaitForExit($Timeout * 1000)) { $process.Kill($true); throw "Timed out: $([IO.Path]::GetFileName($File))" }
     $process.Refresh()
     if ($process.ExitCode -ne 0) { throw "Process exited $($process.ExitCode): $([IO.Path]::GetFileName($File))" }
@@ -45,9 +47,10 @@ function Invoke-Uninstall([string]$Name) {
   $dead = Test-Path (Join-Path $installRoot '.dead')
   $result = @{ versionedExecutables=@($remaining | ForEach-Object { $_.FullName }); remainingLaunchers=$allExecutables; deadMarker=$dead; shortcutCount=$shortcuts.Count; registrationCount=$registration.Count; runningProcessCount=$processes.Count }
   $result | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $OutputDirectory ($Name + '.json'))
-  if ($remaining.Count -gt 0) { throw 'Uninstall left versioned application executables' }
   if ($shortcuts.Count -gt 0 -or $registration.Count -gt 0 -or $processes.Count -gt 0) { throw 'Uninstall left an active shortcut, registration or process' }
-  if ($allExecutables.Count -gt 0 -and -not $dead) { throw 'Retained launcher lacks the Squirrel dead marker' }
+  if ($allExecutables.Count -gt 0 -and -not $dead) { throw 'Residual application cache lacks the Squirrel dead marker' }
+  $result.completeFileRemoval = $allExecutables.Count -eq 0
+  $result.scope = 'Application registration, shortcuts and processes removed; Squirrel dead cache files explicitly recorded.'
   return $result
 }
 function Invoke-Smoke([string]$Exe, [string]$Name, [string]$Data) {
@@ -113,6 +116,10 @@ try {
   Stop-TestApp
   $reinstalledExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
   Invoke-Smoke $reinstalledExe.FullName 'reinstalled-smoke' $userData
+  $originalVersion = (Get-Content -Raw (Join-Path $OutputDirectory 'installed-smoke.json') | ConvertFrom-Json).version
+  $reinstalledVersion = (Get-Content -Raw (Join-Path $OutputDirectory 'reinstalled-smoke.json') | ConvertFrom-Json).version
+  if ($reinstalledVersion -ne $originalVersion) { throw "Rollback selected $reinstalledVersion instead of original $originalVersion" }
+  $report.reinstalledVersion = $reinstalledVersion
   if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Reinstall changed retained settings or queue marker' }
   $report.reinstallPreserved = $true
   $report.finalUninstallDetails = Invoke-Uninstall 'final-uninstall-details'
@@ -122,7 +129,7 @@ try {
   $report.passed = $true
 } catch { $report.error = $_.Exception.Message; throw }
 finally {
-  foreach ($log in @((Join-Path $env:LOCALAPPDATA 'SquirrelTemp/SquirrelSetup.log'), (Join-Path $installRoot 'SquirrelSetup.log'))) {
+  foreach ($log in @((Join-Path $env:LOCALAPPDATA 'SquirrelTemp/SquirrelSetup.log'), (Join-Path $env:TEMP 'SquirrelTemp/SquirrelSetup.log'), (Join-Path $env:TEMP 'SquirrelSetup.log'), (Join-Path $installRoot 'SquirrelSetup.log'))) {
     if (Test-Path $log) { Copy-Item $log (Join-Path $OutputDirectory ('squirrel-' + (Split-Path (Split-Path $log) -Leaf) + '.txt')) }
   }
   $report.completedAt = (Get-Date).ToUniversalTime().ToString('o')

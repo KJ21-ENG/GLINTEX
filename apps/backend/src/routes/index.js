@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { parse } from 'csv-parse/sync';
 import prisma from '../lib/prisma.js';
-import { requireAuth, requireRole, requirePermission, requireEditPermission, requireDeletePermission } from '../middleware/auth.js';
+import { requireAuth, requireRole, requirePermission, requireEditPermission, requireDeletePermission, requireStickerTemplateRead } from '../middleware/auth.js';
 import whatsapp from '../../whatsapp/service.js';
 import telegram from '../../telegram/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
@@ -6577,7 +6577,7 @@ router.get('/api/sticker_templates', requirePermission('settings', PERM_READ), a
   }
 });
 
-router.get('/api/sticker_templates/:stageKey', requirePermission('settings', PERM_READ), async (req, res) => {
+router.get('/api/sticker_templates/:stageKey', requireStickerTemplateRead, async (req, res) => {
   try {
     const stageKey = String(req.params.stageKey || '').trim();
     if (!stageKey) return res.status(400).json({ error: 'stageKey is required' });

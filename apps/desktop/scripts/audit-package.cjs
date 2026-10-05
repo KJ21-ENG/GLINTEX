@@ -18,8 +18,12 @@ async function audit(directory) {
   const info = JSON.parse(asar.extractFile(archive, 'build-info.json'));
   assert.equal(packageJson.version, require('../package.json').version);
   assert.equal(info.sourceCommit, execFileSync('git', ['rev-parse','HEAD'], { cwd: root, encoding: 'utf8' }).trim());
-  const files = asar.listPackage(archive);
-  for (const name of ['src/updates/controller.cjs','src/updates/safety.cjs','src/updates/protocol.cjs']) assert.ok(files.includes('/'+name), name + ' absent from packaged app');
+  // ASAR lists with the host OS separator, including backslashes on Windows.
+  const files = asar.listPackage(archive).map(name => name.replaceAll('\\', '/'));
+  for (const name of ['src/updates/controller.cjs','src/updates/safety.cjs','src/updates/protocol.cjs']) {
+    assert.ok(files.includes('/'+name), name + ' absent from packaged app');
+    assert.ok(asar.extractFile(archive, name).equals(fs.readFileSync(path.join(__dirname, '..', name))), name + ' differs from tested source');
+  }
   const native = files.find(name => /bindings-cpp\/prebuilds\/win32-x64\/.*\.node$/.test(name)); assert.ok(native, 'Windows x64 native SerialPort binding absent');
   const binary = asar.extractFile(archive, native.replace(/^\//,''));
   assert.equal(binary.subarray(0,2).toString(), 'MZ'); assert.equal(binary.readUInt16LE(binary.readUInt32LE(0x3c)+4), 0x8664);

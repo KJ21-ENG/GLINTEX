@@ -161,7 +161,7 @@ async function runSelfTest({
       await evaluate("window.fixturePendingSave=fetch('/api/fixture/hold',{method:'POST'}).then(r=>r.json());return true");
       await new Promise(resolve => setTimeout(resolve, 100));
       window.close();
-      await waitFor("window.glintexDesktop.updates.status().then(s=>s.closeBlocked===true)");
+      await waitFor("window.glintexDesktop.updates.status().then(s=>s.closeBlocked===true).catch(()=>false)");
       assert.equal(window.isDestroyed(), false, "pending API save must prevent installer close");
       await evaluate("return window.fixturePendingSave");
     }

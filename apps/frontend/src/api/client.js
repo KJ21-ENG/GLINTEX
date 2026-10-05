@@ -1,5 +1,7 @@
 // Auto-detect API base URL based on current host
 const getApiBase = () => {
+  // The packaged renderer is served at the configured first-party origin.
+  if (typeof window !== 'undefined' && window.glintexDesktop) return window.location.origin;
   // If explicitly set in env, use that
   if (import.meta.env.VITE_API_BASE) {
     return import.meta.env.VITE_API_BASE;

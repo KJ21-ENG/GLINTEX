@@ -1,3 +1,4 @@
+import { runPostCommitPrint, refreshAfterCommit } from '../utils/postCommitPrint';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import * as api from '../api/client';
@@ -215,6 +216,20 @@ export function Inbound() {
             const lotNo = result?.res?.lot?.lotNo || savedLotNo;
             const piecesForLot = (refreshedDb?.inbound_items || []).filter((p) => p.lotNo === lotNo);
             const itemName = refreshedDb?.items?.find((i) => i.id === itemId)?.name;
+            await runPostCommitPrint({
+                finalize: () => {
+            // Reset
+            setCart([]);
+            setWeight("");
+            setDate(todayISO());
+            setItemId("");
+            setFirmId("");
+            setSupplierId("");
+            weightRef.current?.focus();
+            void fetchSequence().catch(error => console.warn('Saved lot; sequence refresh unavailable', error.message));
+                },
+                print: async () => {
+            if (result.refreshWarning) throw new Error(`Saved data could not be refreshed: ${result.refreshWarning}`);
             const inboundTemplate = await loadTemplate(LABEL_STAGE_KEYS.INBOUND);
             if (inboundTemplate && piecesForLot.length > 0) {
                 const confirmPrint = window.confirm(`Print ${piecesForLot.length} stickers for lot ${lotNo}?`);
@@ -236,19 +251,9 @@ export function Inbound() {
                 }
             }
 
-            // Success
-            const totalPieces = cart.length;
-            const totalWeight = cart.reduce((s, r) => s + (Number(r.weight) || 0), 0);
-
-            // Reset
-            setCart([]);
-            setWeight("");
-            setDate(todayISO());
-            setItemId("");
-            setFirmId("");
-            setSupplierId("");
-            weightRef.current?.focus();
-            fetchSequence();
+                },
+                onFailure: error => alert(`Lot ${lotNo} was saved, but its labels failed: ${error.message}. Reprint from Inbound history or retained jobs; do not save the lot again.`),
+            });
 
         } catch (err) {
             alert(err.message || 'Failed to save lot');
@@ -350,7 +355,7 @@ export function Inbound() {
                 }
             }
         } catch (err) {
-            console.error('Failed to print sticker', err);
+            alert(`Crate is in the cart, but printing failed: ${err.message}. Do not add it again; use a print-only action.`);
         }
 
         setCutterEntry(prev => ({
@@ -393,7 +398,7 @@ export function Inbound() {
             };
             await api.createCutterPurchaseInbound(payload);
             // Avoid full bootstrap refresh; cutter purchase affects cutter process data (and includes inbound basics).
-            await refreshProcessData('cutter');
+            const refreshResult = await refreshAfterCommit(() => refreshProcessData('cutter'));
 
             // Stickers already printed per-crate during addCutterCrate, no batch print needed
 
@@ -404,7 +409,8 @@ export function Inbound() {
             setItemId("");
             setFirmId("");
             setSupplierId("");
-            await fetchCutterSequence();
+            const sequenceResult = await refreshAfterCommit(fetchCutterSequence);
+            if (refreshResult.warning || sequenceResult.warning) alert(`Purchase was saved. Refresh failed: ${refreshResult.warning || sequenceResult.warning}. Do not save it again; reload the view.`);
         } catch (err) {
             alert(err.message || 'Failed to save cutter purchase');
         } finally {

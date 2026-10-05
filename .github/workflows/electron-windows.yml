@@ -1,0 +1,115 @@
+name: Electron Windows private test installer
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/electron-*']
+    paths:
+      - 'apps/desktop/**'
+      - 'apps/frontend/**'
+      - 'apps/backend/src/utils/weightProvenance.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/electron-windows.yml'
+permissions:
+  contents: read
+concurrency:
+  group: electron-windows-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/desktop/package-lock.json
+      - name: Install locked monorepo dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Install desktop-local locked dependencies for packaging
+        working-directory: apps/desktop
+        run: npm ci --workspaces=false --no-audit --no-fund
+      - name: Software tests and browser build
+        run: |
+          npm run test:desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test apps/frontend/src/utils/__tests__/*.test.mjs apps/backend/src/utils/__tests__/weightProvenance.test.mjs apps/backend/src/routes/__tests__/desktopAuth.integration.test.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build:frontend
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Real Chromium label and workstation visual tests
+        run: |
+          & ./apps/desktop/node_modules/.bin/electron.cmd apps/desktop/scripts/visual-runner.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build Windows x64 release candidate
+        working-directory: apps/desktop
+        run: |
+          npm run make --workspaces=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force out/delivery | Out-Null
+          Copy-Item out/make/squirrel.windows/x64/* out/delivery/
+          Copy-Item build-info.json out/delivery/
+          $packaged = Get-ChildItem out -Directory -Filter '*-win32-x64' | Select-Object -First 1
+          Copy-Item -Recurse $packaged.FullName out/base-package
+          Copy-Item ../../docs/desktop-windows.md out/delivery/
+          $source = git rev-parse HEAD
+          $files = Get-ChildItem out/delivery -File | ForEach-Object { @{name=$_.Name;bytes=$_.Length;sha256=(Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()} }
+          @{version=(Get-Content package.json | ConvertFrom-Json).version;sourceCommit=$source;signing='unsigned-test-installer';files=$files} | ConvertTo-Json -Depth 6 | Set-Content out/delivery/manifest.json
+      - name: Build next-version fixture for upgrade verification only
+        working-directory: apps/desktop
+        run: |
+          Copy-Item package.json package.json.before-upgrade
+          try {
+            $p = Get-Content package.json | ConvertFrom-Json
+            $v = [version]$p.version
+            $p.version = "$($v.Major).$($v.Minor).$($v.Build + 1)"
+            $p | ConvertTo-Json -Depth 30 | Set-Content -Encoding utf8 package.json
+            npm run make --workspaces=false
+            if ($LASTEXITCODE -ne 0) { throw 'Upgrade fixture packaging failed' }
+          } finally { Move-Item -Force package.json.before-upgrade package.json }
+      - name: Verify packaged launch, installation, upgrade, shortcuts and uninstall
+        run: |
+          $installer = Get-ChildItem apps/desktop/out/delivery/*Setup.exe | Select-Object -First 1
+          $upgrade = Get-ChildItem apps/desktop/out/make/squirrel.windows/x64/*Setup.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $packaged = Get-ChildItem apps/desktop/out/base-package/GLINTEX.exe | Select-Object -First 1
+          ./apps/desktop/scripts/windows-verify.ps1 -PackagedExe $packaged.FullName -Installer $installer.FullName -UpgradeInstaller $upgrade.FullName
+      - name: Upload private installer and verification evidence
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: GLINTEX-Windows-x64-${{ github.sha }}
+          path: |
+            apps/desktop/out/delivery/*
+            apps/desktop/out/verification/*.json
+            apps/desktop/out/verification/*-reports/*.json
+            apps/desktop/out/verification/*-reports/*.png
+            apps/desktop/test/visual/output/*.png
+            apps/desktop/test/visual/output/*.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Upload failed verification reports only
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: GLINTEX-Windows-failure-${{ github.run_id }}
+          path: |
+            apps/desktop/out/verification/*.json
+            apps/desktop/out/verification/*-reports/*.json
+            apps/desktop/out/verification/*-reports/*.png
+            apps/desktop/test/visual/output/*.png
+            apps/desktop/test/visual/output/*.json
+          if-no-files-found: ignore
+          retention-days: 7

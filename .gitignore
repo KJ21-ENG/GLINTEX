@@ -98,3 +98,8 @@ desktop.ini
 .gemini/
 .github/
 .opencode/
+# Electron packaged assets and local test data
+apps/desktop/ui/
+apps/desktop/out/
+apps/desktop/build-info.json
+apps/desktop/test-results/

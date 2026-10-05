@@ -1,3 +1,4 @@
+import { runPostCommitPrint } from '../utils/postCommitPrint';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
@@ -644,6 +645,13 @@ export function Stock() {
       };
       const result = await createIssueToMachine(payload);
       const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
+      await runPostCommitPrint({
+        finalize: () => {
+      setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
+      setIssueModalOpen(false);
+        },
+        print: async () => {
+          if (result.refreshWarning) alert(`Issue was saved. Data refresh failed: ${result.refreshWarning}. Reload the view; do not issue it again.`);
       const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
       if (template && issueRecord) {
         const confirmPrint = window.confirm('Print sticker for this issue?');
@@ -679,8 +687,9 @@ export function Stock() {
           );
         }
       }
-      setSelectedByLot(prev => ({ ...prev, [lotNo]: [] }));
-      setIssueModalOpen(false);
+        },
+        onFailure: error => alert(`Issue was saved, but its label failed: ${error.message}. Reprint from Issue History or retained jobs; do not issue it again.`),
+      });
     } catch (e) {
       alert(e.message);
     } finally {

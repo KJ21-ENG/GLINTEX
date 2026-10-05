@@ -1,9 +1,9 @@
 /**
  * Weight Scale Utility - Web Serial API integration
  *
- * This module is intentionally "protocol-agnostic":
- * - It auto-detects weight from the device output (see `parseWeightReading`)
- * - It prefers a stable reading (multiple samples within tolerance)
+ * Browser fallback supports only complete decimal/unit lines, optionally ST/US.
+ * - Unrecognized protocols never become guessed numeric readings.
+ * - It requires stable complete samples within tolerance.
  * - It supports selecting/remembering the right port
  * - It avoids concurrent readers via a singleton manager
  *
@@ -12,7 +12,7 @@
  * secure contexts (https or localhost).
  */
 
-import { parseWeightReading, roundKg3 } from './weightScaleParser.js';
+import { parseWeightReading } from './weightScaleParser.js';
 
 const SCALE_PREF_KEY = 'glintex.weightScale.preferredPortInfo';
 const DEFAULT_BAUD_RATES = [9600, 2400, 4800, 1200, 19200, 38400, 57600, 115200];
@@ -45,8 +45,8 @@ function getPortInfo(port) {
   try {
     if (!port || typeof port.getInfo !== 'function') return null;
     const info = port.getInfo() || {};
-    const vendorId = Number(info.vendorId);
-    const productId = Number(info.productId);
+    const vendorId = Number(info.usbVendorId ?? NaN);
+    const productId = Number(info.usbProductId ?? NaN);
     if (!Number.isFinite(vendorId) && !Number.isFinite(productId)) return null;
     return {
       vendorId: Number.isFinite(vendorId) ? vendorId : null,
@@ -70,8 +70,8 @@ function loadPreferredPortInfo() {
   try {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
-    const vendorId = Number(parsed.vendorId);
-    const productId = Number(parsed.productId);
+    const vendorId = Number(parsed.vendorId ?? NaN);
+    const productId = Number(parsed.productId ?? NaN);
     if (!Number.isFinite(vendorId) && !Number.isFinite(productId)) return null;
     return {
       vendorId: Number.isFinite(vendorId) ? vendorId : null,
@@ -104,15 +104,15 @@ function openPort(port, baudRate) {
 
 function pickPreferredPort(ports, preferredInfo) {
   if (!Array.isArray(ports) || ports.length === 0) return null;
-  if (!preferredInfo) return ports[0];
-  const match = ports.find((p) => {
+  if (!preferredInfo) return ports.length === 1 ? ports[0] : null;
+  const matches = ports.filter((p) => {
     const info = getPortInfo(p);
     if (!info) return false;
     const vendorMatches = preferredInfo.vendorId == null || info.vendorId === preferredInfo.vendorId;
     const productMatches = preferredInfo.productId == null || info.productId === preferredInfo.productId;
     return vendorMatches && productMatches;
   });
-  return match || ports[0];
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function computeStableReading(samples, { toleranceKg, windowMs, minSamples }) {
@@ -228,7 +228,7 @@ class WeightScaleManager {
       portInfo: this.portInfo,
       baudRate: this.baudRate,
       lastReading: this.lastReading,
-      stableReading: this.stable,
+      stableReading: this.stable && Date.now() - this.stable.ts <= 1200 ? this.stable : null,
       isConnected: this.status === 'connected',
     };
   }
@@ -322,7 +322,7 @@ class WeightScaleManager {
       } else {
         // Port already open - baudRate unknown (WebSerial doesn’t expose it)
         const br = Number(baudRate);
-        if (Number.isFinite(br)) this.baudRate = br;
+        if (baudRate != null && Number.isFinite(br) && br > 0) this.baudRate = br;
       }
 
       this._startReadLoop({ minKg, maxKg });
@@ -359,10 +359,7 @@ class WeightScaleManager {
       if (port.readable) await closeQuietly(port);
     }
 
-    // Fallback: open at the first rate (best-effort)
-    const fallback = rates[0];
-    await openPort(port, fallback);
-    return { baudRate: fallback, probed: false };
+    throw new Error('No supported complete weight frames found. Verify scale protocol and baud rate.');
   }
 
   async _probePortForParse(port, { probeMs, minKg, maxKg }) {
@@ -401,10 +398,14 @@ class WeightScaleManager {
 
         if (value) {
           buffer += decoder.decode(value, { stream: true });
-          if (buffer.length > 400) buffer = buffer.slice(-200);
+          if (buffer.length > 4096) return false;
 
-          const parsed = parseWeightReading(buffer, { minKg, maxKg });
-          if (parsed && Number.isFinite(parsed.weightKg) && parsed.confidence >= 0.7) return true;
+          const lines = buffer.split(/\r\n|\r|\n/);
+          buffer = lines.pop() || '';
+          if (lines.some(line => parseWeightReading(line, { minKg, maxKg }))) {
+            try { await reader.cancel(); } catch (_) {}
+            return true;
+          }
         }
 
         // Only issue the next read after the current one resolves.
@@ -443,13 +444,15 @@ class WeightScaleManager {
     this._readAbort = abort;
 
     let buffer = '';
+    let discardFrame = false;
+    this._resetFrame = () => { buffer = ''; discardFrame = false; };
     let lastEmitTs = 0;
     let lastEmittedWeight = null;
 
     const handleText = (text, { isBufferSample = false } = {}) => {
       const parsed = parseWeightReading(text, { minKg, maxKg });
-      if (!parsed) return;
-      const weightKg = roundKg3(parsed.weightKg);
+      if (!parsed) { this.clearReadings(); return; }
+      const weightKg = parsed.weightKg;
       if (!Number.isFinite(weightKg)) return;
 
       const ts = Date.now();
@@ -468,7 +471,7 @@ class WeightScaleManager {
       this._emit();
     };
 
-    (async () => {
+    this._readTask = (async () => {
       try {
         while (!abort.signal.aborted) {
           const { value, done } = await reader.read();
@@ -478,21 +481,17 @@ class WeightScaleManager {
           const chunk = decoder.decode(value, { stream: true });
           if (!chunk) continue;
 
-          buffer += chunk;
-          if (buffer.length > 2000) buffer = buffer.slice(-800);
+          for (const char of chunk) {
+            if (char === '\r' || char === '\n') {
+              if (!discardFrame && buffer.trim()) { this._emitRaw(buffer.slice(0, 512)); handleText(buffer); }
+              buffer = ''; discardFrame = false;
+            } else if (!discardFrame) {
+              buffer += char;
+              if (buffer.length > 512) { buffer = ''; discardFrame = true; this.clearReadings(); }
+            }
+          }
 
-          // Emit raw lines for debug UIs
-          const parts = buffer.split(/\r?\n|\r/);
-          buffer = parts.pop() || '';
-          parts.forEach((line) => {
-            const trimmed = String(line || '').trim();
-            if (!trimmed) return;
-            this._emitRaw(trimmed);
-            handleText(trimmed, { isBufferSample: false });
-          });
-
-          // Also parse from the rolling buffer (covers bracket-only protocols without newlines)
-          handleText(buffer, { isBufferSample: true });
+          // Incomplete frames are never measurements. Wait for CR/LF.
         }
       } catch (err) {
         if (!abort.signal.aborted) {
@@ -506,6 +505,7 @@ class WeightScaleManager {
         }
         this.reader = null;
         this._readAbort = null;
+        this._resetFrame = null;
         this._emit();
       }
     })();
@@ -515,6 +515,8 @@ class WeightScaleManager {
     if (!this.reader && !this._readAbort) return;
     try { this._readAbort?.abort(); } catch (_) {}
     try { await this.reader?.cancel(); } catch (_) {}
+    try { await this._readTask; } catch (_) {}
+    this._readTask = null;
     try { this.reader?.releaseLock(); } catch (_) {}
     this.reader = null;
     this._readAbort = null;
@@ -545,15 +547,23 @@ class WeightScaleManager {
     }
 
     await this.connect({ port: resolvedPort, autoBaud: true, minKg, maxKg });
+    // Reset only framing; cancelling Web Serial's readable stream can close it.
+    // A pre-capture partial message must not be completed as a fresh sample.
+    this._resetFrame?.();
     this.clearReadings();
 
     const deadline = Date.now() + (Number.isFinite(timeoutMs) ? timeoutMs : 8000);
 
     return await new Promise((resolve, reject) => {
       let intervalId = null;
-      const unsub = this.subscribe((state) => {
+      let unsub = () => {};
+      unsub = this.subscribe((state) => {
+        if (state.status === 'error' || state.status === 'disconnected') {
+          if (intervalId) clearInterval(intervalId);
+          unsub(); reject(new Error(state.error || 'Scale disconnected')); return;
+        }
         const stable = state?.stableReading;
-        if (stable && Number.isFinite(stable.weightKg) && stable.weightKg > 0) {
+        if (stable && Date.now() - stable.ts <= 1200 && Number.isFinite(stable.weightKg) && stable.weightKg > 0) {
           if (intervalId) clearInterval(intervalId);
           unsub();
           resolve({
@@ -581,9 +591,44 @@ class WeightScaleManager {
   }
 }
 
+// Compatibility facade: existing capture callers use the main-process owner in Electron.
+class DesktopScaleManager {
+  constructor(bridge) {
+    this.bridge = bridge;
+    this.state = { status: 'disconnected', isConnected: false };
+    this.listeners = new Set(); this.rawListeners = new Set(); this.lastDiagnostic = '';
+    const subscribe = bridge.onStatus || bridge.subscribe;
+    if (subscribe) subscribe(state => this.accept(state));
+    bridge.status().then(state => this.accept(state)).catch(() => {});
+  }
+  accept(state) {
+    this.state = state;
+    this.listeners.forEach(fn => fn(state));
+    const last = state.diagnostics?.at(-1);
+    const key = last ? last.timestamp + last.raw : '';
+    if (key && key !== this.lastDiagnostic) { this.lastDiagnostic = key; this.rawListeners.forEach(fn => fn(last.raw)); }
+  }
+  getState() { return this.state; }
+  subscribe(fn) { this.listeners.add(fn); fn(this.state); return () => this.listeners.delete(fn); }
+  subscribeRaw(fn) { this.rawListeners.add(fn); return () => this.rawListeners.delete(fn); }
+  async listAuthorizedPorts() {
+    // Device choice and protocol are explicitly saved in Desktop settings. Do not
+    // let the old browser dialog silently replace that selection.
+    const state = await this.bridge.status(); this.accept(state);
+    const ports = await this.bridge.enumerate();
+    return ports.filter(p => p.path === state.config?.path).map(p => ({ port: p.path, info: p, label: p.path }));
+  }
+  async getPreferredAuthorizedPort() { const state = await this.bridge.status(); return state.config?.path || null; }
+  async requestPort() { throw new Error('Use Desktop device settings to select the COM port and protocol profile'); }
+  async connect() { const state = await this.bridge.connect(); this.accept(state); return state; }
+  async disconnect() { await this.bridge.disconnect(); this.accept(await this.bridge.status()); }
+  async captureStableWeight({ timeoutMs = 8000 } = {}) { return this.bridge.capture({ timeoutMs }); }
+}
+
 let _manager = null;
 export function getScaleManager() {
-  if (!_manager) _manager = new WeightScaleManager();
+  if (!_manager) _manager = typeof window !== 'undefined' && window.glintexDesktop?.scale
+    ? new DesktopScaleManager(window.glintexDesktop.scale) : new WeightScaleManager();
   return _manager;
 }
 
@@ -591,7 +636,7 @@ export function getScaleManager() {
  * Check if Web Serial API is supported
  */
 export function isWebSerialSupported() {
-  return Boolean(getSerial());
+  return Boolean((typeof window !== 'undefined' && window.glintexDesktop?.scale) || getSerial());
 }
 
 /**

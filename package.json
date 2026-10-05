@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "workspaces": [
     "apps/frontend",
-    "apps/backend"
+    "apps/backend",
+    "apps/desktop"
   ],
   "scripts": {
     "dev:frontend": "npm run dev --workspace apps/frontend",
@@ -12,7 +13,11 @@
     "build:frontend": "npm run build --workspace apps/frontend",
     "build:backend": "npm run build --workspace apps/backend",
     "preview:frontend": "npm run preview --workspace apps/frontend",
-    "start:backend": "npm run start --workspace apps/backend"
+    "start:backend": "npm run start --workspace apps/backend",
+    "dev:desktop": "npm run start --workspace apps/desktop",
+    "test:desktop": "npm run test --workspace apps/desktop",
+    "package:desktop": "npm run package --workspace apps/desktop",
+    "make:desktop:windows": "npm run make --workspace apps/desktop"
   },
   "dependencies": {
     "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"

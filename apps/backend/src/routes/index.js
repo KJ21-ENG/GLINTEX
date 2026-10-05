@@ -1,3 +1,4 @@
+import { validateWeightProvenance, validateTransactionWeightProvenance } from '../utils/weightProvenance.js';
 import archiver from 'archiver';
 import multer from 'multer';
 import XLSX from 'xlsx';
@@ -1491,6 +1492,7 @@ async function logCrudWithActor(req, args) {
   const actor = getActor(req);
   return await logCrud({
     ...args,
+    payload: req.weightProvenance?.length ? { ...(args.payload || {}), weightProvenance: req.weightProvenance } : args.payload,
     actorUserId: actor?.userId,
     actorUsername: actor?.username,
     actorRoleKey: actor?.roleKey,
@@ -1986,9 +1988,13 @@ router.post('/api/weight_capture', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Manual entry requires a reason' });
     }
 
+    let provenance;
+    try { provenance = validateWeightProvenance({ ...req.body, source, weightKg }); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
     const payload = {
       source,
-      weightKg: roundTo3Decimals(weightKg),
+      weightKg,
+      ...provenance,
       reason: source === 'manual' ? reason : undefined,
       context,
       // Optional diagnostic metadata
@@ -4384,7 +4390,7 @@ router.post('/api/opening_stock/issue_series/reserve', requirePermission('openin
   }
 });
 
-router.post('/api/opening_stock/inbound', requirePermission('opening_stock', PERM_WRITE), async (req, res) => {
+router.post('/api/opening_stock/inbound', requirePermission('opening_stock', PERM_WRITE), validateTransactionWeightProvenance, async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, pieces } = req.body || {};
@@ -4469,7 +4475,7 @@ router.post('/api/opening_stock/inbound', requirePermission('opening_stock', PER
   }
 });
 
-router.post('/api/opening_stock/cutter_receive', requirePermission('opening_stock', PERM_WRITE), async (req, res) => {
+router.post('/api/opening_stock/cutter_receive', requirePermission('opening_stock', PERM_WRITE), validateTransactionWeightProvenance, async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, crates } = req.body || {};
@@ -4686,7 +4692,7 @@ router.post('/api/opening_stock/cutter_receive', requirePermission('opening_stoc
   }
 });
 
-router.post('/api/opening_stock/holo_receive', requirePermission('opening_stock', PERM_WRITE), async (req, res) => {
+router.post('/api/opening_stock/holo_receive', requirePermission('opening_stock', PERM_WRITE), validateTransactionWeightProvenance, async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, twistId, yarnId, cutId, machineId, operatorId, shift, issueSeries, crates } = req.body || {};
@@ -4935,7 +4941,7 @@ router.post('/api/opening_stock/holo_receive', requirePermission('opening_stock'
   }
 });
 
-router.post('/api/opening_stock/coning_receive', requirePermission('opening_stock', PERM_WRITE), async (req, res) => {
+router.post('/api/opening_stock/coning_receive', requirePermission('opening_stock', PERM_WRITE), validateTransactionWeightProvenance, async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { date, itemId, firmId, supplierId, coneTypeId, wrapperId, yarnId, twistId, cutId, machineId, operatorId, shift, issueSeries, crates } = req.body || {};
@@ -8285,7 +8291,7 @@ router.post('/api/receive_from_cutter_machine/revert_wastage', requirePermission
 });
 
 // Save all cutter crates together, with a challan for each worker combination.
-router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.cutter', PERM_WRITE), async (req, res) => {
+router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.cutter', PERM_WRITE), validateTransactionWeightProvenance, async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
@@ -8338,7 +8344,7 @@ router.post('/api/receive_from_cutter_machine/bulk', requirePermission('receive.
   }
 });
 
-router.post('/api/receive_from_cutter_machine/manual', requirePermission('receive.cutter', PERM_WRITE), async (req, res) => {
+router.post('/api/receive_from_cutter_machine/manual', requirePermission('receive.cutter', PERM_WRITE), validateTransactionWeightProvenance, async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const {
@@ -9410,7 +9416,7 @@ router.post('/api/issue_to_holo_machine', requirePermission('issue.holo', PERM_W
   }
 });
 
-router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.holo', PERM_WRITE), async (req, res) => {
+router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.holo', PERM_WRITE), validateTransactionWeightProvenance, async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const {
@@ -9555,6 +9561,7 @@ router.post('/api/receive_from_holo_machine/manual', requirePermission('receive.
       // successful write into a retryable 500 just because response enrichment failed.
       console.error('Failed to enrich Holo receive response balance', balanceErr);
     }
+    await logCrudWithActor(req, { entityType: 'receive_from_holo_machine_row', entityId: createdRow.id, action: 'create', payload: { grossWeight, netWeight, barcode } });
     res.json({
       ok: true,
       row: createdRow,
@@ -10664,7 +10671,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
   }
 });
 
-router.post('/api/receive_from_coning_machine/manual', requirePermission('receive.coning', PERM_WRITE), async (req, res) => {
+router.post('/api/receive_from_coning_machine/manual', requirePermission('receive.coning', PERM_WRITE), validateTransactionWeightProvenance, async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const {
@@ -10762,6 +10769,7 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
       // successful write into a retryable 500 just because response enrichment failed.
       console.error('Failed to enrich Coning receive response balance', balanceErr);
     }
+    await logCrudWithActor(req, { entityType: 'receive_from_coning_machine_row', entityId: createdRow.id, action: 'create', payload: { grossWeight, netWeight, barcode } });
     res.json({
       ok: true,
       row: createdRow,

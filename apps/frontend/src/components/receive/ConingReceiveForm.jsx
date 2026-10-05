@@ -1,3 +1,4 @@
+import { transactionWeightProvenance } from '../../utils/weightProvenance';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
@@ -54,6 +55,7 @@ const queueConingReceivePrint = (labels) => {
             );
         })().catch((printError) => {
             console.error('Coning receives were saved but post-commit label printing failed', printError);
+            alert(`Coning receive was saved, but label printing failed: ${printError.message}. Reprint from Receive History or retained jobs; do not save again.`);
         });
     }, 0);
 };
@@ -250,8 +252,8 @@ export function ConingReceiveForm() {
         setWastageDialogOpen(false);
     }
 
-    function updateRow(id, field, val) {
-        setCart(prev => prev.map(r => r.id === id ? { ...r, [field]: val } : r));
+    function updateRow(id, field, val, capture = null) {
+        setCart(prev => prev.map(r => r.id === id ? { ...r, [field]: val, ...(field === 'grossWeight' ? { weightProvenance: capture } : {}) } : r));
     }
 
     function calcRowNet(row) {
@@ -399,6 +401,7 @@ export function ConingReceiveForm() {
                         coneCount: Number(row.coneCount),
                         boxId: row.boxId,
                         grossWeight: Number(row.grossWeight),
+                        weightProvenance: transactionWeightProvenance(row.grossWeight, row.weightProvenance),
                         date: receiveDate,
                         operatorId: row.operatorId,
                         notes: row.notes
@@ -826,7 +829,7 @@ export function ConingReceiveForm() {
                                                         <div className="flex gap-1">
                                                             <Input type="number" value={row.grossWeight} onChange={e => updateRow(row.id, 'grossWeight', e.target.value)} className="h-8 flex-1" />
                                                             <CatchWeightButton
-                                                                onWeightCaptured={(wt) => updateRow(row.id, 'grossWeight', wt.toFixed(3))}
+                                                                onWeightCaptured={(wt, meta) => updateRow(row.id, 'grossWeight', String(wt), meta)}
                                                                 className="h-8 w-8"
                                                                 context={{
                                                                     feature: 'receive',

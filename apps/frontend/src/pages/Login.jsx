@@ -23,7 +23,7 @@ export function Login() {
   useEffect(() => {
     async function loadPublicBranding() {
       try {
-        const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:4001';
+        const apiBase = window.glintexDesktop ? window.location.origin : (import.meta.env.VITE_API_BASE || 'http://localhost:4001');
         const res = await fetch(`${apiBase}/api/public/branding`);
         if (!res.ok) return;
         const data = await res.json();

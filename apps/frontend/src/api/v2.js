@@ -1,5 +1,7 @@
 // Local request helper (mirrors src/api/client.js behavior, but scoped for v2 endpoints).
 const getApiBase = () => {
+  // The packaged renderer is served at the configured first-party origin.
+  if (typeof window !== 'undefined' && window.glintexDesktop) return window.location.origin;
   if (import.meta.env.VITE_API_BASE) return import.meta.env.VITE_API_BASE;
   if (typeof window !== 'undefined') {
     return `${window.location.protocol}//${window.location.hostname}:4000`;

@@ -1,3 +1,4 @@
+import DesktopWorkstation from '../common/DesktopWorkstation';
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { Outlet, NavLink, useLocation, useBlocker } from "react-router-dom";
 import {
@@ -501,6 +502,8 @@ export default function DashboardLayout() {
           transition: isResizing ? "none" : "margin-left 200ms ease-in-out",
         }}
       >
+
+        <DesktopWorkstation />
 
         {/* Mobile Header */}
         <header className="md:hidden h-14 border-b border-border flex items-center justify-between px-4 bg-card/80 backdrop-blur sticky top-0 z-20">

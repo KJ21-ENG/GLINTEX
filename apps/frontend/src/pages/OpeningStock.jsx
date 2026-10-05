@@ -1,3 +1,5 @@
+import { refreshAfterCommit } from '../utils/postCommitPrint';
+import { transactionWeightProvenance } from '../utils/weightProvenance';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
 import * as api from '../api';
@@ -192,7 +194,8 @@ export function OpeningStock() {
             source: 'uploadOpeningStock',
             stage,
           });
-          await fetchOpeningPreview();
+          const refreshed = await refreshAfterCommit(fetchOpeningPreview);
+          if (refreshed.warning) alert(`Opening stock was saved. Refresh failed: ${refreshed.warning}. Do not save it again; reload the view.`);
         } catch (err) {
           console.error(err);
           alert(`Upload failed: ${err.message || 'Unknown error'}`);
@@ -479,6 +482,7 @@ export function OpeningStock() {
     };
 
     setCutterCart(prev => [...prev, newCrate]);
+    try {
 
     // Immediate sticker printing
     const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
@@ -515,10 +519,15 @@ export function OpeningStock() {
       }
     }
 
+    } catch (error) {
+      alert(`Crate is in the cart. Printing failed: ${error.message}. Do not add the crate again; use its print action or retained print job.`);
+    }
+
     setCutterEntry(prev => ({
       ...prev,
       bobbinQuantity: '',
       grossWeight: '',
+      weightProvenance: null,
       notes: '',
     }));
   });
@@ -570,6 +579,7 @@ export function OpeningStock() {
     };
 
     setHoloCart(prev => [...prev, newCrate]);
+    try {
 
     // Immediate sticker printing
     const template = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
@@ -607,10 +617,15 @@ export function OpeningStock() {
       }
     }
 
+    } catch (error) {
+      alert(`Crate is in the cart. Printing failed: ${error.message}. Do not add the crate again; use its print action or retained print job.`);
+    }
+
     setHoloEntry(prev => ({
       ...prev,
       rollCount: '',
       grossWeight: '',
+      weightProvenance: null,
       notes: '',
     }));
   });
@@ -665,6 +680,7 @@ export function OpeningStock() {
     };
 
     setConingCart(prev => [...prev, newCrate]);
+    try {
 
     // Immediate sticker printing
     const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_RECEIVE);
@@ -698,10 +714,15 @@ export function OpeningStock() {
       }
     }
 
+    } catch (error) {
+      alert(`Crate is in the cart. Printing failed: ${error.message}. Do not add the crate again; use its print action or retained print job.`);
+    }
+
     setConingEntry(prev => ({
       ...prev,
       coneCount: '',
       grossWeight: '',
+      weightProvenance: null,
       notes: '',
     }));
   });
@@ -718,6 +739,7 @@ export function OpeningStock() {
         supplierId,
         pieces: inboundCart.map(p => ({
           weight: p.weight,
+          weightProvenance: transactionWeightProvenance(p.weight, p.weightProvenance),
           isConsumed: p.isConsumed,
           consumptionDate: p.isConsumed ? p.consumptionDate : null,
           note: p.note || null,
@@ -728,7 +750,8 @@ export function OpeningStock() {
         source: 'createOpeningInbound',
       });
       setInboundCart([]);
-      await fetchOpeningPreview();
+      const refreshed = await refreshAfterCommit(fetchOpeningPreview);
+      if (refreshed.warning) alert(`Opening stock was saved. Refresh failed: ${refreshed.warning}. Do not save it again; reload the view.`);
     } catch (err) {
       alert(err.message || 'Failed to save opening inbound stock');
     } finally {
@@ -840,6 +863,7 @@ export function OpeningStock() {
           boxId: row.boxId,
           bobbinQuantity: Number(row.bobbinQuantity),
           grossWeight: Number(row.grossWeight),
+          weightProvenance: transactionWeightProvenance(row.grossWeight, row.weightProvenance),
           operatorId: row.operatorId || null,
           helperId: row.helperId || null,
           cutId: row.cutId,
@@ -853,7 +877,8 @@ export function OpeningStock() {
         source: 'createOpeningCutterReceive',
       });
       setCutterCart([]);
-      await fetchOpeningPreview();
+      const refreshed = await refreshAfterCommit(fetchOpeningPreview);
+      if (refreshed.warning) alert(`Opening stock was saved. Refresh failed: ${refreshed.warning}. Do not save it again; reload the view.`);
     } catch (err) {
       alert(err.message || 'Failed to save opening cutter stock');
     } finally {
@@ -883,6 +908,7 @@ export function OpeningStock() {
           rollTypeId: row.rollTypeId,
           rollCount: Number(row.rollCount),
           grossWeight: Number(row.grossWeight),
+          weightProvenance: transactionWeightProvenance(row.grossWeight, row.weightProvenance),
           boxId: row.boxId || null,
           crateTareWeight: Number(row.crateTareWeight || 0),
           operatorId: holoIssue.operatorId || null,
@@ -897,7 +923,8 @@ export function OpeningStock() {
       setHoloCart([]);
       setOpeningHoloSeries(null);
       holoCrateSeqRef.current = 0;
-      await fetchOpeningPreview();
+      const refreshed = await refreshAfterCommit(fetchOpeningPreview);
+      if (refreshed.warning) alert(`Opening stock was saved. Refresh failed: ${refreshed.warning}. Do not save it again; reload the view.`);
     } catch (err) {
       alert(err.message || 'Failed to save opening holo stock');
     } finally {
@@ -928,6 +955,7 @@ export function OpeningStock() {
         crates: coningCart.map(row => ({
           coneCount: Number(row.coneCount),
           grossWeight: Number(row.grossWeight),
+          weightProvenance: transactionWeightProvenance(row.grossWeight, row.weightProvenance),
           boxId: row.boxId || null,
           operatorId: coningIssue.operatorId || null,
           crateIndex: row.crateIndex,
@@ -941,7 +969,8 @@ export function OpeningStock() {
       setConingCart([]);
       setOpeningConingSeries(null);
       coningCrateSeqRef.current = 0;
-      await fetchOpeningPreview();
+      const refreshed = await refreshAfterCommit(fetchOpeningPreview);
+      if (refreshed.warning) alert(`Opening stock was saved. Refresh failed: ${refreshed.warning}. Do not save it again; reload the view.`);
     } catch (err) {
       alert(err.message || 'Failed to save opening coning stock');
     } finally {
@@ -1141,12 +1170,12 @@ export function OpeningStock() {
                       min="0"
                       step="0.001"
                       value={inboundEntry.weight}
-                      onChange={e => setInboundEntry(prev => ({ ...prev, weight: e.target.value }))}
+                      onChange={e => setInboundEntry(prev => ({ ...prev, weight: e.target.value, weightProvenance: null }))}
                       onKeyDown={e => e.key === 'Enter' && addInboundPiece()}
                       className="flex-1"
                     />
                     <CatchWeightButton
-                      onWeightCaptured={(wt) => setInboundEntry(prev => ({ ...prev, weight: wt.toFixed(3) }))}
+                      onWeightCaptured={(wt, meta) => setInboundEntry(prev => ({ ...prev, weight: String(wt), weightProvenance: meta }))}
                       context={{
                         feature: 'opening_stock',
                         stage,
@@ -1299,9 +1328,9 @@ export function OpeningStock() {
                 <div className="space-y-2">
                   <Label>Gross Weight (kg)</Label>
                   <div className="flex gap-2">
-                    <Input type="number" min="0" step="0.001" value={cutterEntry.grossWeight} onChange={e => setCutterEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
+                    <Input type="number" min="0" step="0.001" value={cutterEntry.grossWeight} onChange={e => setCutterEntry(prev => ({ ...prev, grossWeight: e.target.value, weightProvenance: null }))} className="flex-1" />
                     <CatchWeightButton
-                      onWeightCaptured={(wt) => setCutterEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))}
+                      onWeightCaptured={(wt, meta) => setCutterEntry(prev => ({ ...prev, grossWeight: String(wt), weightProvenance: meta }))}
                       context={{
                         feature: 'opening_stock',
                         stage,
@@ -1524,9 +1553,9 @@ export function OpeningStock() {
                 <div className="space-y-2">
                   <Label>Gross Weight (kg)</Label>
                   <div className="flex gap-2">
-                    <Input type="number" min="0" step="0.001" value={holoEntry.grossWeight} onChange={e => setHoloEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
+                    <Input type="number" min="0" step="0.001" value={holoEntry.grossWeight} onChange={e => setHoloEntry(prev => ({ ...prev, grossWeight: e.target.value, weightProvenance: null }))} className="flex-1" />
                     <CatchWeightButton
-                      onWeightCaptured={(wt) => setHoloEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))}
+                      onWeightCaptured={(wt, meta) => setHoloEntry(prev => ({ ...prev, grossWeight: String(wt), weightProvenance: meta }))}
                       context={{
                         feature: 'opening_stock',
                         stage,
@@ -1712,9 +1741,9 @@ export function OpeningStock() {
                 <div className="space-y-2">
                   <Label>Gross Weight (kg)</Label>
                   <div className="flex gap-2">
-                    <Input type="number" min="0" step="0.001" value={coningEntry.grossWeight} onChange={e => setConingEntry(prev => ({ ...prev, grossWeight: e.target.value }))} className="flex-1" />
+                    <Input type="number" min="0" step="0.001" value={coningEntry.grossWeight} onChange={e => setConingEntry(prev => ({ ...prev, grossWeight: e.target.value, weightProvenance: null }))} className="flex-1" />
                     <CatchWeightButton
-                      onWeightCaptured={(wt) => setConingEntry(prev => ({ ...prev, grossWeight: wt.toFixed(3) }))}
+                      onWeightCaptured={(wt, meta) => setConingEntry(prev => ({ ...prev, grossWeight: String(wt), weightProvenance: meta }))}
                       context={{
                         feature: 'opening_stock',
                         stage,

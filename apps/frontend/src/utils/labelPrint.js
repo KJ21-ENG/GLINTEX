@@ -3,9 +3,9 @@
 // placeholder substitution, and posting jobs to the local print service.
 
 import { formatDateDDMMYYYY } from './formatting';
-import { buildBitmapTsplFromTemplate } from './labelBitmap';
+import { buildBitmapTsplFromTemplate, buildPrintableArtifact } from './labelBitmap';
 
-export const DOTS_PER_MM = 8; // 203dpi ~ 8 dots per mm
+export const DOTS_PER_MM = 203 / 25.4; // 203dpi ~ 8 dots per mm
 const DEFAULT_MATERIAL_CODE = (import.meta.env.VITE_BARCODE_MATERIAL_CODE || 'MET').toUpperCase();
 
 export const LABEL_STAGE_KEYS = {
@@ -189,6 +189,7 @@ export const STAGE_VARIABLES = {
 export const getStageVariables = (stage) => STAGE_VARIABLES[stage] || [];
 
 const getApiOrigin = () => {
+  if (typeof window !== 'undefined' && window.glintexDesktop) return window.location.origin;
   if (import.meta?.env?.VITE_API_BASE) return import.meta.env.VITE_API_BASE;
   if (typeof window !== 'undefined' && window.location) {
     return `${window.location.protocol}//${window.location.hostname}:4000`;
@@ -1248,24 +1249,14 @@ export const getDefaultTemplate = (stageKey) => {
 
 export const loadTemplate = async (stageKey, options = {}) => {
   const apiBase = options.apiBase || API_BASE_DEFAULT;
-  if (!stageKey) return getDefaultTemplate(stageKey);
-  try {
-    const response = await fetch(`${apiBase}/sticker_templates/${encodeURIComponent(stageKey)}`, {
-      credentials: 'include',
-    });
-    notifyUnauthorized(response);
-    if (response.status === 404) return getDefaultTemplate(stageKey);
-    const payload = await safeReadJson(response);
-    const tpl = payload?.template;
-    if (!tpl) return getDefaultTemplate(stageKey);
-    return {
-      dimensions: { ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) },
-      content: migrateContent(tpl.content || {}),
-    };
-  } catch (err) {
-    console.error('Failed to load template', stageKey, err);
-    return getDefaultTemplate(stageKey);
-  }
+  if (!stageKey) throw new Error('Missing label stage');
+  const response = await fetch(`${apiBase}/sticker_templates/${encodeURIComponent(stageKey)}`, { credentials: 'include' });
+  notifyUnauthorized(response);
+  if (!response.ok) throw new Error(`Label template could not be loaded (${response.status}). No label was printed.`);
+  const payload = await safeReadJson(response);
+  const tpl = payload?.template;
+  if (!tpl) throw new Error('No saved label template exists. Configure and save this stage in Label Designer before printing.');
+  return { dimensions: { ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) }, content: migrateContent(tpl.content || {}) };
 };
 
 export const saveTemplate = async (stageKey, template, options = {}) => {
@@ -1489,6 +1480,10 @@ export const sendToLocalPrinter = async ({
 };
 
 export const fetchLocalPrinters = async ({ serviceBase, timeoutMs = 2000 } = {}) => {
+  if (window.glintexDesktop?.printers) {
+    try { const printers = await window.glintexDesktop.printers.enumerate(); return { success: true, printers: printers.map(p => typeof p === 'string' ? p : p.name), serviceBase: 'native' }; }
+    catch (error) { return { success: false, error: error.message }; }
+  }
   const resolved = serviceBase
     ? { success: true, serviceBase: normalizeServiceBase(serviceBase) }
     : await resolvePrintServiceBase({ timeoutMs: Math.min(1500, timeoutMs) });
@@ -1513,15 +1508,25 @@ export const fetchLocalPrinters = async ({ serviceBase, timeoutMs = 2000 } = {})
 
 export const printStageTemplatesBatch = async (stageKey, dataArray = [], options = {}) => {
   if (!stageKey || !Array.isArray(dataArray) || dataArray.length === 0) {
-    return { success: false, skipped: true, reason: 'Missing stageKey or empty dataArray' };
+    throw new Error('Missing stageKey or empty label batch');
   }
 
   const template = options.template || (await loadTemplate(stageKey, { apiBase: options.apiBase }));
   if (!template) {
-    return { success: false, skipped: true, reason: 'Template not found' };
+    throw new Error('Label template not found');
   }
 
   const copies = options.copies || template.content?.copies || 1;
+  if (typeof window !== 'undefined' && window.glintexDesktop?.printers) {
+    const status = await window.glintexDesktop.printers.status();
+    if (!status.profile) throw new Error('Configure the Windows printer in Workstation Devices first');
+    const profile = options.printer ? { ...status.profile, printerName: options.printer } : status.profile;
+    const artifact = await buildPrintableArtifact(template, dataArray, { stageKey, copies, dpi: profile.dpi });
+    const result = await window.glintexDesktop.printers.submit({ artifact, profile });
+    if (!result.success) throw new Error(`${result.error || 'Label submission failed'}${result.job?.id ? ` (job ${result.job.id})` : ''}`);
+    return result;
+  }
+
   let combinedTspl = '';
   for (const data of dataArray) {
     combinedTspl += buildTsplFromTemplate(template, data, { stageKey, copies });
@@ -1548,6 +1553,7 @@ export const printStageTemplatesBatch = async (stageKey, dataArray = [], options
     encoding,
   });
 
+  if (!result.success) throw new Error(result.error || 'Label print failed');
   return { ...result, tspl: combinedTspl };
 };
 

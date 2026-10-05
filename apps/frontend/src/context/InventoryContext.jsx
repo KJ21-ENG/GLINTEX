@@ -1,3 +1,4 @@
+import { refreshAfterCommit } from '../utils/postCommitPrint';
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import * as api from "../api/client";
 import { normalizeDb, extractBrandFromDb, defaultBrand, THEME_KEY, themeClasses } from "../utils";
@@ -421,8 +422,8 @@ export const InventoryProvider = ({ children }) => {
     createLot: async (payload) => {
       const res = await api.createLot(payload);
       // Lot creation changes inbound basics; avoid full bootstrap refresh.
-      const normalized = await refreshModuleData('inbound');
-      return { res, db: normalized };
+      const refreshed = await refreshAfterCommit(() => refreshModuleData('inbound'));
+      return { res, db: refreshed.value, refreshWarning: refreshed.warning };
     },
     deleteLot: async (lotNo) => {
       await api.deleteLot(lotNo);
@@ -433,12 +434,12 @@ export const InventoryProvider = ({ children }) => {
     createIssueToMachine: async (payload) => {
       const res = await api.createIssueToMachine(payload);
       // This action is cutter-only; avoid full bootstrap refresh.
-      await refreshProcessData('cutter');
+      const refreshed = await refreshAfterCommit(() => refreshProcessData('cutter'));
       emitInvalidation([
         INVENTORY_INVALIDATION_KEYS.issueOnMachine('cutter'),
         INVENTORY_INVALIDATION_KEYS.issueHistory('cutter'),
       ], { source: 'createIssueToMachine' });
-      return res;
+      return { ...res, refreshWarning: refreshed.warning };
     },
     createIssueTakeBack: async (process, issueId, payload) => {
       const stage = process || 'cutter';

@@ -1,4 +1,5 @@
 import { validateWeightProvenance, validateTransactionWeightProvenance } from '../utils/weightProvenance.js';
+import { createDesktopReleaseRouter } from './desktopReleases.js';
 import archiver from 'archiver';
 import multer from 'multer';
 import XLSX from 'xlsx';
@@ -2066,6 +2067,7 @@ router.get('/api/google-drive/callback', async (req, res) => {
 });
 
 // ===== Auth (required) =====
+router.use('/api/desktop/releases', createDesktopReleaseRouter({ authenticate: requireAuth }));
 router.use(requireAuth);
 
 router.get('/api/auth/me', async (req, res) => {

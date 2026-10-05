@@ -16,6 +16,8 @@ export default function DesktopWorkstation() {
   const [scaleStatus, setScaleStatus] = useState({ state: 'not configured' });
   const [printerStatus, setPrinterStatus] = useState({});
   const [controller, setController] = useState({});
+  const [update, setUpdate] = useState({ state: 'idle' });
+  const [updateError, setUpdateError] = useState('');
   const [scale, setScale] = useState(initialScale);
   const [ports, setPorts] = useState([]);
   const [printers, setPrinters] = useState([]);
@@ -69,7 +71,13 @@ export default function DesktopWorkstation() {
     const timer = setInterval(() => bridge.printers.listJobs().then(setJobs).catch(() => {}), 5000);
     return () => clearInterval(timer);
   }, [open, bridge]);
+  useEffect(() => {
+    if (!bridge?.updates) return;
+    bridge.updates.status().then(setUpdate).catch(e => setUpdateError(e.message));
+    return bridge.updates.onStatus(setUpdate);
+  }, [bridge]);
   if (!bridge) return null;
+  const updateAction = async action => { setUpdateError(''); try { setUpdate(await action()); } catch (e) { setUpdateError(e.message || 'Update operation failed'); } };
   const changeScale = (key, value) => setScale(s => ({ ...s, [key]: value }));
   const changeMedia = (key, value) => { setMedia(s => ({ ...s, [key]: Number(value) })); setTestArtifact(null); };
   const scaleLabel = scaleStatus.state || scaleStatus.status || (scaleStatus.isConnected ? 'connected' : 'disconnected');
@@ -88,8 +96,24 @@ export default function DesktopWorkstation() {
     <div className="flex flex-wrap gap-4 items-center px-4 py-2 text-sm">
       <span>Server: {server.state}</span><span>Scale: {scaleLabel}</span>
       <span>Printer: {printerStatus.available ? `${printerStatus.profile?.printerName || 'Selected'} (installed)` : 'unavailable / not selected'}</span>
+      <span>GLINTEX {controller.version || update.installedVersion || '…'}</span>
       <button type="button" className="underline ml-auto" onClick={() => setOpen(v => !v)} aria-expanded={open}>Workstation setup & print jobs</button>
     </div>
+    {bridge.updates && (open || update.prompt || ['downloading','armed'].includes(update.state)) && <section aria-label="Application updates" className="border-t p-3 space-y-2">
+      <h2 className="font-semibold">Application updates · installed {update.installedVersion || controller.version}</h2>
+      <p role="status" className="text-sm">{update.message}{update.state === 'downloading' ? ` ${update.progress || 0}%` : ''}</p>
+      {update.release && <p className="text-sm">Release {update.release.version} · {update.release.publishedAt} · {update.release.notes}</p>}
+      {updateError && <p role="alert" className="text-sm text-destructive">{updateError}</p>}
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={buttonClass} disabled={['unsupported','checking','downloading','armed','installing'].includes(update.state)} onClick={() => updateAction(bridge.updates.check)}>Check for updates</button>
+        {update.release && ['available','error'].includes(update.state) && <button type="button" className={buttonClass} onClick={() => updateAction(bridge.updates.download)}>Download update</button>}
+        {update.state === 'downloading' && <button type="button" className={buttonClass} onClick={() => updateAction(bridge.updates.cancel)}>Cancel download</button>}
+        {update.state === 'ready' && <button type="button" className={buttonClass} onClick={() => updateAction(bridge.updates.arm)}>Install after I close GLINTEX</button>}
+        {update.state === 'armed' && <button type="button" className={buttonClass} onClick={() => updateAction(bridge.updates.disarm)}>Cancel installation choice</button>}
+        {['available','ready','error'].includes(update.state) && <button type="button" className={buttonClass} onClick={() => updateAction(bridge.updates.later)}>Later</button>}
+      </div>
+      {update.release && <p className="text-xs">Private download uses your GLINTEX sign-in and verifies installer size and SHA-256. This is an unsigned test installer. Finish and save work, disconnect the scale and check the Windows print queue before closing; a final confirmation is required. Windows will not be restarted.</p>}
+    </section>}
     {open && <div className="p-4 space-y-5 max-h-[75vh] overflow-auto border-t">
       <div className="text-xs text-muted-foreground">Controller {controller.version || '…'} · API {controller.apiOrigin || server.apiOrigin} · Settings apply to this Windows user on this workstation</div>
       {error && <div role="alert" className="border border-destructive text-destructive rounded p-3">{error}</div>}

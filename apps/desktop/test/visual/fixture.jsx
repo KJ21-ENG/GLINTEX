@@ -26,7 +26,18 @@ let driverExit = 0, connected = false;
 window.fixtureDriverCalls = 0;
 window.fixtureDriverOutcome = code => { driverExit = code; };
 window.fixtureScaleConnected = value => { connected = value; };
-window.glintexDesktop.getController = async () => ({ version: '1.0.1-fixture', scaleDriver: { available: true } });
+window.glintexDesktop.getController = async () => ({ version: '1.1.0-fixture', scaleDriver: { available: true } });
+let updateState = { state: 'current', installedVersion: '1.1.0', message: 'No newer version is available.' }, updateListener;
+const setUpdate = values => { updateState = { ...updateState, ...values }; updateListener?.(updateState); return updateState; };
+window.fixtureUpdateChoice = 0;
+window.glintexDesktop.updates = {
+  status: async () => updateState, onStatus: callback => { updateListener = callback; return () => { updateListener = null; }; },
+  check: async () => setUpdate({ state: 'available', prompt: true, message: 'GLINTEX 1.1.1 is available.', release: { version: '1.1.1', publishedAt: '2026-10-05T00:00:00Z', notes: 'Simulated private update' } }),
+  download: async () => setUpdate({ state: 'ready', message: 'Simulated installer verified; no file downloaded.' }),
+  later: async () => setUpdate({ prompt: false }), cancel: async () => setUpdate({ state: 'available' }),
+  arm: async () => { window.fixtureUpdateChoice++; return setUpdate({ state: 'armed', message: 'Update selected. Finish work, disconnect the scale, then close GLINTEX to install.' }); },
+  disarm: async () => setUpdate({ state: 'ready', message: 'Installation cancelled.' }),
+};
 window.glintexDesktop.scale.status = async () => ({ state: connected ? 'connected' : 'unsupported', isConnected: connected, error: connected ? null : 'Select a verified protocol. No scale connected.' });
 window.glintexDesktop.scale.driverSetup = async () => {
   window.fixtureDriverCalls++;

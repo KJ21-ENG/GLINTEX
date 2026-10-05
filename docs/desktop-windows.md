@@ -4,7 +4,7 @@
 
 Electron is the desktop application; the old Tauri helper is not required. The bundled React UI uses **https://app.glintex.in/api/** and its existing sessions, roles and cloud database. No workstation backend/database is installed. Production transactions are not test fixtures.
 
-Initial delivered version **1.0.0**; optional driver-kit integration is **1.0.1**. Windows **x64**, Electron **44.5.1**, Forge **8.0.1**. Exact release commit: `build-info.json` and delivery `manifest.json`. Driver integration branch: `codex/electron-scale-driver-kit-20261005`. A new Windows installer remains pending its authorized private build and verification reports.
+Initial delivered version **1.0.0**; combined optional driver setup and private updater is **1.1.0**. Windows **x64**, Electron **44.5.1**, Forge **8.0.1**. Exact release commit and executed checks: `build-info.json`, delivery `manifest.json` and Windows verification reports. Integration branch: `codex/electron-private-updates-20261005`.
 
 A workflow definition is not execution evidence. Windows packaging, launch, installation, upgrade and uninstall remain **pending until the Windows run and its JSON reports pass**. Physical accuracy/protocol compatibility/alignment always await the owner's checks below. This document must not be described as a successful test report.
 
@@ -135,7 +135,7 @@ Regenerate root and desktop-local lockfiles deliberately on dependency changes. 
 The public `electron-windows.yml` workflow skips public-repository runs unless
 separate explicit artifact-visibility approval was obtained. Private delivery
 uses [GLINTEX-desktop-builds](https://github.com/KJ21-ENG/GLINTEX-desktop-builds/actions/workflows/electron-windows.yml).
-It is build-only, contents-read, Windows Server 2022 x64, no publication/deployment.
+It is build-only, contents-read (plus Actions read for the retained private 1.0.0 fixture), Windows Server 2022 x64, no publication/deployment.
 An authorized run tests software, packages/launches/installs the app, checks shortcuts,
 tests a temporary higher-version upgrade with settings/queue preservation markers,
 uninstalls and uploads artifacts in the private repository for **one day**. The
@@ -168,7 +168,25 @@ refresh/push or dispatch a new release.
 
 ## Upgrade, rollback and recovery
 
-No automatic update feed is configured. Finish capture/save/print, close GLINTEX, back up `%APPDATA%\GLINTEX`, then run a newer verified installer under the same Windows account. Keep the application identity/user profile. Squirrel nupkg/RELEASES files accompany the artifact, but are not an enabled automatic update channel.
+Version 1.1.0 checks the private first-party service after startup (30 seconds) and every six hours, with **Check for updates** in the GLINTEX menu/workstation panel. It shows offline, sign-in, unavailable and no-new-version states. Discovery never downloads or installs automatically. **Later** hides that version's prompt for six hours; a manual check can show it sooner.
+
+Choose **Download update** to use the existing HttpOnly session at the fixed HTTPS installer endpoint. Redirects, other origins, unsupported manifests, downgrades, wrong size and SHA-256 mismatches are rejected. Interrupted/cancelled downloads are not installable. Release version/date/notes appear first. No GitHub token or signing secret is in the client. The candidate is an **unsigned test installer**: trusted HTTPS and hash validation establish source/integrity, not Windows publisher signing; OS warnings remain enabled.
+
+Choose **Install after I close GLINTEX** after download verification. Continue working or cancel the choice. Only deliberate app close plus final save/discard confirmation starts installation. Connected scales, driver setup, native/server operations and queued print submissions block that close. Check the Windows print queue: accepted jobs may still print physically. Settings/cookies are flushed, then a fixed helper waits for app exit, rehashes the installer and opens it. There is no forced app close, startup installation or Windows reboot; restart clears the installation choice.
+
+Existing 1.0.0 needs **one manual upgrade** to 1.1.0 under the same Windows account. Finish capture/save/print, close GLINTEX, back up `%APPDATA%\GLINTEX`, then run the verified newer Setup.exe. Keep app identity/user profile. Squirrel nupkg/RELEASES files are temporary packaging output excluded from the new delivery artifact; the client uses authenticated first-party routes.
+
+### Private release administration
+
+After authorized backend deployment, set `GLINTEX_DESKTOP_RELEASE_HOST_DIRECTORY=/var/lib/glintex/desktop-releases` and `GLINTEX_DESKTOP_RELEASE_DIRECTORY=/app/desktop-releases` in the host environment. Compose mounts the folder read-only in the backend. Keep it outside every public web root, with directories 0750/files 0640 and readable by the backend service identity. Unconfigured/empty hosting advertises no fake release.
+
+Stage an exact successful private Windows delivery plus its `windows-verification.json`, then run:
+
+```sh
+node apps/backend/scripts/publish-desktop-release.mjs /private/delivery /private/windows-verification.json /var/lib/glintex/desktop-releases 'Optional scale driver setup and private user-controlled updates'
+```
+
+The publisher checks installer size/hash, source identity and successful installation/upgrade/bootstrap evidence, writes an immutable version directory and atomically selects `latest.json`. It has no HTTP upload route. Publish only the intended tested release; never the higher-version CI fixture. Both API routes require a current active/non-revoked session and return private/no-store headers. Verify live authenticated metadata/full-download hashes, anonymous rejection and absence of direct webroot access. Future releases require new successful private builds and explicit publication approval. An older latest pointer stops newer offers; clients never downgrade automatically.
 
 To roll back, preserve current data and note uncertain jobs, uninstall through Windows Apps & Features and install the prior verified release. Restore an appropriate backup only if its settings/queue schema is compatible. Never delete the profile as an upgrade shortcut or replay uncertain jobs automatically. Cloud/database rollback is outside this workstation procedure.
 

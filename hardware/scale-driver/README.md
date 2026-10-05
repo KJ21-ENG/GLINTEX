@@ -1,5 +1,11 @@
 # Windows scale driver kit
 
+GLINTEX Electron 1.1.0 bundles this optional helper. Updating GLINTEX does not
+automatically reinstall the Windows driver. Run setup from **Workstation setup
+& print jobs** only when needed, then select this PC's actual COM port and save
+the verified protocol settings. The driver exposes a Windows COM port;
+Electron's native SerialPort still depends on that operating-system driver.
+
 This kit installs the Prolific **5.1.12.0** Windows 10 x64 driver used by the
 BAFO BF-812 converter with hardware ID `USB\VID_067B&PID_23A3&REV_0305`.
 Different converters have different USB serial numbers; the hardware ID selects

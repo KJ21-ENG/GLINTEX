@@ -3,6 +3,8 @@ const http = require("node:http");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
+const { validateRelease } = require("./updates/protocol.cjs");
 const TEST_USER = {
   id: "fixture-operator",
   username: "fixture-operator",
@@ -13,6 +15,12 @@ const TEST_USER = {
   roleKeys: ["admin"],
 };
 async function startFixture() {
+  let updateRelease, installer;
+  if (process.env.GLINTEX_TEST_UPDATE_INSTALLER) {
+    installer = path.resolve(process.env.GLINTEX_TEST_UPDATE_INSTALLER);
+    const bytes = await fs.readFile(installer);
+    updateRelease = validateRelease({ schemaVersion: 1, product: "GLINTEX", platform: "win32", arch: "x64", channel: "stable", version: process.env.GLINTEX_TEST_UPDATE_VERSION, sourceCommit: require("../build-info.json").sourceCommit, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), signing: "unsigned-test-installer", notes: "Disposable next-version fixture; never publish", publishedAt: new Date().toISOString() });
+  }
   const server = http.createServer((req, res) => {
     res.setHeader("Content-Type", "application/json");
     const authorized = String(req.headers.cookie || "").includes(
@@ -50,6 +58,14 @@ async function startFixture() {
     }
     if (req.url === "/api/auth/me")
       return res.end(JSON.stringify({ ok: true, user: TEST_USER }));
+    if (req.url === "/api/desktop/releases/windows-x64/latest") {
+      if (!updateRelease) { res.statusCode = 204; return res.end(); }
+      return res.end(JSON.stringify(updateRelease));
+    }
+    if (updateRelease && req.url === `/api/desktop/releases/windows-x64/${updateRelease.version}/setup`) {
+      res.setHeader("Content-Type", "application/octet-stream"); res.setHeader("Content-Length", updateRelease.bytes);
+      require("node:fs").createReadStream(installer).pipe(res); return;
+    }
     if (req.url === "/api/bootstrap")
       return res.end('{"slices":{},"allowed":{},"brand":{}}');
     if (req.url.startsWith("/api/module")) return res.end('{"slices":{}}');
@@ -97,7 +113,7 @@ async function runSelfTest({
     evaluate(
       `return (await fetch(${JSON.stringify(route)},{credentials:'include'})).status`,
     );
-  if (phase === "first") {
+  if (phase === "first" || phase === "update") {
     await waitFor("document.querySelector('input[type=password]')!==null");
     await assert.rejects(
       evaluate("return window.glintexDesktop.printers.listJobs()"),
@@ -130,6 +146,18 @@ async function runSelfTest({
       evaluate("return window.glintexDesktop.scale.capture({timeoutMs:100})"),
     );
     await session.cookies.flushStore();
+    if (phase === "update") {
+      const check = await evaluate("return window.glintexDesktop.updates.check()");
+      assert.equal(check.state, "available"); assert.equal(check.release.version, process.env.GLINTEX_TEST_UPDATE_VERSION);
+      await evaluate("return window.glintexDesktop.updates.later()");
+      assert.equal((await evaluate("return window.glintexDesktop.updates.status()")).prompt, false);
+      const ready = await evaluate("return window.glintexDesktop.updates.download()"); assert.equal(ready.state, "ready");
+      await evaluate("return window.glintexDesktop.updates.arm()");
+      await evaluate("return window.glintexDesktop.updates.disarm()");
+      assert.equal((await evaluate("return window.glintexDesktop.updates.status()")).state, "ready");
+      await evaluate("return window.glintexDesktop.updates.arm()");
+      assert.equal((await evaluate("return window.glintexDesktop.updates.status()")).state, "armed");
+    }
   } else {
     await waitFor("document.body.innerText.includes('Workstation setup')");
     assert.equal(await fetchStatus("/api/auth/me"), 200);
@@ -166,7 +194,8 @@ async function runSelfTest({
       "httponly-samesite-cookie",
       "hardware-auth-gate",
       "same-origin-challan-frame-no-bridge",
-      phase === "first" ? "setup-panel" : "expiry-logout-foreign-redirect",
+      ["first", "update"].includes(phase) ? "setup-panel" : "expiry-logout-foreign-redirect",
+      ...(phase === "update" ? ["authenticated-release-discovery", "private-installer-download-and-sha256", "later-no-install", "explicit-arm-cancel-arm", "fixture-only-close-confirmation-and-silent-install"] : []),
     ],
     at: new Date().toISOString(),
   };

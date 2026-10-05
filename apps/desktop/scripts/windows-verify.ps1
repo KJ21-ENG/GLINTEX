@@ -2,6 +2,7 @@ param(
   [Parameter(Mandatory=$true)][string]$PackagedExe,
   [Parameter(Mandatory=$true)][string]$Installer,
   [string]$UpgradeInstaller,
+  [string]$BootstrapInstaller,
   [string]$OutputDirectory = (Join-Path $PSScriptRoot '../out/verification'),
   [switch]$AllowLocalInstall
 )
@@ -95,7 +96,18 @@ try {
   $beforeSettings = (Get-FileHash $settingsFile -Algorithm SHA256).Hash
   $beforeQueue = (Get-FileHash $queueSentinel -Algorithm SHA256).Hash
   if ($UpgradeInstaller) {
-    Invoke-Bounded ([IO.Path]::GetFullPath($UpgradeInstaller)) @('--silent')
+    $v = [version](Get-Content -Raw (Join-Path $OutputDirectory 'installed-smoke.json') | ConvertFrom-Json).version
+    $next = "$($v.Major).$($v.Minor).$($v.Build + 1)"
+    $env:GLINTEX_TEST_DATA = $userData
+    $env:GLINTEX_TEST_REPORTS = Join-Path $OutputDirectory 'authenticated-update-reports'
+    $env:GLINTEX_TEST_PHASE = 'update'
+    $env:GLINTEX_TEST_UPDATE_INSTALLER = [IO.Path]::GetFullPath($UpgradeInstaller)
+    $env:GLINTEX_TEST_UPDATE_VERSION = $next
+    $env:GLINTEX_INSTALL_TEST = '1'
+    try { Invoke-Bounded $installedExe.FullName @('--self-test') 300 }
+    finally { Remove-Item Env:GLINTEX_TEST_DATA, Env:GLINTEX_TEST_REPORTS, Env:GLINTEX_TEST_PHASE, Env:GLINTEX_TEST_UPDATE_INSTALLER, Env:GLINTEX_TEST_UPDATE_VERSION, Env:GLINTEX_INSTALL_TEST -ErrorAction SilentlyContinue }
+    $deadline = (Get-Date).AddSeconds(120)
+    while (-not (Test-Path (Join-Path $installRoot "app-$next/GLINTEX.exe"))) { if ((Get-Date) -gt $deadline) { throw 'User-controlled update installer did not create the next-version application' }; Start-Sleep -Seconds 2 }
     Start-Sleep -Seconds 8
     Stop-TestApp
     $upgradedExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -105,6 +117,7 @@ try {
     if ([version]$nextVersion -le [version]$firstVersion) { throw 'Upgrade fixture did not increase version' }
     if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Upgrade changed persisted settings or queue marker' }
     $report.upgradePreserved = $true
+    $report.authenticatedUpdate = $true
     $report.upgradeFrom = $firstVersion; $report.upgradeTo = $nextVersion
   }
   $report.uninstallDetails = Invoke-Uninstall 'uninstall-details'
@@ -123,6 +136,22 @@ try {
   if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Reinstall changed retained settings or queue marker' }
   $report.reinstallPreserved = $true
   $report.finalUninstallDetails = Invoke-Uninstall 'final-uninstall-details'
+  if ($BootstrapInstaller) {
+    Invoke-Bounded ([IO.Path]::GetFullPath($BootstrapInstaller)) @('--silent')
+    Start-Sleep -Seconds 8; Stop-TestApp
+    $bootstrapExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    Invoke-Smoke $bootstrapExe.FullName 'bootstrap-1.0.0' $userData
+    if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-1.0.0.json') | ConvertFrom-Json).version -ne '1.0.0') { throw 'Bootstrap fixture is not the delivered 1.0.0' }
+    Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
+    Start-Sleep -Seconds 8; Stop-TestApp
+    $bootstrappedExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    Invoke-Smoke $bootstrappedExe.FullName 'bootstrap-upgraded' $userData
+    if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-upgraded.json') | ConvertFrom-Json).version -ne $originalVersion) { throw 'Manual 1.0.0 bootstrap did not select the candidate' }
+    if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Manual bootstrap changed workstation settings or queue' }
+    $report.manualBootstrapPreserved = $true
+    $report.bootstrapFrom = '1.0.0'; $report.bootstrapTo = $originalVersion
+    $report.bootstrapUninstallDetails = Invoke-Uninstall 'bootstrap-uninstall-details'
+  }
   if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Final uninstall changed retained settings or queue marker' }
   $report.installerSignature = (Get-AuthenticodeSignature ([IO.Path]::GetFullPath($Installer))).Status.ToString()
   $report.settingsSha256 = $beforeSettings.ToLower(); $report.queueMarkerSha256 = $beforeQueue.ToLower()

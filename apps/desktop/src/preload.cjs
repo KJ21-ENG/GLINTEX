@@ -10,6 +10,21 @@ contextBridge.exposeInMainWorld(
       update: (settings) => call("settings.update", settings),
     },
     server: { status: () => call("server.status") },
+    updates: {
+      status: () => call("updates.status"),
+      check: () => call("updates.check"),
+      download: () => call("updates.download"),
+      cancel: () => call("updates.cancel"),
+      later: () => call("updates.later"),
+      arm: () => call("updates.arm"),
+      disarm: () => call("updates.disarm"),
+      onStatus: (callback) => {
+        if (typeof callback !== "function") throw new Error("Callback required");
+        const listener = (_event, status) => callback(status);
+        ipcRenderer.on("glintex:update-status", listener);
+        return () => ipcRenderer.removeListener("glintex:update-status", listener);
+      },
+    },
     scale: {
       driverSetup: () => call("scale.driverSetup"),
       enumerate: () => call("scale.enumerate"),

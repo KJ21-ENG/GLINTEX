@@ -13,6 +13,7 @@ import {
   normalizeBlock,
   migrateContent,
   buildTspl,
+  printStageTemplatesBatch,
   loadTemplate,
   saveTemplate,
   fetchLocalPrinters,
@@ -26,6 +27,7 @@ import {
 } from '../../utils/labelPrint';
 import {
   buildBitmapTsplFromTemplate,
+  buildPrintableArtifact,
   getBitmapPolaritySanity,
   measureRenderedBlock,
   renderLabelToCanvas,
@@ -160,12 +162,11 @@ const LabelPreview = ({
     fontSize,
   } = dimensions;
   const totalLabelsWidth = columns * width + horizontalGap * (columns - 1);
-  const pagePadding = Math.max(0, (pageWidth - totalLabelsWidth) / 2);
+  const pagePadding = 0; // Printable origin is marginLeft; never center only the preview.
   const previewScrollRef = useRef(null);
   const [zoom, setZoom] = useState(1);
   const [showGrid, setShowGrid] = useState(true);
   const [snapToGrid, setSnapToGrid] = useState(false);
-  const [printerMode, setPrinterMode] = useState(false);
   const [showRulers, setShowRulers] = useState(true);
   const [showQuietZones, setShowQuietZones] = useState(true);
   const [panning, setPanning] = useState(null);
@@ -177,10 +178,19 @@ const LabelPreview = ({
     const baseWidthPx = Math.max(1, mmToPx(pageWidth));
     setZoom(Math.max(0.5, Math.min(3, available / baseWidthPx)));
   }, [pageWidth]);
-  const previewPixelsPerMm = useMemo(() => {
-    if (typeof window === 'undefined') return PX_PER_MM;
-    return PX_PER_MM * (window.devicePixelRatio || 1);
+  const [previewDpi, setPreviewDpi] = useState(203);
+  useEffect(() => {
+    let live = true;
+    const refreshProfile = () => {
+      if (window.glintexDesktop?.printers) window.glintexDesktop.printers.status()
+        .then(status => { if (live) setPreviewDpi(status.profile?.dpi || 203); }).catch(() => {});
+    };
+    refreshProfile();
+    window.addEventListener('glintex:printer-profile-changed', refreshProfile);
+    window.addEventListener('focus', refreshProfile);
+    return () => { live = false; window.removeEventListener('glintex:printer-profile-changed', refreshProfile); window.removeEventListener('focus', refreshProfile); };
   }, []);
+  const previewPixelsPerMm = previewDpi / 25.4; // Same physical raster as the default TE244 profile; CSS handles zoom.
   const [fontRenderNonce, setFontRenderNonce] = useState(0);
   useEffect(() => {
     let cancelled = false;
@@ -198,18 +208,28 @@ const LabelPreview = ({
   useEffect(() => {
     fitToWidth();
   }, [fitToWidth, columns, pageWidth]);
-  const previewRender = useMemo(() => {
-    try {
-      return renderLabelToCanvas(
-        { dimensions, content },
-        {},
-        { stageKey, pixelsPerMm: previewPixelsPerMm, preserveColor: true, printerMode },
-      );
-    } catch (error) {
-      console.error('Failed to render label preview canvas', error);
-      return null;
-    }
-  }, [content, dimensions, fontRenderNonce, previewPixelsPerMm, printerMode, stageKey]);
+  const [previewRender, setPreviewRender] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    // Consume the actual canonical page PNG. Crop a column only to position the
+    // editor's separate handles; there is no second artwork/rasterization path.
+    buildPrintableArtifact({ dimensions, content }, [{}], { stageKey, dpi: previewDpi, copies: 1 })
+      .then(async artifact => {
+        const image = new Image();
+        image.src = artifact.pages[0].pngDataUrl;
+        await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(dimensions.width * previewPixelsPerMm);
+        canvas.height = Math.round(dimensions.height * previewPixelsPerMm);
+        canvas.getContext('2d').drawImage(image,
+          Math.round((dimensions.marginLeft || 0) * previewPixelsPerMm),
+          Math.round((dimensions.marginTop || 0) * previewPixelsPerMm),
+          canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+        if (!cancelled) setPreviewRender({ canvas, artifact });
+      })
+      .catch(error => { if (!cancelled) setPreviewRender(null); console.error('Invalid label preview', error.message); });
+    return () => { cancelled = true; };
+  }, [content, dimensions, fontRenderNonce, previewDpi, previewPixelsPerMm, stageKey]);
   const previewFields = useMemo(
     () => prepareTemplateFields(dimensions, content, {}, { stageKey }).fields,
     [content, dimensions, stageKey],
@@ -400,7 +420,7 @@ const LabelPreview = ({
 
   const computeBoundingBox = (text) => {
     const { widthMm, heightMm } = measureBlock(text);
-    const angle = text.type === 'line' ? 0 : snapAngle(text.angle || 0);
+    const angle = snapAngle(text.angle || 0);
     let minX = 0;
     let maxX = widthMm;
     let minY = 0;
@@ -629,7 +649,7 @@ const LabelPreview = ({
       boxSizing: 'border-box',
       width: `${mmToPx(widthMm)}px`,
       height: `${mmToPx(heightMm)}px`,
-      transform: block.type === 'line' ? undefined : `rotate(${snapAngle(angle)}deg)`,
+      transform: `rotate(${snapAngle(angle)}deg)`,
       transformOrigin: 'top left',
       overflow: 'visible',
       cursor: block.locked ? 'default' : visible ? 'move' : 'not-allowed',
@@ -1145,7 +1165,7 @@ const LabelPreview = ({
         <Button size="sm" variant="outline" onClick={fitToWidth}>Fit</Button>
         <Button size="sm" variant="outline" onClick={() => setZoom((current) => Math.min(3, Number((current + 0.1).toFixed(2))))}>+</Button>
         <span className="text-muted-foreground">{Math.round(zoom * 100)}%</span>
-        <Button size="sm" variant={printerMode ? 'default' : 'outline'} onClick={() => setPrinterMode((current) => !current)}>Printer Mode</Button>
+        <span className="text-muted-foreground">Exact printable artwork · {previewDpi} dpi</span>
         <Button size="sm" variant={showGrid ? 'default' : 'outline'} onClick={() => setShowGrid((current) => !current)}>Grid</Button>
         <Button size="sm" variant={snapToGrid ? 'default' : 'outline'} onClick={() => setSnapToGrid((current) => !current)}>Snap Grid</Button>
         <Button size="sm" variant={showRulers ? 'default' : 'outline'} onClick={() => setShowRulers((current) => !current)}>Rulers</Button>
@@ -1533,7 +1553,12 @@ const LabelDesigner = () => {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const tpl = await loadTemplate(templateStage);
+      let tpl;
+      try { tpl = await loadTemplate(templateStage); }
+      catch (error) {
+        if (!cancelled) { setContent({ ...DEFAULT_CONTENT, texts: [] }); setServiceStatus({ state: 'error', message: error.message, tone: 'error' }); }
+        return;
+      }
       if (cancelled) return;
       if (tpl) {
         setDimensions({ ...DEFAULT_DIMENSIONS, ...(tpl.dimensions || {}) });
@@ -1584,7 +1609,7 @@ const LabelDesigner = () => {
       setPrinters(printerList);
       setSelectedPrinter((prev) => {
         if (prev && printerList.includes(prev)) return prev;
-        return printerList[0] || '';
+        return ''; // Never silently change the selected printer.
       });
       setServiceStatus({
         state: 'connected',
@@ -1599,7 +1624,7 @@ const LabelDesigner = () => {
           : '';
       setServiceStatus({
         state: 'error',
-        message: `Could not reach local print service on port 9090.${protocolHint}`,
+        message: window.glintexDesktop?.printers ? `Windows printer enumeration failed: ${error.message}` : `Could not reach local print service on port 9090.${protocolHint}`,
         tone: 'error',
       });
     }
@@ -1849,7 +1874,9 @@ const LabelDesigner = () => {
     setLastCommand(command);
     try {
       setServiceStatus({ state: 'working', message: 'Sending job for silent print...', tone: 'muted' });
-      const result = await sendToLocalPrinter({
+      const result = window.glintexDesktop?.printers
+        ? await printStageTemplatesBatch(templateStage, [{}], { template: { dimensions, content }, printer: selectedPrinter })
+        : await sendToLocalPrinter({
         printer: selectedPrinter,
         content: useBitmap
           ? uint8ArrayToBase64(
@@ -1865,7 +1892,7 @@ const LabelDesigner = () => {
         const rawLen = result.result?.job?.raw_len;
         setServiceStatus({
           state: 'connected',
-          message: `Print job sent via local service.${jobId ? ` Job ${jobId}` : ''}${rawLen ? ` · ${rawLen} bytes` : ''}`,
+          message: `Label submitted. Check printer for physical output.${jobId ? ` Job ${jobId}` : ''}${rawLen ? ` · ${rawLen} bytes` : ''}`,
           tone: 'success'
         });
       } else {

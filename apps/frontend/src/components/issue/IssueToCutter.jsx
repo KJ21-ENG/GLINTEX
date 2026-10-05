@@ -1,3 +1,4 @@
+import { runPostCommitPrint } from '../../utils/postCommitPrint';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useInventory } from '../../context/InventoryContext';
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Badge, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
@@ -184,6 +185,15 @@ export function IssueToCutter() {
             const payload = { date, itemId, lotNo, pieceIds, pieceLines, note, machineId, operatorId, cutId };
             const result = await createIssueToMachine(payload);
             const issueRecord = result?.issueToMachine || result?.issueToCutterMachine || result?.issue_to_cutter_machine;
+      await runPostCommitPrint({
+        finalize: () => {
+            setSelectedLines([]);
+            setCutId("");
+            setNote("");
+            alert(`Issued ${pieceIds.length} pieces successfully.`);
+        },
+        print: async () => {
+          if (result.refreshWarning) alert(`Issue was saved. Data refresh failed: ${result.refreshWarning}. Reload the view; do not issue it again.`);
             const template = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_ISSUE);
             if (template && issueRecord) {
                 const confirmPrint = window.confirm('Print sticker for this issue?');
@@ -219,10 +229,9 @@ export function IssueToCutter() {
                     );
                 }
             }
-            setSelectedLines([]);
-            setCutId("");
-            setNote("");
-            alert(`Issued ${pieceIds.length} pieces successfully.`);
+        },
+        onFailure: error => alert(`Issue was saved, but its label failed: ${error.message}. Reprint from Issue History or retained jobs; do not issue it again.`),
+      });
         } catch (e) {
             alert(e.message);
         } finally {

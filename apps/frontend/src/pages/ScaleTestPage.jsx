@@ -4,6 +4,7 @@ import { CatchWeightButton } from '../components/common/CatchWeightButton';
 import { isWebSerialSupported, getActiveScalePort, requestScalePort } from '../utils/weightScale';
 
 export function ScaleTestPage() {
+    const nativeScale = window.glintexDesktop?.scale;
     const [weight, setWeight] = useState(null);
     const [logs, setLogs] = useState([]);
     const [isSupported, setIsSupported] = useState(false);
@@ -15,11 +16,16 @@ export function ScaleTestPage() {
     }, []);
 
     const addLog = (msg) => {
-        setLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev]);
+        setLogs(prev => [`[${new Date().toLocaleTimeString()}] ${String(msg).slice(0, 512)}`, ...prev].slice(0, 100));
     };
 
     const checkConnection = async () => {
         try {
+            if (nativeScale) {
+                const state = await nativeScale.status();
+                setPortInfo(`${state.status}: ${state.portInfo?.path || 'no saved port'}`);
+                return;
+            }
             const port = await getActiveScalePort();
             if (port) {
                 setPortInfo('Connected (Authorized)');
@@ -36,9 +42,10 @@ export function ScaleTestPage() {
 
     const handleConnect = async () => {
         try {
-            addLog('Requesting port...');
-            await requestScalePort();
-            addLog('Port authorized successfully');
+            addLog(nativeScale ? 'Connecting saved scale...' : 'Requesting port...');
+            if (nativeScale) await nativeScale.connect();
+            else await requestScalePort();
+            addLog(nativeScale ? 'Connection request completed' : 'Port authorized successfully');
             checkConnection();
         } catch (e) {
             addLog(`Connection failed: ${e.message}`);
@@ -52,7 +59,7 @@ export function ScaleTestPage() {
                     <CardTitle className="flex justify-between items-center">
                         Scale Test Utility
                         {isSupported ? 
-                            <Badge className="bg-green-600">Web Serial Supported</Badge> : 
+                            <Badge className="bg-green-600">{nativeScale ? 'Native serial controller' : 'Web Serial Supported'}</Badge> :
                             <Badge variant="destructive">Web Serial Not Supported</Badge>
                         }
                     </CardTitle>
@@ -65,13 +72,13 @@ export function ScaleTestPage() {
                             <div className="font-mono">{portInfo}</div>
                         </div>
                         <Button variant="outline" onClick={handleConnect}>
-                            Authorize New Port
+                            {nativeScale ? 'Connect saved scale' : 'Authorize New Port'}
                         </Button>
                     </div>
 
                     <div className="flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg">
                         <div className="text-6xl font-bold font-mono tracking-tighter mb-4">
-                            {weight !== null ? weight.toFixed(3) : '---'}
+                            {weight !== null ? String(weight) : '---'}
                             <span className="text-2xl text-muted-foreground ml-2">kg</span>
                         </div>
                         

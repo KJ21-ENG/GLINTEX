@@ -205,6 +205,7 @@ const renderBarcodeToCanvas = (value, style = {}, options = {}) => {
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.drawImage(innerCanvas, paddingLeft, paddingTop);
 
+  if (barcodeCanvasCache.size >= 128) barcodeCanvasCache.delete(barcodeCanvasCache.keys().next().value);
   barcodeCanvasCache.set(cacheKey, canvas);
   return canvas;
 };
@@ -242,9 +243,8 @@ export const measureRenderedBlock = (field = {}, dimensions, options = {}) => {
   if (type === 'line') {
     const lengthMm = Math.max(0.1, Number(field.style?.lengthMm ?? 20));
     const thicknessMm = Math.max(0.1, Number(field.style?.thicknessMm ?? 0.6));
-    const horizontal = angle === 0 || angle === 180;
-    const widthMm = horizontal ? lengthMm : thicknessMm;
-    const heightMm = horizontal ? thicknessMm : lengthMm;
+    const widthMm = lengthMm;
+    const heightMm = thicknessMm; // Local coordinates; rotation applies uniformly to every block type.
     return {
       type,
       widthMm,
@@ -347,10 +347,10 @@ export const renderLabelToCanvas = (template = {}, data = {}, options = {}) => {
     const metrics = field.renderMetrics;
 
     if (field.type === 'line') {
-      ctx.save();
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(x, y, metrics.widthPx, metrics.heightPx);
-      ctx.restore();
+      drawWithRotation(ctx, x, y, angle, rotatedCtx => {
+        rotatedCtx.fillStyle = '#000000';
+        rotatedCtx.fillRect(0, 0, metrics.widthPx, metrics.heightPx);
+      });
       return;
     }
 
@@ -494,4 +494,48 @@ export const buildBitmapTsplFromTemplate = async (template = {}, data = {}, opti
   const bitmap = canvasToMonoBitmap(canvas);
   const copies = normalizeCopies(options.copies || content.copies || 1);
   return buildBitmapTspl(dimensions, bitmap, Math.ceil(widthDots / 8), heightDots, { ...options, copies });
+};
+
+// One immutable printable artifact: the page PNGs are both preview and driver input.
+// Rows deliberately repeat the same transaction in each column, matching legacy labels.
+export const buildPrintableArtifact = async (template, dataArray = [{}], options = {}) => {
+  await waitForLabelFonts(template);
+  const dpi = options.dpi || 203;
+  if (![203, 300, 600].includes(dpi)) throw new Error('Unsupported printer DPI');
+  const dims = { ...DEFAULT_DIMENSIONS, ...template.dimensions };
+  const content = migrateContent(template.content || template);
+  for (const key of ['width', 'height', 'pageWidth']) {
+    if (!Number.isFinite(Number(dims[key])) || Number(dims[key]) <= 0 || Number(dims[key]) > 500) throw new Error(`Invalid label ${key}`);
+    dims[key] = Number(dims[key]);
+  }
+  if (!Number.isInteger(dims.columns) || dims.columns < 1 || dims.columns > 8) throw new Error('Invalid label columns');
+  for (const key of ['horizontalGap', 'verticalGap', 'marginLeft', 'marginTop', 'offsetX', 'offsetY']) {
+    dims[key] = Number(dims[key] || 0);
+    if (!Number.isFinite(dims[key]) || Math.abs(dims[key]) > 100) throw new Error(`Invalid label ${key}`);
+  }
+  const usedWidth = dims.marginLeft + dims.width * dims.columns + dims.horizontalGap * (dims.columns - 1);
+  if (usedWidth > dims.pageWidth + 0.001) throw new Error('Columns and margins exceed configured roll width');
+  if (dims.marginTop < 0 || dims.marginLeft < 0 || dims.horizontalGap < 0) throw new Error('Media margins and gaps cannot be negative');
+  const copies = normalizeCopies(options.copies || content.copies || 1);
+  if (!Array.isArray(dataArray) || !dataArray.length || copies * dataArray.length > 100) throw new Error('Split label jobs into batches of at most 100 rows');
+  const pixelsPerMm = dpi / 25.4;
+  const heightMm = dims.height + dims.marginTop;
+  if (Math.round(dims.pageWidth * pixelsPerMm) * Math.round(heightMm * pixelsPerMm) > 24000000) throw new Error('Label raster exceeds safe pixel limit');
+  if (Math.round(dims.pageWidth * pixelsPerMm) * Math.round(heightMm * pixelsPerMm) * copies * dataArray.length > 48000000) throw new Error('Label batch exceeds decoded pixel budget; split the batch');
+  const pages = [];
+  let totalArtworkBytes = 0;
+  for (const data of dataArray) {
+    const { canvas: label } = renderLabelToCanvas({ dimensions: dims, content }, data, { ...options, pixelsPerMm, preserveColor: false, printerMode: true });
+    const page = createCanvas(Math.round(dims.pageWidth * pixelsPerMm), Math.round(heightMm * pixelsPerMm));
+    const context = page.getContext('2d', { alpha: false });
+    context.fillStyle = '#ffffff'; context.fillRect(0, 0, page.width, page.height); context.imageSmoothingEnabled = false;
+    for (let col = 0; col < dims.columns; col++) {
+      context.drawImage(label, Math.round((dims.marginLeft + col * (dims.width + dims.horizontalGap)) * pixelsPerMm), Math.round(dims.marginTop * pixelsPerMm));
+    }
+    const pngDataUrl = page.toDataURL('image/png');
+    totalArtworkBytes += pngDataUrl.length * copies;
+    if (totalArtworkBytes > 19 * 1024 * 1024) throw new Error('Label artwork exceeds 19 MB; split the batch');
+    for (let copy = 0; copy < copies; copy++) pages.push({ pngDataUrl });
+  }
+  return { version: 1, dpi, widthMm: dims.pageWidth, heightMm, pages, templateSnapshot: JSON.parse(JSON.stringify({ stageKey: options.stageKey || 'calibration', dimensions: dims, content })), profileSnapshot: { dpi, verticalGapMm: dims.verticalGap, columns: dims.columns, copies, columnSemantics: 'repeat-transaction' } };
 };

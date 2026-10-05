@@ -1,3 +1,4 @@
+import { captureProvenance } from '../../utils/weightProvenance';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Loader2, PlugZap, Unplug } from 'lucide-react';
 import * as api from '../../api/client';
@@ -5,10 +6,10 @@ import { getScaleManager, isWebSerialSupported } from '../../utils/weightScale';
 import { Button, Input, Label, Select, Badge } from '../ui';
 import { Dialog, DialogContent } from '../ui/Dialog';
 
-const toFixed3 = (val) => {
+const displayWeight = (val) => {
   const num = Number(val);
   if (!Number.isFinite(num)) return '';
-  return (Math.round(num * 1000) / 1000).toFixed(3);
+  return String(num);
 };
 
 export function WeightCaptureDialog({
@@ -150,15 +151,7 @@ export function WeightCaptureDialog({
     try {
       const result = await manager.captureStableWeight({ port: selectedPort, timeoutMs: 8000, allowUserPrompt: false });
       const weightKg = result.weightKg;
-      const meta = {
-        source: 'scale',
-        weightKg,
-        portInfo: result.portInfo || null,
-        baudRate: result.baudRate || null,
-        parser: result.meta?.parser || null,
-        raw: result.meta?.raw || null,
-        stableFlag: Boolean(result.meta?.stable),
-      };
+      const meta = captureProvenance(result);
       try {
         await api.logWeightCapture({ ...meta, context });
       } catch (e) {
@@ -175,7 +168,7 @@ export function WeightCaptureDialog({
   }
 
   async function handleManualUse() {
-    const parsed = Number.parseFloat(manualWeight);
+    const parsed = manualWeight.trim() ? Number(manualWeight) : NaN;
     if (!Number.isFinite(parsed) || parsed <= 0) {
       setError('Enter a valid weight');
       return;
@@ -188,9 +181,10 @@ export function WeightCaptureDialog({
     setBusy(true);
     setError('');
     try {
-      const weightKg = Math.round(parsed * 1000) / 1000;
+      const weightKg = parsed;
       const meta = {
         source: 'manual',
+        timestamp: new Date().toISOString(),
         weightKg,
         reason: manualReason.trim(),
       };
@@ -300,7 +294,7 @@ export function WeightCaptureDialog({
                 </div>
                 <div className="mt-2 flex items-end gap-2">
                   <div className="text-5xl font-mono font-bold tabular-nums tracking-tight">
-                    {liveWeight != null ? toFixed3(liveWeight) : '---'}
+                    {liveWeight != null ? displayWeight(liveWeight) : '---'}
                   </div>
                   <div className="text-lg text-muted-foreground pb-1">kg</div>
                 </div>
@@ -323,7 +317,7 @@ export function WeightCaptureDialog({
                     {showRaw ? 'Hide Raw' : 'Show Raw'}
                   </Button>
                   <div className="text-xs text-muted-foreground">
-                    {stableWeight != null ? `Stable: ${toFixed3(stableWeight)} kg` : 'Tip: keep the scale steady for 1–2 seconds.'}
+                    {stableWeight != null ? `Stable: ${displayWeight(stableWeight)} kg` : 'Tip: keep the scale steady for 1–2 seconds.'}
                   </div>
                 </div>
 

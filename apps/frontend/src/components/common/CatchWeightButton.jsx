@@ -1,3 +1,4 @@
+import { captureProvenance } from '../../utils/weightProvenance';
 import React, { useState } from 'react';
 import { Scale, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '../ui';
@@ -38,15 +39,7 @@ export function CatchWeightButton({ onWeightCaptured, disabled = false, classNam
             // Fast path: if already authorized + connected, try a quick stable capture.
             const manager = getScaleManager();
             const result = await manager.captureStableWeight({ timeoutMs: 2500, allowUserPrompt: false });
-            const meta = {
-                source: 'scale',
-                weightKg: result.weightKg,
-                portInfo: result.portInfo || null,
-                baudRate: result.baudRate || null,
-                parser: result.meta?.parser || null,
-                raw: result.meta?.raw || null,
-                stableFlag: Boolean(result.meta?.stable),
-            };
+            const meta = captureProvenance(result);
             try {
                 await api.logWeightCapture({ ...meta, context: effectiveContext });
             } catch (e) {

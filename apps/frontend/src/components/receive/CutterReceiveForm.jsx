@@ -1,3 +1,5 @@
+import { refreshAfterCommit } from '../../utils/postCommitPrint';
+import { transactionWeightProvenance } from '../../utils/weightProvenance';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
@@ -45,6 +47,7 @@ export function CutterReceiveForm() {
     const [boxId, setBoxId] = useState('');
     const [bobbinQty, setBobbinQty] = useState('');
     const [grossWeight, setGrossWeight] = useState('');
+    const [weightProvenance, setWeightProvenance] = useState(null);
     const [isWastage, setIsWastage] = useState(false);
     const [wastageDialogOpen, setWastageDialogOpen] = useState(false);
     const [pendingWastageContext, setPendingWastageContext] = useState(null);
@@ -123,7 +126,7 @@ export function CutterReceiveForm() {
         (async () => {
             const tpl = await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE);
             if (alive) setTemplate(tpl || null);
-        })();
+        })().catch(() => { if (alive) setTemplate(null); });
         return () => { alive = false; };
     }, []);
 
@@ -145,7 +148,7 @@ export function CutterReceiveForm() {
                         setBobbinId('');
                         setBoxId('');
                         setBobbinQty('');
-                        setGrossWeight('');
+                        setGrossWeight(''); setWeightProvenance(null);
                         setIsWastage(false);
                     } else {
                         showMessage('Barcode not found or invalid');
@@ -181,7 +184,7 @@ export function CutterReceiveForm() {
                 setBobbinId('');
                 setBoxId('');
                 setBobbinQty('');
-                setGrossWeight('');
+                setGrossWeight(''); setWeightProvenance(null);
                 setIsWastage(false);
             } else {
                 showMessage('Barcode not found or invalid');
@@ -491,6 +494,7 @@ export function CutterReceiveForm() {
             itemId: issueRecord.itemId,
             operatorId,
             cutId, helperId, shift, bobbinId, boxId, bobbinQty, grossWeight, isWastage, receiveDate,
+            weightProvenance: transactionWeightProvenance(grossWeight, weightProvenance),
             netWeight: netWeight,
             barcode: receiveBarcode,
 
@@ -505,6 +509,7 @@ export function CutterReceiveForm() {
             boxName: selectedBox?.name
         }]);
 
+        try {
         const tpl = template || (await loadTemplate(LABEL_STAGE_KEYS.CUTTER_RECEIVE));
         if (tpl && receiveBarcode) {
             setPendingPrint({
@@ -531,8 +536,12 @@ export function CutterReceiveForm() {
             });
         }
 
+        } catch (error) {
+            showMessage(`Crate is in the cart. Its label could not be prepared: ${error.message}. Do not add this crate again.`);
+        }
+
         // Reset fields for next box
-        setGrossWeight('');
+        setGrossWeight(''); setWeightProvenance(null);
         setBobbinQty('');
         setIsWastage(false);
     });
@@ -549,6 +558,7 @@ export function CutterReceiveForm() {
                 boxId: entry.boxId,
                 bobbinQuantity: Number(entry.bobbinQty),
                 grossWeight: Number(entry.grossWeight),
+                weightProvenance: transactionWeightProvenance(entry.grossWeight, entry.weightProvenance),
                 receiveDate: entry.receiveDate,
                 operatorId: entry.operatorId,
                 cutId: entry.cutId,
@@ -560,7 +570,7 @@ export function CutterReceiveForm() {
 
             const res = await api.createCutterReceiveChallan({ entries });
             // Avoid full bootstrap refresh; cutter receives are covered by the cutter process module.
-            await refreshProcessData('cutter');
+            const refreshResult = await refreshAfterCommit(() => refreshProcessData('cutter'));
             emitInvalidation(INVENTORY_INVALIDATION_KEYS.receiveHistory('cutter'), {
                 source: 'createCutterReceiveChallan',
                 challanId: res?.challan?.id || null,
@@ -571,7 +581,7 @@ export function CutterReceiveForm() {
             const challans = res?.challans || (res?.challan ? [res.challan] : []);
             setFeedback({
                 title: 'Received successfully',
-                message: `${cart.filter(entry => !entry.isWastage).length} crates saved. ${challans.length} ${challans.length === 1 ? 'challan' : 'challans'} generated.`,
+                message: `${cart.filter(entry => !entry.isWastage).length} crates saved. ${challans.length} ${challans.length === 1 ? 'challan' : 'challans'} generated.${refreshResult.warning ? ` Data refresh failed: ${refreshResult.warning}. Do not save again; reload the view.` : ''}`,
                 challans,
             });
             barcodeInputRef.current?.focus();
@@ -803,9 +813,9 @@ export function CutterReceiveForm() {
                             <div>
                                 <Label htmlFor="cutter-receive-gross">Gross Weight</Label>
                                 <div className="flex gap-2">
-                                    <Input id="cutter-receive-gross" type="number" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} className="flex-1" disabled={receiveFieldsDisabled} />
+                                    <Input id="cutter-receive-gross" type="number" value={grossWeight} onChange={e => { setGrossWeight(e.target.value); setWeightProvenance(null); }} className="flex-1" disabled={receiveFieldsDisabled} />
                                     <CatchWeightButton
-                                        onWeightCaptured={(wt) => setGrossWeight(wt.toFixed(3))}
+                                        onWeightCaptured={(wt, meta) => { setGrossWeight(String(wt)); setWeightProvenance(meta); }}
                                         disabled={receiveFieldsDisabled}
                                         context={{
                                             feature: 'receive',

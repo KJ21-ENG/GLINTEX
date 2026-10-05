@@ -1,3 +1,4 @@
+import { transactionWeightProvenance } from '../../utils/weightProvenance';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
@@ -81,6 +82,7 @@ const queueHoloReceivePrint = ({ cachedTemplate, labelData }) => {
             );
         })().catch((printError) => {
             console.error('Holo receive was saved but post-commit label printing failed', printError);
+            alert(`Holo receive was saved, but label printing failed: ${printError.message}. Reprint from Receive History or retained jobs; do not save again.`);
         });
     }, 0);
 };
@@ -125,7 +127,7 @@ export function HoloReceiveForm() {
         (async () => {
             const tpl = await loadTemplate(LABEL_STAGE_KEYS.HOLO_RECEIVE);
             if (alive) setTemplate(tpl || null);
-        })();
+        })().catch(() => { if (alive) setTemplate(null); });
         return () => { alive = false; };
     }, []);
 
@@ -306,6 +308,7 @@ export function HoloReceiveForm() {
                 rollTypeId: form.rollTypeId,
                 boxId: form.boxId,
                 grossWeight: grossWeightNum,
+                weightProvenance: transactionWeightProvenance(grossWeightNum, form.weightProvenance),
                 crateTareWeight: 0, // Handled in net calculation implicitly by backend usually, but we send what we have
                 date: form.date,
                 machineNo: db.machines.find(m => m.id === form.machineId)?.name,
@@ -396,7 +399,7 @@ export function HoloReceiveForm() {
             } : null;
 
             // Reset partial form
-            setForm(p => ({ ...p, rollCount: '', grossWeight: '' }));
+            setForm(p => ({ ...p, rollCount: '', grossWeight: '', weightProvenance: null }));
             alert('Received successfully');
             if (postCommitPrint) queueHoloReceivePrint(postCommitPrint);
         } catch (e) {
@@ -544,9 +547,9 @@ export function HoloReceiveForm() {
                             <div>
                                 <Label>Gross Weight</Label>
                                 <div className="flex gap-2">
-                                    <Input type="number" value={form.grossWeight} onChange={e => setForm({ ...form, grossWeight: e.target.value })} className="flex-1" />
+                                    <Input type="number" value={form.grossWeight} onChange={e => setForm({ ...form, grossWeight: e.target.value, weightProvenance: null })} className="flex-1" />
                                     <CatchWeightButton
-                                        onWeightCaptured={(wt) => setForm({ ...form, grossWeight: wt.toFixed(3) })}
+                                        onWeightCaptured={(wt, meta) => setForm({ ...form, grossWeight: String(wt), weightProvenance: meta })}
                                         context={{
                                             feature: 'receive',
                                             stage: 'holo',

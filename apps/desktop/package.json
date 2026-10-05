@@ -1,0 +1,27 @@
+{
+  "name": "glintex-desktop",
+  "productName": "GLINTEX",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GLINTEX factory workstation with native scale and label printing",
+  "author": "GLINTEX",
+  "main": "src/main.cjs",
+  "scripts": {
+    "build:ui": "node scripts/build-ui.cjs",
+    "start": "npm run build:ui && electron-forge start",
+    "test": "node --test test/*.test.cjs",
+    "package": "npm run build:ui && electron-forge package",
+    "make": "npm run build:ui && electron-forge make --platform win32 --arch x64",
+    "smoke": "electron . --smoke-test"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "1.0.1",
+    "serialport": "13.0.0"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "@electron-forge/cli": "8.0.1",
+    "@electron-forge/maker-squirrel": "8.0.1",
+    "@electron-forge/plugin-auto-unpack-natives": "8.0.1"
+  }
+}

@@ -2,6 +2,7 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const root = path.resolve(__dirname, "../../..");
+require("./prepare-driver-kit.cjs").prepareDriverKit();
 const vite = path.join(
   path.dirname(
     require.resolve("vite/package.json", {

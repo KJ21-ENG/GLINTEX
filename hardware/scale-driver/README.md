@@ -12,17 +12,38 @@ x86 files, although this kit installs only on Windows 10 x64.
 
 ## Set up a PC
 
-1. Copy this entire `hardware/scale-driver` folder to the Windows PC. Keep the
-   script, manifest and any `cache` folder together.
+1. Install the verified GLINTEX Electron Windows Setup.exe as the intended
+   Windows user. Its distribution includes these scripts and manifest outside
+   ASAR, under the installed application's `resources\scale-driver` folder.
+   Driver binaries are downloaded separately; they are not bundled in Setup.
 2. Connect the converter to USB and the scale to the converter. Power on the scale.
-3. Right-click **Install.cmd** and choose **Run as administrator**.
+3. Sign in to Electron with Settings write access. Open **Workstation setup &
+   print jobs**, disconnect any connected scale and close other serial apps.
+   Choose **Run scale driver setup (administrator)** and approve Windows UAC.
+   Normal Electron installation remains per user; only the helper is elevated.
 4. Confirm that the script reports a healthy Prolific COM port. The port number
    depends on the PC; it is not always COM3.
-5. In Chrome or Edge at GLINTEX, use **Fetch Weight > Authorize Scale > select
-   the Prolific converter > Connect**. Compare the reading with the scale display.
+5. Choose **Refresh devices and jobs** and select this PC's actual COM port.
+   For the tested GT-5 bracket scale, set **2400 baud, 8 data bits, no parity,
+   1 stop bit, no flow control**, profile **bracket-integer**, unit **kg**, and
+   **3 decimal places**. Choose **Save scale settings > Connect saved scale >
+   Test fresh capture** and compare with the display. `[01363]` means 1.363 kg
+   with this explicit configuration. Verify the manual for any other scale.
+
+The native SerialPort module still needs the Windows driver to expose a COM
+port. Electron does not need Chrome's **Authorize Scale**. Chrome and Electron
+must not hold the same port concurrently. The current browser parser rejects
+the tested `[01363]` frame; this kit does not change browser protocol support.
+
+For standalone use, copy the whole folder, keep script/manifest/cache together,
+and right-click **Install.cmd > Run as administrator**. Setup errors and UAC
+cancellation appear in Electron, with the helper log under
+`%APPDATA%\GLINTEX\scale-driver`. A restart request is reported for manual action.
 
 The first run downloads a 270,156-byte CAB from the pinned Microsoft URL. Later
-runs use the local cache. The script verifies the archive SHA-256, every extracted
+runs use the local cache. Electron uses the stable per-user cache at
+`%APPDATA%\GLINTEX\scale-driver\cache`, so an app upgrade does not discard it.
+The script verifies the archive SHA-256, every extracted
 file SHA-256, the Microsoft catalog signature, and the driver binary signatures.
 Windows validates the catalog-backed package again during driver installation.
 
@@ -49,6 +70,12 @@ Then copy the entire folder, **including `cache`**, onto a USB drive or the next
 PC. `Install.cmd` can then install from that cache without contacting Microsoft
 or another GLINTEX workstation.
 
+For the Electron button to use an offline cache, copy the prepared `cache`
+folder to `%APPDATA%\GLINTEX\scale-driver\cache` for the intended Windows user
+before running setup. Do not run Electron itself as a different administrator.
+Alternatively, use the standalone copied folder as described above. The app's
+cloud login still needs internet even when driver installation uses an offline cache.
+
 To verify an existing cache without downloading or installing anything:
 
 ```bat
@@ -63,7 +90,8 @@ Install.cmd -VerifyOnly
 - [manifest.json](manifest.json) pins the download URL, archive and file hashes,
   supported hardware ID and original validation evidence.
 - The tested scale streams bracketed readings at **2400 baud, 8 data bits,
-  no parity, 1 stop bit, no flow control**. GLINTEX already detects this baud rate.
+  no parity, 1 stop bit, no flow control**. Configure these explicitly in Electron;
+  the native bracket profile also requires its documented unit and decimal factor.
 
 Vendor binaries retain their original copyright and signatures. The repository
 stores the setup script and verified download manifest; `cache/` stays out of Git.

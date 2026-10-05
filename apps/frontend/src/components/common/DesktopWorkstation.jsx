@@ -25,6 +25,7 @@ export default function DesktopWorkstation() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [driverResult, setDriverResult] = useState(null);
   const [diagnostics, setDiagnostics] = useState(false);
   const [testArtifact, setTestArtifact] = useState(null);
   const [media, setMedia] = useState({ width: 48, height: 25, pageWidth: 104, columns: 2, horizontalGap: 2, verticalGap: 2, marginLeft: 0, marginTop: 0, offsetX: 0, offsetY: 0 });
@@ -99,6 +100,19 @@ export default function DesktopWorkstation() {
       {!canConfigure && <p className="text-sm">Device configuration requires Settings write permission. Contact your administrator to change this workstation.</p>}
       <button type="button" className={buttonClass} disabled={busy} onClick={() => act(refreshDevices)}>Refresh devices and jobs</button>
       <button type="button" className={`${buttonClass} ml-2`} disabled={busy} onClick={() => act(async () => { const saved = await bridge.settings.get(); setScale({ ...initialScale, ...saved.scale }); setPrinter(saved.printer || { printerName: '', dpi: 203 }); setStartAtLogin(Boolean(saved.startAtLogin)); setTestArtifact(null); setMessage('Saved workstation settings reloaded.'); })}>Reload saved settings</button>
+      {controller.scaleDriver?.available && <section className="border rounded p-3 space-y-2" aria-label="Optional scale driver setup">
+        <h2 className="font-semibold">Optional one-time scale driver setup</h2>
+        <p className="text-sm">For the BAFO BF-812 / Prolific PL2303GT adapter with hardware ID USB\VID_067B&amp;PID_23A3&amp;REV_0305 on Windows 10 x64. This driver gives Windows a COM port; GLINTEX still needs the correct port and scale protocol. Healthy matching drivers are kept.</p>
+        <p className="text-sm">Connect the adapter, disconnect the scale in GLINTEX and close other serial apps. Windows asks for administrator access. The first run downloads and verifies the pinned Microsoft package; a prepared offline cache also works.</p>
+        <button type="button" className={buttonClass} disabled={busy || !canConfigure || scaleStatus.isConnected || scaleLabel === 'connecting'} onClick={() => act(async () => {
+          setDriverResult(null);
+          const result = await bridge.scale.driverSetup(); setDriverResult(result);
+          if (!result.success) throw new Error(`Driver setup failed or administrator approval was cancelled (exit ${result.exitCode}). Review the log below.`);
+          setMessage(result.restartRequired ? 'Windows requests a restart. Restart manually before connecting the scale.' : 'Driver setup finished. Refresh devices, select this PC’s COM port, save the documented scale settings and test a fresh capture.');
+          await refreshDevices();
+        })}>Run scale driver setup (administrator)</button>
+        {driverResult && <details open={!driverResult.success}><summary className="cursor-pointer">Driver setup log</summary><p className="text-xs break-all">{driverResult.logPath}</p><pre className="text-xs whitespace-pre-wrap max-h-48 overflow-auto">{driverResult.output}</pre></details>}
+      </section>}
       <fieldset className="border rounded p-3 space-y-3" disabled={busy || !canConfigure}>
         <legend className="px-2 font-semibold">Scale connection</legend>
         <p className="text-sm">Select the exact scale and its documented protocol. Unknown protocol never produces a measurement. Disconnect before changing settings; no automatic port substitution.</p>

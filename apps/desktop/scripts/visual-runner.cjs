@@ -99,6 +99,7 @@ async function main() {
   ])
     if (!panelText.includes(expected))
       throw Error("Panel missing expected fixture state: " + expected);
+  const driverUI = await require("./driver-ui-assertions.cjs").verifyDriverUI(code => win.webContents.executeJavaScript(code));
   await fs.writeFile(
     path.join(output, "workstation-panel.png"),
     (await win.webContents.capturePage()).toPNG(),
@@ -157,6 +158,7 @@ async function main() {
         chromium: process.versions.chrome,
         platform: process.platform,
         panelVerified: true,
+        driverUI,
         physicalHardwareTested: false,
       },
       null,

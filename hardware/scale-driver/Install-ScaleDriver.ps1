@@ -164,8 +164,9 @@ try {
     }
     Write-Host "Ready: $($device.Name), driver $($driver.DriverVersion), port $port."
   }
-  Write-Host 'In GLINTEX: Fetch Weight > Authorize Scale > select the Prolific converter > Connect.'
-  Write-Host 'The tested scale uses 2400 baud; GLINTEX detects the baud rate automatically.'
+  Write-Host 'In GLINTEX Electron: Workstation setup & print jobs > Refresh devices and jobs > select this PC''s COM port.'
+  Write-Host 'For the tested bracket scale: 2400 baud, 8 bits, no parity, 1 stop bit, no flow control; bracket-integer, kg, 3 decimal places.'
+  Write-Host 'Save scale settings > Connect saved scale > Test fresh capture; compare with the display. No Chrome Authorize Scale is needed.'
   exit 0
 } catch {
   Write-Error $_ -ErrorAction Continue

@@ -85,6 +85,7 @@ async function runSelfTest({
     "return window.glintexDesktop.getController()",
   );
   assert.ok(controller.capabilities.includes("native-scale"));
+  if (process.platform === "win32") assert.equal(controller.scaleDriver.available, true, "packaged driver helper must exist outside ASAR");
   const frameCheck = await evaluate(
     `const frame=document.createElement('iframe');frame.style.display='none';document.body.appendChild(frame);frame.contentDocument.open();frame.contentDocument.write('<p>Challan fixture</p>');frame.contentDocument.close();const result={text:frame.contentDocument.body.innerText,bridge:typeof frame.contentWindow.glintexDesktop,print:typeof frame.contentWindow.print};frame.remove();return result;`,
   );
@@ -101,6 +102,7 @@ async function runSelfTest({
     await assert.rejects(
       evaluate("return window.glintexDesktop.printers.listJobs()"),
     );
+    await assert.rejects(evaluate("return window.glintexDesktop.scale.driverSetup()"));
     await evaluate(
       `const inputs=document.querySelectorAll('form input');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;for(const [i,input] of Array.from(inputs).entries()){setter.call(input,i?'fixture-password':'fixture-operator');input.dispatchEvent(new Event('input',{bubbles:true}));}return true;`,
     );

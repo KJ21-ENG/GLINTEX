@@ -1,12 +1,15 @@
 const path = require("node:path");
+const { prepareDriverKit } = require("./scripts/prepare-driver-kit.cjs");
 module.exports = {
+  hooks: { prePackage: async () => { prepareDriverKit(); } },
   packagerConfig: {
     asar: true,
     executableName: "GLINTEX",
     icon: path.join(__dirname, "assets", "icon"),
     appBundleId: "in.glintex.desktop",
     appCopyright: "GLINTEX",
-    ignore: [/^\/test($|\/)/, /^\/out($|\/)/, /^\/scripts($|\/)/],
+    extraResource: [path.join(__dirname, "build", "scale-driver")],
+    ignore: [/^\/test($|\/)/, /^\/out($|\/)/, /^\/scripts($|\/)/, /^\/build($|\/)/],
   },
   rebuildConfig: {},
   makers: [

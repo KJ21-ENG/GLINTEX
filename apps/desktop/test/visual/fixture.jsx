@@ -21,6 +21,17 @@ const ports=[{path:'COM7',serialNumber:'SIMULATED-ONLY',manufacturer:'QA fixture
 const jobs=[{id:'fixture-job-uncertain',state:'outcome uncertain',createdAt:'2026-10-05T08:00:00.000Z',profile,error:'Simulated timeout: check labels before reprinting'}];
 window.glintexDesktop={getController:async()=>({version:'1.0.0-test',platform:'win32',capabilities:['printing','serial']}),settings:{get:async()=>({printer:profile}),update:async v=>v},server:{status:async()=>({state:'connected'})},scale:{status:async()=>({state:'unsupported',error:'Select a verified protocol. No scale connected.'}),enumerate:async()=>ports,onStatus:()=>()=>{},configure:async v=>v,diagnostics:async()=>[],capture:async()=>{throw Error('Unknown scale protocol; capture refused')}},printers:{status:async()=>({profile,available:true,pending:0}),enumerate:async()=>[{name:profile.printerName}],configure:async v=>v,listJobs:async()=>jobs,reprint:async()=>({success:false,error:'Simulated offline printer'}),submit:async()=>({success:false,error:'Simulated offline printer'})}};
 createRoot(document.getElementById('editor')).render(<MemoryRouter><LabelDesigner/></MemoryRouter>);
+// Synthetic helper outcomes only: this fixture never launches PowerShell.
+let driverExit = 0, connected = false;
+window.fixtureDriverCalls = 0;
+window.fixtureDriverOutcome = code => { driverExit = code; };
+window.fixtureScaleConnected = value => { connected = value; };
+window.glintexDesktop.getController = async () => ({ version: '1.0.1-fixture', scaleDriver: { available: true } });
+window.glintexDesktop.scale.status = async () => ({ state: connected ? 'connected' : 'unsupported', isConnected: connected, error: connected ? null : 'Select a verified protocol. No scale connected.' });
+window.glintexDesktop.scale.driverSetup = async () => {
+  window.fixtureDriverCalls++;
+  return { success: driverExit === 0 || driverExit === 3010, exitCode: driverExit, restartRequired: driverExit === 3010, logPath: 'SIMULATED user profile/scale-driver/setup.log', output: driverExit === 1 ? 'SIMULATED verification failure or UAC cancellation' : 'SIMULATED healthy driver retained; actual port COM7' };
+};
 createRoot(document.getElementById('panel')).render(<AuthProvider><DesktopWorkstation/></AuthProvider>);
 const results=[];
 const data={barcode:'RCO-123456-C001',lotNo:'123456',seq:'0001',pieceId:'123456-0001',itemName:'POLYESTER METALLIC SILVER EXTRA LONG MATERIAL NAME',firmName:'GLINTEX',operatorName:'REPRESENTATIVE OPERATOR',machineName:'MACHINE 007',netWeight:'12.345',grossWeight:'13.000',tareWeight:'0.655',weight:'12.345',totalWeight:'24.690',date:'2026-10-05',cut:'1/64',twist:'120',yarnName:'POLYESTER',coneCount:'6',rollCount:'2',shift:'DAY'};

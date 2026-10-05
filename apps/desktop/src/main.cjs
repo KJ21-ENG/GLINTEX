@@ -12,6 +12,7 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const { SettingsStore } = require("./settings.cjs");
 const { ScaleController } = require("./scale/controller.cjs");
+const { DriverSetup } = require("./driver/setup.cjs");
 const { PrintController } = require("./printing/controller.cjs");
 const { createElectronPrinter } = require("./printing/electron-printer.cjs");
 const {
@@ -42,7 +43,7 @@ if (selfTest && !process.env.GLINTEX_TEST_DATA)
 if (process.env.GLINTEX_TEST_DATA && (testMode || smoke || selfTest))
   app.setPath("userData", path.resolve(process.env.GLINTEX_TEST_DATA));
 app.setAppUserModelId("com.squirrel.GLINTEX.GLINTEX");
-let mainWindow, settings, scale, printer, desktopSession, fixtureServer;
+let mainWindow, settings, scale, printer, driverSetup, desktopSession, fixtureServer;
 const squirrel =
   process.platform === "win32" && require("electron-squirrel-startup");
 // Disposable runner installs must not auto-launch against the live API.
@@ -104,6 +105,10 @@ async function start() {
   settings = await new SettingsStore(
     path.join(app.getPath("userData"), "workstation"),
   ).load();
+  driverSetup = new DriverSetup({
+    kitDirectory: app.isPackaged ? path.join(process.resourcesPath, "scale-driver") : path.resolve(__dirname, "../build/scale-driver"),
+    userData: app.getPath("userData"),
+  });
   desktopSession = session.fromPartition("persist:glintex-workstation");
   desktopSession.setPermissionRequestHandler((_wc, _permission, callback) =>
     callback(false),
@@ -226,6 +231,7 @@ async function start() {
         "bundled-ui",
       ],
       apiOrigin: origin,
+      scaleDriver: driverSetup.status(),
     }),
     "settings.get": () => settings.get(),
     "settings.update": async (data) => {
@@ -256,8 +262,17 @@ async function start() {
     },
     "server.status": serverStatus,
     "scale.enumerate": () => scale.enumerate(),
+    "scale.driverSetup": async (data) => {
+      if (data !== undefined) throw new Error("Driver setup accepts no custom commands or paths");
+      if (scale.status().isConnected || scale.status().status === "connecting")
+        throw new Error("Disconnect the scale before running driver setup. Close other serial applications too.");
+      return driverSetup.install();
+    },
     "scale.status": () => scale.status(),
-    "scale.connect": () => scale.connect(),
+    "scale.connect": () => {
+      if (driverSetup.running) throw new Error("Wait for driver setup to finish before connecting the scale");
+      return scale.connect();
+    },
     "scale.disconnect": () => scale.disconnect(),
     "scale.configure": (data) => scale.configure(assertPlain(data)),
     "scale.capture": (data) => scale.capture(assertPlain(data)),
@@ -342,12 +357,15 @@ async function start() {
     await require("serialport").SerialPort.list();
     if (!checks.bridge || checks.node !== "undefined" || checks.body < 1)
       throw new Error("Packaged smoke checks failed");
+    if (app.isPackaged && !driverSetup.status().bundled)
+      throw new Error("Packaged scale driver helper is missing");
     const report = {
       passed: true,
       version: app.getVersion(),
       platform: process.platform,
       arch: process.arch,
       packaged: app.isPackaged,
+      scaleDriver: driverSetup.status(),
       checks,
       at: new Date().toISOString(),
     };

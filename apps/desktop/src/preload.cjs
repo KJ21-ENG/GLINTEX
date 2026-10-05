@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld(
     },
     server: { status: () => call("server.status") },
     scale: {
+      driverSetup: () => call("scale.driverSetup"),
       enumerate: () => call("scale.enumerate"),
       configure: (config) => call("scale.configure", config),
       connect: () => call("scale.connect"),

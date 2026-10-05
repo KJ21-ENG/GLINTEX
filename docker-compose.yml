@@ -36,11 +36,13 @@ services:
       PERF_LOG_QUERIES: ${PERF_LOG_QUERIES:-0}
       PERF_SLOW_QUERY_MS: ${PERF_SLOW_QUERY_MS:-100}
       PERF_SLOW_REQUEST_MS: ${PERF_SLOW_REQUEST_MS:-0}
+      GLINTEX_DESKTOP_RELEASE_DIRECTORY: ${GLINTEX_DESKTOP_RELEASE_DIRECTORY:-}
     volumes:
       - ./apps/backend/.wwebjs_auth:/app/.wwebjs_auth
       - ./apps/backend/.wwebjs_cache:/app/.wwebjs_cache
       - ./apps/backend/backups:/app/backups
       - ./apps/backend/logs:/app/logs
+      - ${GLINTEX_DESKTOP_RELEASE_HOST_DIRECTORY:-./apps/backend/scripts/private-desktop-releases}:/app/desktop-releases:ro
     shm_size: '1gb'
     ports:
       - "${BACKEND_PORT:-4001}:4000"

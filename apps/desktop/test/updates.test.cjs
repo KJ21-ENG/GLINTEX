@@ -81,7 +81,7 @@ test('manual checks expose no-update, expired-session, unavailable and offline f
 test('Windows handoff waits for the parent, rehashes and records installer failure without renderer commands', () => {
   const script = launchCommand({ file: "C:\\Users\\O'Brien\\updates\\Setup.exe", marker: 'C:\\updates\\approved.json', statusFile: 'C:\\updates\\status.json', parentPid: 123, release });
   assert.ok(script.includes("O''Brien")); assert.ok(script.includes('Get-Process -Id 123'));
-  assert.ok(script.includes('Get-FileHash')); assert.ok(script.includes("Report 'waiting'")); assert.ok(script.includes("Report 'failed'"));
+  assert.ok(script.includes('Security.Cryptography.SHA256')); assert.ok(script.includes("Report 'waiting'")); assert.ok(script.includes("Report 'failed'"));
   assert.ok(script.includes('-PassThru -Wait')); assert.equal(script.includes('--silent'), false);
 });
 test('failed helper status stays visible on next launch but cannot supply installation authority', async t => {

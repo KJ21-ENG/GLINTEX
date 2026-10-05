@@ -58,6 +58,7 @@ async function startFixture() {
     }
     if (req.url === "/api/auth/me")
       return res.end(JSON.stringify({ ok: true, user: TEST_USER }));
+    if (req.url === "/api/fixture/hold") return setTimeout(() => res.end('{"ok":true,"simulatedPendingSave":true}'), 2000);
     if (req.url === "/api/desktop/releases/windows-x64/latest") {
       if (!updateRelease) { res.statusCode = 204; return res.end(); }
       return res.end(JSON.stringify(updateRelease));
@@ -157,6 +158,12 @@ async function runSelfTest({
       assert.equal((await evaluate("return window.glintexDesktop.updates.status()")).state, "ready");
       await evaluate("return window.glintexDesktop.updates.arm()");
       assert.equal((await evaluate("return window.glintexDesktop.updates.status()")).state, "armed");
+      await evaluate("window.fixturePendingSave=fetch('/api/fixture/hold',{method:'POST'}).then(r=>r.json());return true");
+      await new Promise(resolve => setTimeout(resolve, 100));
+      window.close();
+      await waitFor("window.glintexDesktop.updates.status().then(s=>s.closeBlocked===true)");
+      assert.equal(window.isDestroyed(), false, "pending API save must prevent installer close");
+      await evaluate("return window.fixturePendingSave");
     }
   } else {
     await waitFor("document.body.innerText.includes('Workstation setup')");
@@ -195,7 +202,7 @@ async function runSelfTest({
       "hardware-auth-gate",
       "same-origin-challan-frame-no-bridge",
       ["first", "update"].includes(phase) ? "setup-panel" : "expiry-logout-foreign-redirect",
-      ...(phase === "update" ? ["authenticated-release-discovery", "private-installer-download-and-sha256", "later-no-install", "explicit-arm-cancel-arm", "fixture-only-close-confirmation-and-silent-install"] : []),
+      ...(phase === "update" ? ["authenticated-release-discovery", "private-installer-download-and-sha256", "later-no-install", "explicit-arm-cancel-arm", "main-process-mid-save-close-block", "fixture-only-close-confirmation-and-silent-install"] : []),
     ],
     at: new Date().toISOString(),
   };

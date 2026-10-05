@@ -249,10 +249,12 @@ async function start() {
     closeChecking = true;
     void (async () => {
       closingForUpdate = true;
+      updater.set({ closeBlocked: false });
       await mainWindow.webContents.executeJavaScript("document.body.inert=true");
       const blocked = await safety();
       if (blocked) {
-        await dialog.showMessageBox(mainWindow, { type: "info", title: "Finish work before updating", message: blocked, buttons: ["Keep working"] });
+        updater.set({ closeBlocked: true, message: blocked });
+        if (!(selfTest && process.env.GLINTEX_TEST_PHASE === "update")) await dialog.showMessageBox(mainWindow, { type: "info", title: "Finish work before updating", message: blocked, buttons: ["Keep working"] });
         return;
       }
       const fixtureUpgrade = selfTest && process.env.GLINTEX_TEST_PHASE === "update";

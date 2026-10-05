@@ -32,10 +32,18 @@ function Invoke-Bounded([string]$File, [string[]]$Arguments, [int]$Timeout=120) 
   try {
     $script:processSequence++
     $logStem = Join-Path $OutputDirectory ("process-$script:processSequence-" + [IO.Path]::GetFileName($File))
+    Write-Host "[$((Get-Date).ToUniversalTime().ToString('o'))] Start process $script:processSequence $File $Arguments (limit $Timeout seconds)"
     $process = Start-Process -FilePath $File -ArgumentList $Arguments -PassThru -RedirectStandardOutput ($logStem + '.stdout.txt') -RedirectStandardError ($logStem + '.stderr.txt')
-    if (-not $process.WaitForExit($Timeout * 1000)) { $process.Kill($true); throw "Timed out: $([IO.Path]::GetFileName($File))" }
+    if (-not $process.WaitForExit($Timeout * 1000)) {
+      # Bound cleanup too. A hung tree enumeration must not defeat the test limit.
+      $killer = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32/taskkill.exe') -ArgumentList @('/PID', $process.Id, '/T', '/F') -PassThru -WindowStyle Hidden
+      if (-not $killer.WaitForExit(10000)) { $killer.Kill() }
+      Get-Content -Tail 18 ($logStem + '.stderr.txt') | Write-Host
+      throw "Timed out: $([IO.Path]::GetFileName($File))"
+    }
     $process.Refresh()
     if ($process.ExitCode -ne 0) { Get-Content -Tail 18 ($logStem + '.stderr.txt') | Write-Host; throw "Process exited $($process.ExitCode): $([IO.Path]::GetFileName($File))" }
+    Write-Host "[$((Get-Date).ToUniversalTime().ToString('o'))] Completed process $script:processSequence"
   } finally { if ($isSetup) { Remove-Item Env:GLINTEX_INSTALL_TEST -ErrorAction SilentlyContinue } }
 }
 function Stop-TestApp {
@@ -64,6 +72,7 @@ function Invoke-Uninstall([string]$Name) {
   return $result
 }
 function Get-InstalledVersionExe([string]$Version) {
+  Write-Host "[$((Get-Date).ToUniversalTime().ToString('o'))] Verify active installed version $Version"
   $exe = Join-Path $installRoot "app-$Version/GLINTEX.exe"
   if (-not (Test-Path $exe)) { throw "Expected installed application $Version is missing" }
   $registration = @(Get-ChildItem 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall' -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DisplayName -eq 'GLINTEX' })
@@ -85,6 +94,7 @@ function Invoke-SelfTest([string]$Exe, [string]$Name, [string]$Data, [bool]$Expe
   New-Item -ItemType Directory -Force $env:GLINTEX_TEST_REPORTS | Out-Null
   $firstPhase = if ($ExpectRestoredSession) { 'restored' } else { 'first' }
   foreach ($phase in @($firstPhase, 'second')) {
+    Write-Host "[$((Get-Date).ToUniversalTime().ToString('o'))] Smoke $Name phase $phase"
     $env:GLINTEX_TEST_PHASE = $phase
     Invoke-Bounded $Exe @('--self-test') 180
   }

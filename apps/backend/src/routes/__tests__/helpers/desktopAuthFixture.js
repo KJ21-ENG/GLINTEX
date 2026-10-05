@@ -52,7 +52,7 @@ export async function fixture(rolePermissions = { 'receive.cutter': 2 }, roleKey
   router.post('/fixture/receive', context.requirePermission('receive.cutter', 2), (_, res) => res.json({ ok: true }));
   router.post('/fixture/settings', context.requirePermission('settings', 2), (_, res) => res.json({ ok: true }));
   const app = express(); app.use(express.json(), cookieParser(), router);
-  return { app, users, sessions, templates, calls,
+  return { app, users, sessions, templates, calls, authenticate: context.requireAuth,
     fetchTemplate: async (url, options, cookie) => {
       assert.equal(options.credentials, 'include');
       const path = new URL(url, 'http://fixture.invalid').pathname;

@@ -1,0 +1,2 @@
+# Private installers are mounted at runtime, never baked into a backend image.
+scripts/private-desktop-releases

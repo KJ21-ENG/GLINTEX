@@ -9,6 +9,7 @@ Vite + React + Tailwind project of the GLINTEX Inventory app.
 - `docker/` – shared infra assets (Postgres init SQL)
 - `docs/` – architecture notes and plans
 - `integrations/openclaw-owner` – owner-only GLINTEX Executive integration
+- `hardware/scale-driver` – verified Windows scale converter setup and offline cache
 
 ## Quick Start
 
@@ -19,6 +20,12 @@ npm run dev:frontend    # starts Vite on http://localhost:5173
 ```
 
 The frontend expects the backend on port `4000` by default. Override `VITE_API_BASE` if you bind the API elsewhere.
+
+## Scale Hardware Setup
+
+Use the [Windows scale driver kit](hardware/scale-driver/README.md) to install the
+verified Prolific converter driver, prepare an offline copy, or verify a cached
+package. The kit downloads directly from Microsoft and needs no access to another PC.
 
 ## Owner Operations Agent
 

@@ -167,7 +167,7 @@ try {
   if ($BootstrapInstaller) {
     Invoke-Bounded ([IO.Path]::GetFullPath($BootstrapInstaller)) @('--silent')
     Start-Sleep -Seconds 8; Stop-TestApp
-    $bootstrapExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $bootstrapExe = Get-InstalledVersionExe '1.0.0'
     Invoke-Smoke $bootstrapExe.FullName 'bootstrap-1.0.0' $userData
     if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-1.0.0.json') | ConvertFrom-Json).version -ne '1.0.0') { throw 'Bootstrap fixture is not the delivered 1.0.0' }
     Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')

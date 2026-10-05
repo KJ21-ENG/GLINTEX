@@ -116,20 +116,20 @@ async function runSelfTest({
     );
   if (["first", "update", "restored"].includes(phase)) {
     if (phase !== "restored") {
-    await waitFor("document.querySelector('input[type=password]')!==null");
-    await assert.rejects(
-      evaluate("return window.glintexDesktop.printers.listJobs()"),
-    );
-    await assert.rejects(evaluate("return window.glintexDesktop.scale.driverSetup()"));
-    await evaluate(
-      `const inputs=document.querySelectorAll('form input');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;for(const [i,input] of Array.from(inputs).entries()){setter.call(input,i?'fixture-password':'fixture-operator');input.dispatchEvent(new Event('input',{bubbles:true}));}return true;`,
-    );
-    await waitFor(
-      "document.querySelector('form button[type=submit]') && !document.querySelector('form button[type=submit]').disabled",
-    );
-    await evaluate(
-      "document.querySelector('form button[type=submit]').click();return true;",
-    );
+      await waitFor("document.querySelector('input[type=password]')!==null");
+      await assert.rejects(
+        evaluate("return window.glintexDesktop.printers.listJobs()"),
+      );
+      await assert.rejects(evaluate("return window.glintexDesktop.scale.driverSetup()"));
+      await evaluate(
+        `const inputs=document.querySelectorAll('form input');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;for(const [i,input] of Array.from(inputs).entries()){setter.call(input,i?'fixture-password':'fixture-operator');input.dispatchEvent(new Event('input',{bubbles:true}));}return true;`,
+      );
+      await waitFor(
+        "document.querySelector('form button[type=submit]') && !document.querySelector('form button[type=submit]').disabled",
+      );
+      await evaluate(
+        "document.querySelector('form button[type=submit]').click();return true;",
+      );
     }
     await waitFor("document.body.innerText.includes('Workstation setup')");
     assert.equal(await fetchStatus("/api/auth/me"), 200, "existing session must survive the authenticated upgrade");

@@ -13,6 +13,18 @@ async function main() {
     bundle: true,
     outdir: output,
     format: "esm",
+    // Desktop-local Forge tooling has its own React. The fixture must use
+    // the same React instance as the actual frontend and its renderer.
+    alias: Object.fromEntries(
+      ["react", "react-dom"].map((name) => [
+        name,
+        path.dirname(
+          require.resolve(`${name}/package.json`, {
+            paths: [path.join(root, "apps/frontend")],
+          }),
+        ),
+      ]),
+    ),
     define: {
       "import.meta.env": JSON.stringify({ VITE_API_BASE: "http://127.0.0.1:4188" }),
     },

@@ -62,6 +62,9 @@ async function main() {
     },
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("console-message", (_event, details, message) => {
+    console.log("Visual renderer:", message || details?.message || details);
+  });
   await win.loadURL(origin + "/");
   let result;
   for (let i = 0; i < 120; i++) {
@@ -76,9 +79,13 @@ async function main() {
   const report = JSON.parse(result.text);
   if (report.completed !== 9 || report.results.some((r) => r.different !== 0))
     throw Error("Canonical pixel equivalence failed");
-  const panel = await win.webContents.executeJavaScript(
-    `(() => { const button = [...document.querySelectorAll('#panel button')].find(b=>/Workstation setup/i.test(b.textContent)); if (!button) return false; button.click(); return true; })()`,
-  );
+  let panel = false;
+  for (let attempt = 0; attempt < 100 && !panel; attempt++) {
+    panel = await win.webContents.executeJavaScript(
+      `(() => { const button = [...document.querySelectorAll('#panel button')].find(b=>/Workstation setup/i.test(b.textContent)); if (!button) return false; button.click(); return true; })()`,
+    );
+    if (!panel) await delay(100);
+  }
   if (!panel) throw Error("Workstation panel button missing");
   await delay(750);
   const panelText = await win.webContents.executeJavaScript(
@@ -172,6 +179,16 @@ main()
       path.join(output, "visual-failure.txt"),
       error.stack || String(error),
     );
+    if (win && !win.isDestroyed()) {
+      await fs.writeFile(
+        path.join(output, "visual-failure.png"),
+        (await win.webContents.capturePage()).toPNG(),
+      );
+      await fs.writeFile(
+        path.join(output, "visual-failure.json"),
+        JSON.stringify({ error: String(error), body: await win.webContents.executeJavaScript("document.body.innerText") }, null, 2),
+      );
+    }
     if (win && !win.isDestroyed()) win.destroy();
     if (server) server.kill();
     app.exit(1);

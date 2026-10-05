@@ -189,6 +189,7 @@ async function runSelfTest({
     passed: true,
     phase,
     version: app.getVersion(),
+    sourceCommit: require('../build-info.json').sourceCommit,
     packaged: app.isPackaged,
     platform: process.platform,
     arch: process.arch,

@@ -13,6 +13,15 @@ if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
 $report = [ordered]@{ passed=$false; startedAt=(Get-Date).ToUniversalTime().ToString('o'); os=[Environment]::OSVersion.VersionString; architecture='x64'; packagedLaunch=$false; installedLaunch=$false; shortcut=$false; upgradePreserved=$false; uninstall=$false; physicalHardwareTested=$false }
+$sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
+$report.sourceCommit = (git -C $sourceRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or ($env:CI -and $report.sourceCommit -ne $env:EXPECTED_SOURCE_SHA)) { throw 'Verification source does not match requested build' }
+$report.sourceTree = (git -C $sourceRoot rev-parse 'HEAD^{tree}').Trim()
+$report.repository = $env:GITHUB_REPOSITORY
+$report.runId = $env:GITHUB_RUN_ID
+$report.runAttempt = $env:GITHUB_RUN_ATTEMPT
+$report.installerSha256 = (Get-FileHash ([IO.Path]::GetFullPath($Installer)) -Algorithm SHA256).Hash.ToLower()
+$report.installerBytes = (Get-Item ([IO.Path]::GetFullPath($Installer))).Length
 $installRoot = Join-Path $env:LOCALAPPDATA 'GLINTEX'
 $userData = Join-Path $env:APPDATA 'GLINTEX'
 if (Test-Path $installRoot) { throw 'Existing GLINTEX installation found. Use a clean disposable Windows test user/runner.' }
@@ -75,6 +84,7 @@ function Invoke-SelfTest([string]$Exe, [string]$Name, [string]$Data) {
 }
 try {
   Invoke-Smoke ([IO.Path]::GetFullPath($PackagedExe)) 'packaged-smoke' (Join-Path $OutputDirectory 'isolated-smoke-data')
+  if ((Get-Content -Raw (Join-Path $OutputDirectory 'packaged-smoke.json') | ConvertFrom-Json).sourceCommit -ne $report.sourceCommit) { throw 'Packaged runtime source identity mismatch' }
   $report.packagedLaunch = $true
   Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
   Start-Sleep -Seconds 8
@@ -82,6 +92,7 @@ try {
   $installedExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object FullName -Descending | Select-Object -First 1
   if (-not $installedExe) { throw 'Installed executable missing' }
   Invoke-Smoke $installedExe.FullName 'installed-smoke' $userData
+  if ((Get-Content -Raw (Join-Path $OutputDirectory 'installed-smoke.json') | ConvertFrom-Json).sourceCommit -ne $report.sourceCommit) { throw 'Installed runtime source identity mismatch' }
   $report.installedLaunch = $true
   $shortcut = Get-ChildItem (Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs') -Filter '*GLINTEX*.lnk' -Recurse | Select-Object -First 1
   if (-not $shortcut) { throw 'Start menu shortcut missing' }
@@ -106,6 +117,8 @@ try {
     $env:GLINTEX_INSTALL_TEST = '1'
     try { Invoke-Bounded $installedExe.FullName @('--self-test') 300 }
     finally { Remove-Item Env:GLINTEX_TEST_DATA, Env:GLINTEX_TEST_REPORTS, Env:GLINTEX_TEST_PHASE, Env:GLINTEX_TEST_UPDATE_INSTALLER, Env:GLINTEX_TEST_UPDATE_VERSION, Env:GLINTEX_INSTALL_TEST -ErrorAction SilentlyContinue }
+    $updateReport = Get-Content -Raw (Join-Path $OutputDirectory 'authenticated-update-reports/packaged-update.json') | ConvertFrom-Json
+    if (-not $updateReport.passed -or $updateReport.sourceCommit -ne $report.sourceCommit -or $updateReport.checks -notcontains 'main-process-mid-save-close-block') { throw 'Authenticated update report is missing or does not prove pending-save protection' }
     $deadline = (Get-Date).AddSeconds(120)
     while (-not (Test-Path (Join-Path $installRoot "app-$next/GLINTEX.exe"))) { if ((Get-Date) -gt $deadline) { throw 'User-controlled update installer did not create the next-version application' }; Start-Sleep -Seconds 2 }
     Start-Sleep -Seconds 8

@@ -103,10 +103,10 @@ class UpdateController extends EventEmitter {
     return this.checking;
   }
   authenticationCompleted({ url, statusCode }) {
-    if (this.data.state !== 'signin' || statusCode !== 200) return Promise.resolve(this.status());
+    if (!['idle', 'signin', 'error'].includes(this.data.state) || statusCode !== 200) return Promise.resolve(this.status());
     try {
       const response = new URL(url);
-      if (response.origin === this.origin && /^\/api\/auth\/(login|me)\/?$/.test(response.pathname)) return this.check();
+      if (response.origin === this.origin && /^\/api\/auth\/(login|me|bootstrap)\/?$/.test(response.pathname)) return this.check();
     } catch { }
     return Promise.resolve(this.status());
   }
@@ -114,12 +114,12 @@ class UpdateController extends EventEmitter {
     this.set({ state: "checking", ...(manual ? { prompt: true } : {}), message: "Checking the private GLINTEX release service…" });
     try {
       const response = await this.request("/latest", AbortSignal.timeout(10000));
-      if (response.status === 204) return this.set({ state: "current", release: null, checkedAt: this.clock(), message: "No published update is available." });
+      if (response.status === 204) return this.set({ state: "current", release: null, checkedAt: this.clock(), prompt: manual, message: "No published update is available." });
       const chunks = []; let length = 0;
       for await (const chunk of response.body) { length += chunk.length; if (length > 16384) throw new Error("Update manifest is too large"); chunks.push(Buffer.from(chunk)); }
       const text = Buffer.concat(chunks).toString("utf8");
       const release = validateRelease(JSON.parse(text));
-      if (compareVersions(release.version, this.version) <= 0) return this.set({ state: "current", release: null, checkedAt: this.clock(), message: "No newer version is available." });
+      if (compareVersions(release.version, this.version) <= 0) return this.set({ state: "current", release: null, checkedAt: this.clock(), prompt: manual, message: "No newer version is available." });
       const ready = await this.verified(release);
       return this.set({ state: ready ? "ready" : "available", release, checkedAt: this.clock(), prompt: manual || this.deferredVersion !== release.version || this.clock() >= (this.deferUntil || 0), message: `GLINTEX ${release.version} is available.` });
     } catch (error) { return this.set({ state: error.state || "error", checkedAt: this.clock(), message: error.state ? error.message : "Could not check for updates. Check your connection and retry." }); }

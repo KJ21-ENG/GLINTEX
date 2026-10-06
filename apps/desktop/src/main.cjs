@@ -14,6 +14,7 @@ const { SettingsStore } = require("./settings.cjs");
 const { ScaleController } = require("./scale/controller.cjs");
 const { DriverSetup } = require("./driver/setup.cjs");
 const { UpdateController } = require("./updates/controller.cjs");
+const { UpdateScheduler } = require("./updates/scheduler.cjs");
 const { updateBlockReason } = require("./updates/safety.cjs");
 const { PrintController } = require("./printing/controller.cjs");
 const { createElectronPrinter } = require("./printing/electron-printer.cjs");
@@ -45,9 +46,9 @@ if (selfTest && !process.env.GLINTEX_TEST_DATA)
 if (process.env.GLINTEX_TEST_DATA && (testMode || smoke || selfTest))
   app.setPath("userData", path.resolve(process.env.GLINTEX_TEST_DATA));
 app.setAppUserModelId("com.squirrel.GLINTEX.GLINTEX");
-let mainWindow, settings, scale, printer, driverSetup, updater, desktopSession, fixtureServer;
+let mainWindow, settings, scale, printer, driverSetup, updater, updateScheduler, desktopSession, fixtureServer;
 let closingForUpdate = false, closeApproved = false, closeChecking = false, nativeOperations = 0;
-const apiRequests = new Set(), updateTimers = [];
+const apiRequests = new Set();
 const squirrel =
   process.platform === "win32" && require("electron-squirrel-startup");
 // Disposable runner installs must not auto-launch against the live API.
@@ -122,6 +123,7 @@ async function start() {
     version: app.getVersion(), directory: path.join(app.getPath("userData"), "updates"),
     fetch: (url, options) => desktopSession.fetch(url, options), origin, fixture: selfTest || testMode,
   }).initialize();
+  updateScheduler = new UpdateScheduler({ updater });
   updater.on("status", status => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("glintex:update-status", status);
   });
@@ -327,6 +329,7 @@ async function start() {
     "server.status": serverStatus,
     "updates.status": () => updater.status(),
     "updates.check": () => updater.check({ manual: true }),
+    "updates.retry": () => updateScheduler.retry(),
     "updates.download": () => updater.download(),
     "updates.cancel": () => updater.cancel(),
     "updates.later": () => updater.later(),
@@ -408,14 +411,18 @@ async function start() {
     } finally { nativeOperations--; }
   });
   powerMonitor.on("suspend", () => scale.suspend());
-  powerMonitor.on("resume", () => { if (!closingForUpdate) scale.resume().catch(() => {}); });
+  powerMonitor.on("resume", () => {
+    if (!closingForUpdate) {
+      scale.resume().catch(() => {});
+      void updateScheduler.retry();
+    }
+  });
   mainWindow.on("ready-to-show", () => {
     if (!smoke && !selfTest) mainWindow.show();
   });
   await mainWindow.loadURL(origin + "/");
   if (!selfTest && !smoke) {
-    updateTimers.push(setTimeout(() => { void updater.check(); }, 30000));
-    updateTimers.push(setInterval(() => { void updater.check(); }, 6 * 60 * 60 * 1000));
+    updateScheduler.start();
   }
   if (selfTest) {
     const report = await require("./self-test.cjs").runSelfTest({
@@ -467,7 +474,7 @@ app.on('before-quit', event => {
   }
 });
 app.on("will-quit", () => {
-  for (const timer of updateTimers) { clearTimeout(timer); clearInterval(timer); }
+  updateScheduler?.stop();
   fixtureServer?.close();
   scale?.dispose();
   desktopSession?.cookies.flushStore();

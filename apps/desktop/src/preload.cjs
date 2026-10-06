@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld(
     updates: {
       status: () => call("updates.status"),
       check: () => call("updates.check"),
+      retry: () => call("updates.retry"),
       download: () => call("updates.download"),
       cancel: () => call("updates.cancel"),
       later: () => call("updates.later"),

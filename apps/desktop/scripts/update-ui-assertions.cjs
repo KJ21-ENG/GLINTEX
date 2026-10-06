@@ -1,27 +1,58 @@
 const assert = require('node:assert/strict');
-async function verifyUpdateUI(evaluate) {
+async function verifyUpdateUI(evaluate, capture = async () => {}) {
   const click = async text => { assert.equal(await evaluate(`(()=>{const b=[...document.querySelectorAll('[aria-label="Application updates"] button')].find(b=>b.textContent===${JSON.stringify(text)});if(!b||b.disabled)return false;b.click();return true})()`), true, text); };
-  const wait = async text => { for (let n=0;n<100;n++) { if (await evaluate(`document.querySelector('[aria-label="Application updates"]').innerText.includes(${JSON.stringify(text)})`)) return; await new Promise(r=>setTimeout(r,50)); } throw Error('Update UI did not show '+text); };
+  const waitFor = async expression => { for (let n=0;n<100;n++) { if (await evaluate(expression)) return; await new Promise(r=>setTimeout(r,50)); } throw Error('Update UI did not reach '+expression); };
+  const wait = text => waitFor(`document.querySelector('[aria-label="Application updates"]')?.innerText.includes(${JSON.stringify(text)})`);
+  const absent = () => waitFor("document.querySelector('[aria-label=\"Application updates\"]')===null");
   await evaluate("[...document.querySelectorAll('#panel button')].find(b=>b.textContent.includes('Workstation setup')).click()");
-  for (const [state,message] of [['current','No newer version'],['signin','Sign in again'],['unavailable','hosting is unavailable'],['error','Check your connection']]) {
+  for (const [state,message] of [['current',"You're up to date"],['signin','Sign in to check'],['unavailable','Updates are temporarily unavailable'],['error','Check your connection']]) {
     await evaluate(`window.fixtureUpdateFeedback(${JSON.stringify(state)})`); await wait(message);
-    await click(state === 'error' ? 'Later' : 'Dismiss');
-    await new Promise(resolve=>setTimeout(resolve,50));
-    assert.equal(await evaluate("document.querySelector('[aria-label=\"Application updates\"]')===null"),true);
+    await click('Dismiss'); await absent();
   }
-  await evaluate("[...document.querySelectorAll('#panel button')].find(b=>b.textContent.includes('Workstation setup')).click()");
-  await click('Check for updates'); await wait('Release 1.1.2');
+  await evaluate("window.fixtureUpdate({state:'checking',prompt:false})"); await absent();
+  await evaluate("window.fixtureUpdate({state:'error',prompt:false});window.dispatchEvent(new Event('online'))");
+  await wait('GLINTEX 1.1.2 is available');
+  assert.equal(await evaluate('window.fixtureRetryCalls'), 1);
+  assert.equal(await evaluate('window.fixtureDownloadCalls'), 0);
   assert.equal(await evaluate('window.fixtureUpdateChoice'), 0);
+  assert.equal(await evaluate("document.querySelector('[aria-label=\"Application updates\"]').innerText.includes('Simulated private update')"), false, 'release notes start collapsed');
+  assert.ok(await evaluate("document.querySelector('[aria-label=\"Application updates\"]').getBoundingClientRect().height<150"), 'notice fits a compact strip');
+  await capture('update-available');
+  await capture('update-available-narrow', 1000);
+  await capture('update-available');
+  await click('What’s new'); await wait('Version 1.1.2');
+  assert.equal(await evaluate("document.querySelector('[aria-label=\"Application updates\"]').innerText.includes('2026-10-05T00:00:00Z')"), false, 'date must be readable');
+  assert.equal(await evaluate("document.querySelector('[aria-label=\"Application updates\"]').innerText.includes('SHA-256')"), false);
+  await capture('update-notes');
+  await click('Details'); await wait('SHA-256');
+  await evaluate("window.fixtureUpdate({release:{version:'1.1.3',publishedAt:'2026-10-07T00:00:00Z',notes:'New release'}})");
+  await wait('GLINTEX 1.1.3 is available');
+  await waitFor("document.querySelector('#desktop-update-notes')===null");
+  await evaluate("window.glintexDesktop.updates.check()"); await wait('GLINTEX 1.1.2 is available');
   await click('Later'); assert.equal(await evaluate('window.glintexDesktop.updates.status().then(s=>s.prompt)'), false);
-  await click('Download update'); await wait('Install after I close GLINTEX');
+  await absent();
+  await evaluate("[...document.querySelectorAll('#panel button')].find(b=>b.textContent.includes('Workstation setup')).click()");
+  await click('Check for updates'); await wait('GLINTEX 1.1.2 is available');
+  await evaluate('window.fixtureDelayDownload=true');
+  await click('Download update'); await wait('Downloading GLINTEX');
+  await evaluate('window.fixtureUpdate({progress:42})'); await wait('42% complete');
+  assert.equal(await evaluate("document.querySelector('[aria-label=\"Update download\"]').getAttribute('aria-valuenow')"), '42');
+  await capture('update-downloading');
+  await click('Cancel download'); await wait('Download update');
+  await evaluate('window.fixtureDelayDownload=false');
+  await waitFor("![...document.querySelectorAll('[aria-label=\"Application updates\"] button')].find(b=>b.textContent==='Download update').disabled");
+  await click('Download update'); await wait('Install when I close GLINTEX');
   assert.equal(await evaluate('window.fixtureUpdateChoice'), 0);
-  await click('Install after I close GLINTEX'); await wait('Cancel installation choice');
+  await capture('update-ready');
+  await click('Install when I close GLINTEX'); await wait('Cancel installation choice');
   await evaluate('window.fixtureDelayDisarm=true');
   await evaluate(`(()=>{const b=[...document.querySelectorAll('[aria-label=\"Application updates\"] button')].find(b=>b.textContent==='Cancel installation choice');b.click();b.click()})()`);
-  await wait('Cancelling installation choice');
+  await wait('Update ready to install');
   assert.equal(await evaluate('window.fixtureDisarmCalls'), 1, 'duplicate cancellation must be serialized');
-  assert.equal(await evaluate(`[...document.querySelectorAll('[aria-label=\"Application updates\"] button')].find(b=>b.textContent==='Install after I close GLINTEX').disabled`),true,'pending cancellation must block a new installation choice');
-  await evaluate('window.fixtureFinishDisarm()'); await wait('Installation cancelled.');
-  return { passed: true, checks: ['version-release-notes','manual-check','closed-panel-current-signin-unavailable-offline-feedback','later','explicit-download','explicit-install-choice','cancel-install-choice','pending-cancel-blocks-rearm-and-duplicate-disarm'], simulated: true, installedAnything: false };
+  assert.equal(await evaluate(`[...document.querySelectorAll('[aria-label=\"Application updates\"] button')].find(b=>b.textContent==='Install when I close GLINTEX').disabled`),true,'pending cancellation must block a new installation choice');
+  await evaluate('window.fixtureFinishDisarm()');
+  await waitFor("![...document.querySelectorAll('[aria-label=\"Application updates\"] button')].find(b=>b.textContent==='Install when I close GLINTEX').disabled");
+  assert.equal(await evaluate('window.glintexDesktop.updates.status().then(s=>s.message)'), 'Installation cancelled.');
+  return { passed: true, checks: ['compact-notice','quiet-background-check','collapsed-release-notes','formatted-date','expandable-integrity-details','new-release-resets-expanded-details','manual-check','closed-panel-current-signin-unavailable-offline-feedback','online-retry','later','download-progress','cancel-download','explicit-download','explicit-install-choice','cancel-install-choice','pending-cancel-blocks-rearm-and-duplicate-disarm'], simulated: true, installedAnything: false };
 }
 module.exports = { verifyUpdateUI };

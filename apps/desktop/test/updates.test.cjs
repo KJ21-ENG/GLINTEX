@@ -43,6 +43,16 @@ test('successful trusted sign-in retries waiting discovery without download or i
   await c.authenticationCompleted({url:c.origin+'/api/auth/me',statusCode:200}); assert.equal(calls.length,2);
   assert.equal(await c.verified(),false,'discovery never downloads an installer');
 });
+test('first restored session or bootstrap checks immediately, rejecting foreign and unsuccessful responses', async t => {
+  for (const name of ['me', 'login', 'bootstrap']) {
+    const { c, calls } = await fixture(t);
+    for (const details of [{ url: 'https://foreign.invalid/api/auth/' + name, statusCode: 200 }, { url: c.origin + '/api/auth/' + name, statusCode: 401 }, { url: c.origin + '/api/health', statusCode: 200 }]) await c.authenticationCompleted(details);
+    assert.equal(calls.length, 0);
+    await c.authenticationCompleted({ url: c.origin + '/api/auth/' + name, statusCode: 200 });
+    assert.equal(c.status().state, 'available'); assert.equal(calls.length, 1);
+    await c.authenticationCompleted({ url: c.origin + '/api/auth/me', statusCode: 200 }); assert.equal(calls.length, 1);
+  }
+});
 test('authenticated discovery and verified download never install until explicit arm and safe close', async t => {
   const { c, launches } = await fixture(t);
   assert.equal((await c.check()).state, 'available'); assert.equal(launches.length, 0);

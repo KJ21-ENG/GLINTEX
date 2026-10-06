@@ -59,10 +59,28 @@ test("modified manifest, archive, file, unknown file and unsigned package fail v
   const f = await fixture(t); const original = await fs.readFile(path.join(f.kitDirectory, "manifest.json"));
   await fs.appendFile(path.join(f.kitDirectory, "manifest.json"), " "); assert.match((await f.helper.prepare()).output, /manifest checksum/); assert.equal(f.calls.length, 0);
   await fs.writeFile(path.join(f.kitDirectory, "manifest.json"), original); await fs.mkdir(f.cache, { recursive: true }); await fs.writeFile(path.join(f.cache, PACKAGE_NAME + ".cab"), Buffer.alloc(270156));
-  assert.match((await f.helper.prepare()).output, /Cached archive checksum/); assert.equal(f.calls.length, 0);
+  assert.equal((await f.helper.prepare()).success, true); assert.equal(f.downloads.length, 1);
+  assert.equal((await fs.readdir(f.cache)).filter(name => name.startsWith("invalid-archive-")).length, 1);
   await f.offline(); await fs.writeFile(path.join(f.packageDirectory, "plser.sys"), Buffer.from("tampered")); assert.equal((await f.helper.prepare({ verifyOnly: true })).success, false);
   await f.offline(); await fs.writeFile(path.join(f.packageDirectory, "attacker.ps1"), "evil"); assert.match((await f.helper.prepare({ verifyOnly: true })).output, /Unexpected package files/);
   const unsigned = await fixture(t, { invalidSignature: true }); await unsigned.offline(); assert.match((await unsigned.helper.prepare()).output, /Invalid Windows signature/);
+});
+test("invalid copied CAB is quarantined before clean download, including truncated and linked archives", async t => {
+  for (const kind of ["truncated", "tampered", "link"]) {
+    const f = await fixture(t); await fs.mkdir(f.cache, { recursive: true });
+    const archive = path.join(f.cache, PACKAGE_NAME + ".cab"), outside = path.join(f.root, "outside-cab");
+    await fs.writeFile(outside, "leave archive target untouched");
+    if (kind === "link") await fs.symlink(outside, archive);
+    else await fs.writeFile(archive, Buffer.alloc(kind === "truncated" ? 100 : 270156));
+    const before = (await fs.readdir(f.cache)).sort();
+    assert.equal((await f.helper.prepare({ verifyOnly: true })).success, false);
+    assert.deepEqual((await fs.readdir(f.cache)).sort(), before); assert.equal(f.downloads.length, 0);
+    const result = await f.helper.prepare(); assert.equal(result.success, true); assert.equal(result.installed, false);
+    assert.equal(f.downloads.length, 1); assert.equal(await fs.readFile(outside, "utf8"), "leave archive target untouched");
+    const quarantined = (await fs.readdir(f.cache)).filter(name => name.startsWith("invalid-archive-")); assert.equal(quarantined.length, 1);
+    if (kind === "link") assert.ok((await fs.lstat(path.join(f.cache, quarantined[0]))).isSymbolicLink());
+    assert.equal((await f.helper.prepare({ verifyOnly: true })).success, true);
+  }
 });
 test("replacement during signature check is detected; later changes never launch privileged code", async t => {
   const f = await fixture(t, { duringSignature: async helper => fs.writeFile(path.join(helper.status().cacheDirectory, PACKAGE_NAME, "plser.inf"), "replaced") });

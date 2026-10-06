@@ -137,11 +137,19 @@ class DriverSetup {
         if (verifyOnly) throw new Error("No cached driver package. Prepare it on an internet-connected Windows PC first.");
         temporary = path.join(cache, "prepare-" + randomUUID()); await this.directory(temporary);
         const archive = path.join(temporary, "driver.cab"), cachedArchive = path.join(cache, PACKAGE_NAME + ".cab");
-        if (existsSync(cachedArchive)) {
-          const bytes = await this.regularFile(cachedArchive, manifest.archive.bytes);
-          if (bytes.length !== manifest.archive.bytes || hash(bytes) !== manifest.archive.sha256) throw new Error("Cached archive checksum mismatch.");
-          await fs.writeFile(archive, bytes, { flag: "wx" });
-        } else await this.download(manifest, archive);
+        const cachedEntry = await fs.lstat(cachedArchive).catch(error => { if (error.code !== "ENOENT") throw error; return null; });
+        let cachedBytes;
+        if (cachedEntry) {
+          try {
+            cachedBytes = await this.regularFile(cachedArchive, manifest.archive.bytes);
+            if (cachedBytes.length !== manifest.archive.bytes || hash(cachedBytes) !== manifest.archive.sha256) throw new Error("Cached archive checksum mismatch.");
+          } catch (error) {
+            cachedBytes = undefined;
+            await fs.rename(cachedArchive, path.join(cache, "invalid-archive-" + randomUUID()));
+          }
+        }
+        if (cachedBytes) await fs.writeFile(archive, cachedBytes, { flag: "wx" });
+        else await this.download(manifest, archive);
         const extracted = path.join(temporary, "package"); await this.directory(extracted);
         const expand = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "expand.exe");
         await this.run(expand, ["-F:*", archive, extracted], { windowsHide: true, timeout: 60000, maxBuffer: 65536 });

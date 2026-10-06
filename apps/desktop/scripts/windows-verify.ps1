@@ -2,7 +2,7 @@ param(
   [Parameter(Mandatory=$true)][string]$PackagedExe,
   [Parameter(Mandatory=$true)][string]$Installer,
   [string]$UpgradeInstaller,
-  [string]$BootstrapInstaller,
+  [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$BootstrapInstaller,
   [ValidatePattern("^\d+\.\d+\.\d+$")][string]$BootstrapVersion = '1.1.0',
   [string]$OutputDirectory = (Join-Path $PSScriptRoot '../out/verification'),
   [switch]$AllowLocalInstall
@@ -27,6 +27,7 @@ $installRoot = Join-Path $env:LOCALAPPDATA 'GLINTEX'
 $userData = Join-Path $env:APPDATA 'GLINTEX'
 if (Test-Path $installRoot) { throw 'Existing GLINTEX installation found. Use a clean disposable Windows test user/runner.' }
 if (Test-Path $userData) { throw 'Existing GLINTEX user data found. Use a clean disposable Windows test user/runner.' }
+if (-not (Test-Path -LiteralPath $BootstrapInstaller -PathType Leaf)) { throw 'The verified delivered-version installer is required for release acceptance.' }
 function Invoke-Bounded([string]$File, [string[]]$Arguments, [int]$Timeout=120) {
   $isSetup = [IO.Path]::GetFileName($File) -like '*Setup.exe'
   if ($isSetup) { $env:GLINTEX_INSTALL_TEST = '1' }

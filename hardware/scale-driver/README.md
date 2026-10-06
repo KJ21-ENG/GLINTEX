@@ -105,8 +105,8 @@ adapter from Code 28 to Code 0. The CAB also contains two original x86 files;
 preparation verifies all six. Vendor binaries retain their copyright/signatures.
 Only scripts, documentation and manifest are tracked; `cache/` is gitignored.
 Do not put offline binary bundles in public Git or public Actions artifacts.
-Normal Electron preparation moves a damaged package entry to a unique
-`invalid-*` folder beside the cache, then prepares and verifies a fresh package.
+Normal Electron and standalone preparation move damaged package/CAB entries to a unique
+`invalid-*` entry inside the cache, then prepare and verify a fresh package.
 It preserves the invalid entry for inspection and never follows a linked entry.
 Verification-only mode reports failure without replacing cached data. Never edit
 the manifest or hashes to accept a damaged package.

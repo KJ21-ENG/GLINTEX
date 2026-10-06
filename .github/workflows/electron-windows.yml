@@ -39,6 +39,7 @@ jobs:
     env:
       PUPPETEER_SKIP_DOWNLOAD: 'true'
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      EXPECTED_SOURCE_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:

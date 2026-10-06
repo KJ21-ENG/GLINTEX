@@ -200,10 +200,17 @@ try {
   $report.reinstallPreserved = $true
   $report.finalUninstallDetails = Invoke-Uninstall 'final-uninstall-details'
   if ($BootstrapInstaller) {
+    # Authenticate the exact delivered bytes immediately before execution;
+    # earlier workflow checks cannot establish this acceptance evidence.
+    $bootstrapFile = Get-Item -LiteralPath $BootstrapInstaller
+    $bootstrapHash = (Get-FileHash -LiteralPath $BootstrapInstaller -Algorithm SHA256).Hash.ToLower()
+    if ($BootstrapVersion -ne '1.1.0' -or $bootstrapFile.Length -ne 161559552 -or $bootstrapHash -ne '320549a24659b6418db4c95bee582b08d1c6c0a40299d13651e3100ed40b2a64') { throw 'Delivered1.1.0 installer identity failed immediately before execution' }
+    $report.bootstrapInstaller = @{ version=$BootstrapVersion; bytes=$bootstrapFile.Length; sha256=$bootstrapHash; sourceCommit='f41bcc81a6f64fa3d93ede6bbe59a30842372ed0'; verifiedImmediatelyBeforeExecution=$true }
     Invoke-Bounded ([IO.Path]::GetFullPath($BootstrapInstaller)) @('--silent')
     Start-Sleep -Seconds 8; Stop-TestApp
     $bootstrapExe = Get-InstalledVersionExe $BootstrapVersion
     Invoke-Smoke $bootstrapExe.FullName 'bootstrap-original' $userData
+    if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-original.json') | ConvertFrom-Json).sourceCommit -ne $report.bootstrapInstaller.sourceCommit) { throw 'Delivered-version runtime source does not match pinned installer identity' }
     if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-original.json') | ConvertFrom-Json).version -ne $BootstrapVersion) { throw 'Bootstrap fixture is not the delivered version' }
     # Exercise the already delivered updater against this exact new installer.
     $env:GLINTEX_TEST_DATA = $userData

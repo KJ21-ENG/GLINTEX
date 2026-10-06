@@ -11,7 +11,8 @@ $ProgressPreference = 'SilentlyContinue'
 function Assert-Package {
   param([string]$Directory, $Manifest)
 
-  if ((Get-Item -LiteralPath $Directory).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package directory must not be a link.' }
+  $entry = Get-Item -LiteralPath $Directory -Force
+  if (-not $entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Package directory must be a directory and not a link.' }
   $names = @(Get-ChildItem -LiteralPath $Directory | Select-Object -ExpandProperty Name | Sort-Object)
   if (($names -join ',') -ne (($Manifest.files.name | Sort-Object) -join ',')) { throw 'Unexpected package files.' }
 
@@ -53,6 +54,38 @@ function Assert-Package {
   }
 }
 
+function Assert-Archive {
+  param([string]$Path, $Manifest)
+  $entry = Get-Item -LiteralPath $Path -Force
+  if ($entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $entry.Length -ne $Manifest.archive.bytes) { throw 'Unexpected cached archive entry or size.' }
+  if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ine $Manifest.archive.sha256) { throw 'Cached archive checksum mismatch.' }
+}
+
+function Get-PreparedArchive {
+  param([string]$ArchivePath, $Manifest)
+  $ready = $false
+  if (Get-Item -LiteralPath $ArchivePath -Force -ErrorAction SilentlyContinue) {
+    try { Assert-Archive -Path $ArchivePath -Manifest $Manifest; $ready = $true }
+    catch {
+      # Rename the entry itself inside the same directory; preserve link targets.
+      Rename-Item -LiteralPath $ArchivePath -NewName ('invalid-archive-' + [guid]::NewGuid().ToString('N'))
+    }
+  }
+  if (-not $ready) {
+    Write-Host 'Downloading the verified Prolific driver from Microsoft...'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $temporaryArchive = $ArchivePath + '.' + [guid]::NewGuid().ToString('N') + '.download'
+    try {
+      Invoke-WebRequest -Uri $Manifest.archive.url -UseBasicParsing -OutFile $temporaryArchive -TimeoutSec 60
+      Assert-Archive -Path $temporaryArchive -Manifest $Manifest
+      Move-Item -LiteralPath $temporaryArchive -Destination $ArchivePath
+    } finally {
+      if (Test-Path -LiteralPath $temporaryArchive) { Remove-Item -LiteralPath $temporaryArchive }
+    }
+  }
+  Assert-Archive -Path $ArchivePath -Manifest $Manifest
+}
+
 try {
   if ($PrepareOnly -and $VerifyOnly) {
     throw 'Choose either -PrepareOnly or -VerifyOnly.'
@@ -76,27 +109,23 @@ try {
     throw 'The driver download must use the pinned Microsoft Update endpoint.'
   }
   $packageDirectory = Join-Path $CacheDirectory 'prolific-5.1.12.0-windows-10-x64'
-
-  if (-not (Test-Path -LiteralPath $packageDirectory -PathType Container)) {
+  if (-not $VerifyOnly) { [IO.Directory]::CreateDirectory($CacheDirectory) | Out-Null }
+  $cacheEntry = Get-Item -LiteralPath $CacheDirectory -Force
+  if (-not $cacheEntry.PSIsContainer -or ($cacheEntry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Cache must be a directory and not a link.' }
+  $packageReady = $false
+  if (Get-Item -LiteralPath $packageDirectory -Force -ErrorAction SilentlyContinue) {
+    try { Assert-Package -Directory $packageDirectory -Manifest $manifest; $packageReady = $true }
+    catch {
+      if ($VerifyOnly) { throw }
+      Rename-Item -LiteralPath $packageDirectory -NewName ('invalid-' + [guid]::NewGuid().ToString('N'))
+    }
+  }
+  if (-not $packageReady) {
     if ($VerifyOnly) {
       throw 'No cached package. Run Install.cmd -PrepareOnly first.'
     }
-    [IO.Directory]::CreateDirectory($CacheDirectory) | Out-Null
     $archivePath = Join-Path $CacheDirectory 'prolific-5.1.12.0-windows-10-x64.cab'
-    if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
-      Write-Host 'Downloading the verified Prolific driver from Microsoft...'
-      [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-      $temporaryArchive = "$archivePath.download"
-      Invoke-WebRequest -Uri $uri.AbsoluteUri -UseBasicParsing -OutFile $temporaryArchive -TimeoutSec 60
-      if ((Get-FileHash -LiteralPath $temporaryArchive -Algorithm SHA256).Hash -ine $manifest.archive.sha256) {
-        Remove-Item -LiteralPath $temporaryArchive
-        throw 'Downloaded archive checksum mismatch. Preparation stopped.'
-      }
-      Move-Item -LiteralPath $temporaryArchive -Destination $archivePath -Force
-    }
-    if ((Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -ine $manifest.archive.sha256) {
-      throw 'Cached archive checksum mismatch. Preparation stopped.'
-    }
+    Get-PreparedArchive -ArchivePath $archivePath -Manifest $manifest
     $temporaryPackage = Join-Path $CacheDirectory ('extract-' + [guid]::NewGuid().ToString('N'))
     try {
       [IO.Directory]::CreateDirectory($temporaryPackage) | Out-Null

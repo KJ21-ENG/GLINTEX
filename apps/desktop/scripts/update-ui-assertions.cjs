@@ -10,13 +10,18 @@ async function verifyUpdateUI(evaluate) {
     assert.equal(await evaluate("document.querySelector('[aria-label=\"Application updates\"]')===null"),true);
   }
   await evaluate("[...document.querySelectorAll('#panel button')].find(b=>b.textContent.includes('Workstation setup')).click()");
-  await click('Check for updates'); await wait('Release 1.1.1');
+  await click('Check for updates'); await wait('Release 1.1.2');
   assert.equal(await evaluate('window.fixtureUpdateChoice'), 0);
   await click('Later'); assert.equal(await evaluate('window.glintexDesktop.updates.status().then(s=>s.prompt)'), false);
   await click('Download update'); await wait('Install after I close GLINTEX');
   assert.equal(await evaluate('window.fixtureUpdateChoice'), 0);
   await click('Install after I close GLINTEX'); await wait('Cancel installation choice');
-  await click('Cancel installation choice'); await wait('Installation cancelled.');
-  return { passed: true, checks: ['version-release-notes','manual-check','closed-panel-current-signin-unavailable-offline-feedback','later','explicit-download','explicit-install-choice','cancel-install-choice'], simulated: true, installedAnything: false };
+  await evaluate('window.fixtureDelayDisarm=true');
+  await evaluate(`(()=>{const b=[...document.querySelectorAll('[aria-label=\"Application updates\"] button')].find(b=>b.textContent==='Cancel installation choice');b.click();b.click()})()`);
+  await wait('Cancelling installation choice');
+  assert.equal(await evaluate('window.fixtureDisarmCalls'), 1, 'duplicate cancellation must be serialized');
+  assert.equal(await evaluate(`[...document.querySelectorAll('[aria-label=\"Application updates\"] button')].find(b=>b.textContent==='Install after I close GLINTEX').disabled`),true,'pending cancellation must block a new installation choice');
+  await evaluate('window.fixtureFinishDisarm()'); await wait('Installation cancelled.');
+  return { passed: true, checks: ['version-release-notes','manual-check','closed-panel-current-signin-unavailable-offline-feedback','later','explicit-download','explicit-install-choice','cancel-install-choice','pending-cancel-blocks-rearm-and-duplicate-disarm'], simulated: true, installedAnything: false };
 }
 module.exports = { verifyUpdateUI };

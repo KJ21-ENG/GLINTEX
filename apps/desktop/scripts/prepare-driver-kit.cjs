@@ -10,7 +10,6 @@ function prepareDriverKit({
   fs.rmSync(destination, { recursive: true, force: true });
   fs.mkdirSync(destination, { recursive: true });
   for (const file of KIT_FILES) fs.copyFileSync(path.join(source, file), path.join(destination, file));
-  fs.copyFileSync(path.resolve(__dirname, "../src/driver/Run-DriverSetup.ps1"), path.join(destination, "Run-DriverSetup.ps1"));
   return destination;
 }
 if (require.main === module) prepareDriverKit();

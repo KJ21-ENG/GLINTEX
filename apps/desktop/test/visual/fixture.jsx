@@ -23,26 +23,28 @@ window.glintexDesktop={getController:async()=>({version:'1.0.0-test',platform:'w
 createRoot(document.getElementById('editor')).render(<MemoryRouter><LabelDesigner/></MemoryRouter>);
 // Synthetic helper outcomes only: this fixture never launches PowerShell.
 let driverExit = 0, connected = false;
+window.fixtureDisarmCalls = 0;
+window.fixtureDelayDisarm = false;
 window.fixtureDriverCalls = 0;
 window.fixtureDriverOutcome = code => { driverExit = code; };
 window.fixtureScaleConnected = value => { connected = value; };
-window.glintexDesktop.getController = async () => ({ version: '1.1.0-fixture', scaleDriver: { available: true } });
-let updateState = { state: 'current', installedVersion: '1.1.0', message: 'No newer version is available.' }, updateListener;
+window.glintexDesktop.getController = async () => ({ version: '1.1.1-fixture', scaleDriver: { available: true } });
+let updateState = { state: 'current', installedVersion: '1.1.1', message: 'No newer version is available.' }, updateListener;
 const setUpdate = values => { updateState = { ...updateState, ...values }; updateListener?.(updateState); return updateState; };
 window.fixtureUpdateFeedback = state => setUpdate({ state, release: null, prompt: true, message: ({current:'No newer version is available.',signin:'Sign in again to check private updates.',unavailable:'Private update hosting is unavailable.',error:'Could not check for updates. Check your connection and retry.'})[state] });
 window.fixtureUpdateChoice = 0;
 window.glintexDesktop.updates = {
   status: async () => updateState, onStatus: callback => { updateListener = callback; return () => { updateListener = null; }; },
-  check: async () => setUpdate({ state: 'available', prompt: true, message: 'GLINTEX 1.1.1 is available.', release: { version: '1.1.1', publishedAt: '2026-10-05T00:00:00Z', notes: 'Simulated private update' } }),
+  check: async () => setUpdate({ state: 'available', prompt: true, message: 'GLINTEX 1.1.2 is available.', release: { version: '1.1.2', publishedAt: '2026-10-05T00:00:00Z', notes: 'Simulated private update' } }),
   download: async () => setUpdate({ state: 'ready', message: 'Simulated installer verified; no file downloaded.' }),
   later: async () => setUpdate({ prompt: false }), cancel: async () => setUpdate({ state: 'available' }),
   arm: async () => { window.fixtureUpdateChoice++; return setUpdate({ state: 'armed', message: 'Update selected. Finish work, disconnect the scale, then close GLINTEX to install.' }); },
-  disarm: async () => setUpdate({ state: 'ready', message: 'Installation cancelled.' }),
+  disarm: async () => { window.fixtureDisarmCalls++; setUpdate({ state: 'ready', message: 'Cancelling installation choice…' }); if (window.fixtureDelayDisarm) await new Promise(resolve => { window.fixtureFinishDisarm = resolve; }); return setUpdate({ state: 'ready', message: 'Installation cancelled.' }); },
 };
 window.glintexDesktop.scale.status = async () => ({ state: connected ? 'connected' : 'unsupported', isConnected: connected, error: connected ? null : 'Select a verified protocol. No scale connected.' });
 window.glintexDesktop.scale.driverSetup = async () => {
   window.fixtureDriverCalls++;
-  return { success: driverExit === 0 || driverExit === 3010, exitCode: driverExit, restartRequired: driverExit === 3010, logPath: 'SIMULATED user profile/scale-driver/setup.log', output: driverExit === 1 ? 'SIMULATED verification failure or UAC cancellation' : 'SIMULATED healthy driver retained; actual port COM7' };
+  return { success: driverExit === 0, installed: false, elevationRequested: false, packageDirectory: 'SIMULATED user profile/scale-driver/cache/verified-package', logPath: 'SIMULATED user profile/scale-driver/prepare.log', output: driverExit ? 'SIMULATED checksum verification failure; no driver changed' : 'SIMULATED package verified; no driver installed' };
 };
 createRoot(document.getElementById('panel')).render(<AuthProvider><DesktopWorkstation/></AuthProvider>);
 const results=[];

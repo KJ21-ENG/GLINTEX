@@ -334,7 +334,7 @@ async function start() {
       if (data !== undefined) throw new Error("Driver setup accepts no custom commands or paths");
       if (scale.status().isConnected || scale.status().status === "connecting")
         throw new Error("Disconnect the scale before running driver setup. Close other serial applications too.");
-      return driverSetup.install();
+      return driverSetup.prepare();
     },
     "scale.status": () => scale.status(),
     "scale.connect": () => {

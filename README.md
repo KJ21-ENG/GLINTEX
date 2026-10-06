@@ -23,8 +23,8 @@ The frontend expects the backend on port `4000` by default. Override `VITE_API_B
 
 ## Scale Hardware Setup
 
-Use the [Windows scale driver kit](hardware/scale-driver/README.md) to install the
-verified Prolific converter driver, prepare an offline copy, or verify a cached
+Use the [Windows scale driver kit](hardware/scale-driver/README.md) to prepare the
+verified Prolific package for Windows Device Manager, prepare an offline copy, or verify a cached
 package. The kit downloads directly from Microsoft and needs no access to another PC.
 
 ## Owner Operations Agent

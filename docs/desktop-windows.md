@@ -4,7 +4,7 @@
 
 Electron is the desktop application; the old Tauri helper is not required. The bundled React UI uses **https://app.glintex.in/api/** and its existing sessions, roles and cloud database. No workstation backend/database is installed. Production transactions are not test fixtures.
 
-Initial delivered version **1.0.0**; combined optional driver setup and private updater is **1.1.0**. Windows **x64**, Electron **44.5.1**, Forge **8.0.1**. Exact release commit and executed checks: `build-info.json`, delivery `manifest.json` and Windows verification reports. Integration branch: `codex/electron-private-updates-20261005`.
+Initial delivered version **1.0.0**; private updater was introduced in **1.1.0**; preparation-only driver handoff is **1.1.1**. Windows **x64**, Electron **44.5.1**, Forge **8.0.1**. Exact release commit and executed checks: `build-info.json`, delivery `manifest.json` and Windows verification reports. Integration branch: `codex/integrate-desktop-1.1.0-20261006`.
 
 A workflow definition is not execution evidence. Windows packaging, launch, installation, upgrade and uninstall remain **pending until the Windows run and its JSON reports pass**. Physical accuracy/protocol compatibility/alignment always await the owner's checks below. This document must not be described as a successful test report.
 
@@ -38,22 +38,28 @@ depends on it. This kit supports **Windows 10 x64** and exact hardware revision
 `USB\VID_067B&PID_23A3&REV_0305` only. It does not establish driver support for
 Windows 11, ARM64 or other converters.
 
-In **Workstation setup & print jobs**, choose **Run scale driver setup
-(administrator)** after disconnecting the scale and closing competing apps.
-The operation rechecks login and requires Settings write access. UAC elevates
-only the fixed PowerShell helper. It downloads the pinned Prolific 5.1.12.0
-package from Microsoft, verifies CAB/file hashes and signatures, checks hardware
-revision, then installs if needed. Healthy matching drivers are retained. It
-reports the actual COM port, failure/cancellation and any manual restart request;
-it never opens the serial port or creates a receipt. Logs and the verified cache
-live in `%APPDATA%\GLINTEX\scale-driver` and survive app upgrades.
+In **Workstation setup & print jobs**, choose **Prepare verified scale driver**
+after disconnecting the scale. The operation rechecks login and Settings write
+access. It uses the current user's token to download the exact pinned Microsoft
+package and verify CAB/file hashes, sizes and Windows signatures. It never
+executes bundled PowerShell scripts, requests elevation or installs a driver.
+Logs/cache live in `%APPDATA%\GLINTEX\scale-driver` and survive upgrades.
 
-Offline driver preparation: on a connected Windows PC run the kit's
-`Install.cmd -PrepareOnly`; copy its entire `cache` folder into the intended
-user's `%APPDATA%\GLINTEX\scale-driver\cache`, or run the standalone copied kit.
-`Install.cmd -VerifyOnly` verifies existing cache without downloading/installing.
-The Electron button still requires a live cloud login. Do not place the offline
-binary cache in public Git or public Actions artifacts.
+If the compatible adapter has no working COM port, check its exact Hardware IDs
+in Windows Device Manager, then choose **Update driver > Browse my computer for
+drivers** and select the verified folder displayed by GLINTEX. Windows handles
+administrator permission and revalidates the signed package. Follow any Windows
+restart request manually. Leave a healthy COM port/driver unchanged. This manual
+Windows step avoids treating mutable per-user app code as trusted administrator
+code; prepared hashes are point-in-time data checks, not an elevation trust root.
+
+For offline preparation, copy the whole prepared `cache` folder into the intended
+user's `%APPDATA%\GLINTEX\scale-driver\cache`. The legacy standalone
+`Install.cmd -PrepareOnly` and `-VerifyOnly` commands only prepare/verify as a
+standard user; they respect existing PowerShell policy and refuse elevation.
+If policy blocks the script, use Electron preparation or IT's approved process.
+The Electron button needs cloud login; Device Manager can use the prepared folder
+on an offline PC. Keep vendor caches out of public Git/Actions artifacts.
 
 For the tested GT-5 bracket scale, refresh devices and choose its actual port
 (currently COM3, not a default for other PCs), set **2400/8/none/1/no flow control**,
@@ -168,13 +174,13 @@ refresh/push or dispatch a new release.
 
 ## Upgrade, rollback and recovery
 
-Version 1.1.0 checks the private first-party service after startup (30 seconds) and every six hours, with **Check for updates** in the GLINTEX menu/workstation panel. It shows offline, sign-in, unavailable and no-new-version states. Discovery never downloads or installs automatically. **Later** hides that version's prompt for six hours in the current session; a manual check can show it sooner.
+Versions 1.1.0 and later check the private first-party service after startup (30 seconds) and every six hours, with **Check for updates** in the GLINTEX menu/workstation panel. It shows offline, sign-in, unavailable and no-new-version states. Discovery never downloads or installs automatically. **Later** hides that version's prompt for six hours in the current session; a manual check can show it sooner.
 
 Choose **Download update** to use the existing HttpOnly session at the fixed HTTPS installer endpoint. Redirects, other origins, unsupported manifests, downgrades, wrong size and SHA-256 mismatches are rejected. Interrupted/cancelled downloads are not installable. Release version/date/notes appear first. No GitHub token or signing secret is in the client. The candidate is an **unsigned test installer**: trusted HTTPS and hash validation establish source/integrity, not Windows publisher signing; OS warnings remain enabled.
 
 Choose **Install after I close GLINTEX** after download verification. Continue working or cancel the choice. Only deliberate app close plus final save/discard confirmation starts installation. Connected scales, driver setup, native/server operations and queued print submissions block that close. Check the Windows print queue: accepted jobs may still print physically. Settings/cookies are flushed, then the helper must acknowledge startup before GLINTEX closes. A first-party GUI host waits for app exit, rechecks the installer with .NET SHA-256 and opens it. It runs without elevation, services or scheduled tasks and records local status in `%APPDATA%\GLINTEX\updates\install-status.json`; a failed handoff is shown on the next launch. There is no forced app close, startup installation or Windows reboot; restart clears the installation choice.
 
-Existing 1.0.0 needs **one manual upgrade** to 1.1.0 under the same Windows account. Finish capture/save/print, close GLINTEX, back up `%APPDATA%\GLINTEX`, then run the verified newer Setup.exe. Keep app identity/user profile. Squirrel nupkg/RELEASES files are temporary packaging output excluded from the new delivery artifact; the client uses authenticated first-party routes.
+Existing 1.0.0 needs **one manual upgrade** to the current version (1.1.1) under the same Windows account. Finish capture/save/print, close GLINTEX, back up `%APPDATA%\GLINTEX`, then run the verified newer Setup.exe. Keep app identity/user profile. Squirrel nupkg/RELEASES files are temporary packaging output excluded from the new delivery artifact; the client uses authenticated first-party routes.
 
 ### Private release administration
 

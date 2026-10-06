@@ -3,6 +3,7 @@ param(
   [Parameter(Mandatory=$true)][string]$Installer,
   [string]$UpgradeInstaller,
   [string]$BootstrapInstaller,
+  [ValidatePattern("^\d+\.\d+\.\d+$")][string]$BootstrapVersion = '1.1.0',
   [string]$OutputDirectory = (Join-Path $PSScriptRoot '../out/verification'),
   [switch]$AllowLocalInstall
 )
@@ -104,7 +105,12 @@ function Invoke-SelfTest([string]$Exe, [string]$Name, [string]$Data, [bool]$Expe
   Remove-Item Env:GLINTEX_TEST_DATA, Env:GLINTEX_TEST_REPORTS, Env:GLINTEX_TEST_PHASE
 }
 try {
-  Invoke-Smoke ([IO.Path]::GetFullPath($PackagedExe)) 'packaged-smoke' (Join-Path $OutputDirectory 'isolated-smoke-data')
+  $env:GLINTEX_TEST_PREPARE_DRIVER = '1'
+  try { Invoke-Smoke ([IO.Path]::GetFullPath($PackagedExe)) 'packaged-smoke' (Join-Path $OutputDirectory 'isolated-smoke-data') }
+  finally { Remove-Item Env:GLINTEX_TEST_PREPARE_DRIVER -ErrorAction SilentlyContinue }
+  $driver = Get-Content -Raw (Join-Path $OutputDirectory 'packaged-smoke-reports/driver-preparation.json') | ConvertFrom-Json
+  if (-not $driver.passed -or $driver.installed -or $driver.elevationRequested) { throw 'Real packaged driver preparation failed' }
+  $report.driverPreparation = $driver
   if ((Get-Content -Raw (Join-Path $OutputDirectory 'packaged-smoke.json') | ConvertFrom-Json).sourceCommit -ne $report.sourceCommit) { throw 'Packaged runtime source identity mismatch' }
   $report.packagedLaunch = $true
   Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
@@ -177,17 +183,32 @@ try {
   if ($BootstrapInstaller) {
     Invoke-Bounded ([IO.Path]::GetFullPath($BootstrapInstaller)) @('--silent')
     Start-Sleep -Seconds 8; Stop-TestApp
-    $bootstrapExe = Get-InstalledVersionExe '1.0.0'
-    Invoke-Smoke $bootstrapExe.FullName 'bootstrap-1.0.0' $userData
-    if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-1.0.0.json') | ConvertFrom-Json).version -ne '1.0.0') { throw 'Bootstrap fixture is not the delivered 1.0.0' }
-    Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
+    $bootstrapExe = Get-InstalledVersionExe $BootstrapVersion
+    Invoke-Smoke $bootstrapExe.FullName 'bootstrap-original' $userData
+    if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-original.json') | ConvertFrom-Json).version -ne $BootstrapVersion) { throw 'Bootstrap fixture is not the delivered version' }
+    # Exercise the already delivered updater against this exact new installer.
+    $env:GLINTEX_TEST_DATA = $userData
+    $env:GLINTEX_TEST_REPORTS = Join-Path $OutputDirectory 'previous-release-update-reports'
+    $env:GLINTEX_TEST_PHASE = 'update'
+    $env:GLINTEX_TEST_UPDATE_INSTALLER = [IO.Path]::GetFullPath($Installer)
+    $env:GLINTEX_TEST_UPDATE_VERSION = $candidateVersion
+    $env:GLINTEX_INSTALL_TEST = '1'
+    try { Invoke-Bounded $bootstrapExe.FullName @('--self-test') 300 }
+    finally { Remove-Item Env:GLINTEX_TEST_DATA, Env:GLINTEX_TEST_REPORTS, Env:GLINTEX_TEST_PHASE, Env:GLINTEX_TEST_UPDATE_INSTALLER, Env:GLINTEX_TEST_UPDATE_VERSION, Env:GLINTEX_INSTALL_TEST -ErrorAction SilentlyContinue }
+    $previousUpdate = Get-Content -Raw (Join-Path $OutputDirectory 'previous-release-update-reports/packaged-update.json') | ConvertFrom-Json
+    if (-not $previousUpdate.passed -or $previousUpdate.version -ne $BootstrapVersion -or $previousUpdate.checks -notcontains 'main-process-mid-save-close-block') { throw 'Previous-release authenticated update proof missing' }
+    $deadline = (Get-Date).AddSeconds(120)
+    while (-not (Test-Path (Join-Path $installRoot "app-$candidateVersion/GLINTEX.exe"))) { if ((Get-Date) -gt $deadline) { throw 'Previous updater did not install the candidate' }; Start-Sleep -Seconds 2 }
     Start-Sleep -Seconds 8; Stop-TestApp
     $bootstrappedExe = Get-InstalledVersionExe $candidateVersion
-    Invoke-Smoke $bootstrappedExe.FullName 'bootstrap-upgraded' $userData
-    if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-upgraded.json') | ConvertFrom-Json).version -ne $originalVersion) { throw 'Manual 1.0.0 bootstrap did not select the candidate' }
-    if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Manual bootstrap changed workstation settings or queue' }
-    $report.manualBootstrapPreserved = $true
-    $report.bootstrapFrom = '1.0.0'; $report.bootstrapTo = $originalVersion
+    Invoke-Smoke $bootstrappedExe.FullName 'bootstrap-upgraded' $userData $true
+    $bootstrapRestored = Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-upgraded-reports/packaged-restored.json') | ConvertFrom-Json
+    if ($bootstrapRestored.version -ne $originalVersion -or -not $bootstrapRestored.restoredSession) { throw 'Previous-release update did not select the candidate and preserve login' }
+    if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Previous-release update changed workstation settings or queue' }
+    $report.previousReleaseAuthenticatedUpdate = $true
+    $report.previousReleaseSessionPreserved = $true
+    $report.manualBootstrapPreserved = $true # Compatibility acceptance field: previous-version migration preserved data.
+    $report.bootstrapFrom = $BootstrapVersion; $report.bootstrapTo = $originalVersion
     $report.bootstrapUninstallDetails = Invoke-Uninstall 'bootstrap-uninstall-details'
   }
   if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Final uninstall changed retained settings or queue marker' }

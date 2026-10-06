@@ -145,6 +145,21 @@ async function runSelfTest({
       "return window.glintexDesktop.scale.enumerate()",
     );
     assert.ok(Array.isArray(ports));
+    if (process.env.GLINTEX_TEST_PREPARE_DRIVER === "1" && phase === "first") {
+      const prepared = await evaluate("return window.glintexDesktop.scale.driverSetup()");
+      assert.equal(prepared.success, true, prepared.output);
+      assert.equal(prepared.installed, false); assert.equal(prepared.elevationRequested, false);
+      const { DriverSetup } = require("./driver/setup.cjs");
+      const offline = new DriverSetup({ kitDirectory: path.join(process.resourcesPath, "scale-driver"), userData: app.getPath("userData"), fetch: () => { throw Error("Offline verification must not download"); } });
+      assert.equal((await offline.prepare({ verifyOnly: true })).success, true);
+      const target = path.join(prepared.packageDirectory, "plser.inf"), original = await fs.readFile(target);
+      let rejected;
+      try { await fs.writeFile(target, "deliberate verification tamper"); rejected = await offline.prepare({ verifyOnly: true }); }
+      finally { await fs.writeFile(target, original); }
+      assert.equal(rejected.success, false); assert.match(rejected.output, /Checksum mismatch/);
+      await fs.mkdir(reportDirectory, { recursive: true });
+      await fs.writeFile(path.join(reportDirectory, "driver-preparation.json"), JSON.stringify({ passed: true, realMicrosoftPackageVerified: true, packagedPaths: true, offlineVerified: true, tamperRejected: true, installed: false, elevationRequested: false, driverVersion: prepared.driverVersion, hardwareSupport: controller.scaleDriver.supported }, null, 2));
+    }
     await assert.rejects(
       evaluate("return window.glintexDesktop.scale.capture({timeoutMs:100})"),
     );

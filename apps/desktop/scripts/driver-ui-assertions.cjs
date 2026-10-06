@@ -7,18 +7,20 @@ async function verifyDriverUI(evaluate) {
     }
     throw new Error("Driver UI fixture timed out: " + expression);
   };
-  await waitFor(`!![...document.querySelectorAll('#panel button')].find(b => b.textContent === 'Run scale driver setup (administrator)')`);
-  const button = `[...document.querySelectorAll('#panel button')].find(b => b.textContent === 'Run scale driver setup (administrator)')`;
-  for (const [code, expected] of [[1, "Driver setup failed or administrator approval was cancelled"], [3010, "Windows requests a restart"], [0, "Driver setup finished"]]) {
+  await waitFor(`!![...document.querySelectorAll('#panel button')].find(b => b.textContent === 'Prepare verified scale driver')`);
+  const button = `[...document.querySelectorAll('#panel button')].find(b => b.textContent === 'Prepare verified scale driver')`;
+  for (const [code, expected] of [[1, "Driver preparation failed"], [0, "Driver package verified"]]) {
     await evaluate(`window.fixtureDriverOutcome(${code}); ${button}.click()`);
     await waitFor(`document.querySelector('#panel').innerText.includes(${JSON.stringify(expected)}) && !${button}.disabled`);
     assert.match(await evaluate(`document.querySelector('#panel').textContent`), /SIMULATED/);
   }
-  assert.equal(await evaluate("window.fixtureDriverCalls"), 3);
+  assert.equal(await evaluate("window.fixtureDriverCalls"), 2);
+  assert.match(await evaluate("document.querySelector('#panel').textContent"), /Device Manager/);
+  assert.match(await evaluate("document.querySelector('#panel').textContent"), /SIMULATED user profile\/scale-driver\/cache\/verified-package/);
   await evaluate(`window.fixtureScaleConnected(true); [...document.querySelectorAll('#panel button')].find(b => b.textContent === 'Refresh devices and jobs').click()`);
   await waitFor(`${button}.disabled`);
   await evaluate(`${button}.click()`);
-  assert.equal(await evaluate("window.fixtureDriverCalls"), 3, "connected scale must prevent setup launch");
-  return { helperOutcomes: ["failure/cancellation", "restart requested", "healthy retained"], connectedScaleBlocksSetup: true, realDriverExecuted: false };
+  assert.equal(await evaluate("window.fixtureDriverCalls"), 2, "connected scale must prevent setup launch");
+  return { helperOutcomes: ["verification failure", "prepared without installation"], connectedScaleBlocksSetup: true, realDriverExecuted: false };
 }
 module.exports = { verifyDriverUI };

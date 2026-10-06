@@ -47,7 +47,7 @@ function mayReadJob(user, job) {
 function assertPermission(user, operation, stage) {
   if (!user?.id)
     throw new Error("Sign in to GLINTEX to use workstation devices");
-  if (operation === "settings.update" || operation.endsWith(".configure")) {
+  if (operation === "settings.update" || operation === "scale.driverSetup" || operation.endsWith(".configure")) {
     if (!has(user, "settings", 2))
       throw new Error("Settings write permission required");
     return;

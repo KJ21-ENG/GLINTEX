@@ -12,6 +12,9 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const { SettingsStore } = require("./settings.cjs");
 const { ScaleController } = require("./scale/controller.cjs");
+const { DriverSetup } = require("./driver/setup.cjs");
+const { UpdateController } = require("./updates/controller.cjs");
+const { updateBlockReason } = require("./updates/safety.cjs");
 const { PrintController } = require("./printing/controller.cjs");
 const { createElectronPrinter } = require("./printing/electron-printer.cjs");
 const {
@@ -42,7 +45,9 @@ if (selfTest && !process.env.GLINTEX_TEST_DATA)
 if (process.env.GLINTEX_TEST_DATA && (testMode || smoke || selfTest))
   app.setPath("userData", path.resolve(process.env.GLINTEX_TEST_DATA));
 app.setAppUserModelId("com.squirrel.GLINTEX.GLINTEX");
-let mainWindow, settings, scale, printer, desktopSession, fixtureServer;
+let mainWindow, settings, scale, printer, driverSetup, updater, desktopSession, fixtureServer;
+let closingForUpdate = false, closeApproved = false, closeChecking = false, nativeOperations = 0;
+const apiRequests = new Set(), updateTimers = [];
 const squirrel =
   process.platform === "win32" && require("electron-squirrel-startup");
 // Disposable runner installs must not auto-launch against the live API.
@@ -104,11 +109,22 @@ async function start() {
   settings = await new SettingsStore(
     path.join(app.getPath("userData"), "workstation"),
   ).load();
+  driverSetup = new DriverSetup({
+    kitDirectory: app.isPackaged ? path.join(process.resourcesPath, "scale-driver") : path.resolve(__dirname, "../build/scale-driver"),
+    userData: app.getPath("userData"),
+  });
   desktopSession = session.fromPartition("persist:glintex-workstation");
   desktopSession.setPermissionRequestHandler((_wc, _permission, callback) =>
     callback(false),
   );
   desktopSession.setPermissionCheckHandler(() => false);
+  updater = await new UpdateController({
+    version: app.getVersion(), directory: path.join(app.getPath("userData"), "updates"),
+    fetch: (url, options) => desktopSession.fetch(url, options), origin, fixture: selfTest || testMode,
+  }).initialize();
+  updater.on("status", status => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("glintex:update-status", status);
+  });
   desktopSession.protocol.handle(
     new URL(origin).protocol.slice(0, -1),
     createAppHandler({
@@ -129,8 +145,13 @@ async function start() {
       allowed =
         u.origin === origin || u.protocol === "blob:" || u.protocol === "data:";
     } catch {}
-    callback({ cancel: !allowed });
+    let businessRequest = false;
+    try { const u = new URL(details.url); businessRequest = u.pathname.startsWith("/api/") && !/^\/api\/(health|auth\/me|desktop\/releases)(\/|$)/.test(u.pathname); } catch {}
+    if (allowed && businessRequest && !closingForUpdate) apiRequests.add(details.id);
+    callback({ cancel: !allowed || (closingForUpdate && businessRequest) });
   });
+  desktopSession.webRequest.onCompleted(details => apiRequests.delete(details.id));
+  desktopSession.webRequest.onErrorOccurred(details => apiRequests.delete(details.id));
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 900,
@@ -155,6 +176,7 @@ async function start() {
       {
         label: "GLINTEX",
         submenu: [
+          { label: "Check for updates", click: () => { void updater.check({ manual: true }); } },
           { role: "reload" },
           { role: "togglefullscreen" },
           { type: "separator" },
@@ -216,6 +238,49 @@ async function start() {
     getPrinters: () => mainWindow.webContents.getPrintersAsync(),
     printArtifact: createElectronPrinter({ BrowserWindow }),
   });
+  const safety = async () => {
+    await printer.ready;
+    return updateBlockReason({ scale: scale.status(), driverRunning: driverSetup.running, nativeOperations, apiRequests: apiRequests.size, printJobs: [...printer.jobs.values()] });
+  };
+  mainWindow.on("close", event => {
+    if (closeApproved || !["armed", "installing"].includes(updater.status().state)) return;
+    event.preventDefault();
+    if (closeChecking) return;
+    closeChecking = true;
+    void (async () => {
+      closingForUpdate = true;
+      updater.set({ closeBlocked: false });
+      await mainWindow.webContents.executeJavaScript("document.body.inert=true");
+      const blocked = await safety();
+      if (blocked) {
+        updater.set({ closeBlocked: true, message: blocked });
+        if (!(selfTest && process.env.GLINTEX_TEST_PHASE === "update")) await dialog.showMessageBox(mainWindow, { type: "info", title: "Finish work before updating", message: blocked, buttons: ["Keep working"] });
+        return;
+      }
+      const fixtureUpgrade = selfTest && process.env.GLINTEX_TEST_PHASE === "update";
+      const choice = fixtureUpgrade ? { response: 1 } : await dialog.showMessageBox(mainWindow, { type: "question", title: "Close GLINTEX and install the update?", message: "Confirm that every capture, receipt and edited form is saved, or deliberately discard unfinished forms. Windows printer submissions may still be printing; check the Windows queue first.", detail: "The verified installer opens after GLINTEX exits. Windows will not be restarted. Keep working if anything is unfinished.", buttons: ["Keep working", "Close and install"], defaultId: 0, cancelId: 0, noLink: true });
+      if (choice.response !== 1) return;
+      await settings.pending;
+      await desktopSession.cookies.flushStore();
+      await updater.installAfterExit({ safety, silent: fixtureUpgrade });
+      closeApproved = true;
+      mainWindow.close();
+    })().catch(async error => {
+      await updater.disarm();
+      if (selfTest) { console.error(error); app.exit(1); return; }
+      await dialog.showMessageBox(mainWindow, { type: "error", title: "Update stopped", message: error.message });
+    }).finally(() => {
+      closeChecking = false;
+      if (!closeApproved && mainWindow && !mainWindow.isDestroyed()) {
+        closingForUpdate = false;
+        void mainWindow.webContents.executeJavaScript("document.body.inert=false");
+      }
+    });
+  });
+  // A page's unsaved-form guard can still veto the approved close.
+  mainWindow.webContents.on("will-prevent-unload", () => {
+    if (closeApproved) { closeApproved = false; closingForUpdate = false; void updater.disarm(); void mainWindow.webContents.executeJavaScript("document.body.inert=false"); }
+  });
   const operations = {
     controller: () => ({
       version: app.getVersion(),
@@ -226,6 +291,8 @@ async function start() {
         "bundled-ui",
       ],
       apiOrigin: origin,
+      scaleDriver: driverSetup.status(),
+      updates: updater.status(),
     }),
     "settings.get": () => settings.get(),
     "settings.update": async (data) => {
@@ -255,9 +322,25 @@ async function start() {
       return settings.get();
     },
     "server.status": serverStatus,
+    "updates.status": () => updater.status(),
+    "updates.check": () => updater.check({ manual: true }),
+    "updates.download": () => updater.download(),
+    "updates.cancel": () => updater.cancel(),
+    "updates.later": () => updater.later(),
+    "updates.arm": () => updater.arm(),
+    "updates.disarm": () => updater.disarm(),
     "scale.enumerate": () => scale.enumerate(),
+    "scale.driverSetup": async (data) => {
+      if (data !== undefined) throw new Error("Driver setup accepts no custom commands or paths");
+      if (scale.status().isConnected || scale.status().status === "connecting")
+        throw new Error("Disconnect the scale before running driver setup. Close other serial applications too.");
+      return driverSetup.install();
+    },
     "scale.status": () => scale.status(),
-    "scale.connect": () => scale.connect(),
+    "scale.connect": () => {
+      if (driverSetup.running) throw new Error("Wait for driver setup to finish before connecting the scale");
+      return scale.connect();
+    },
     "scale.disconnect": () => scale.disconnect(),
     "scale.configure": (data) => scale.configure(assertPlain(data)),
     "scale.capture": (data) => scale.capture(assertPlain(data)),
@@ -274,8 +357,12 @@ async function start() {
     assertSender(event, mainWindow?.webContents, origin);
     if (typeof operation !== "string" || !Object.hasOwn(operations, operation))
       throw new Error("Unknown desktop operation");
-    if (operation === "controller" || operation === "server.status")
+    if (closingForUpdate) throw new Error("Application is closing for an update. Finish or cancel the close first.");
+    if (operation.startsWith("updates.") && payload !== undefined) throw new Error("Updates accept no custom URLs, files or commands");
+    if (operation === "controller" || operation === "server.status" || operation.startsWith("updates."))
       return operations[operation](payload);
+    nativeOperations++;
+    try {
     let user;
     try {
       const response = await desktopSession.fetch(origin + "/api/auth/me", {
@@ -308,20 +395,25 @@ async function start() {
     if (operation === "printers.listJobs")
       return (await printer.listJobs()).filter((job) => mayReadJob(user, job));
     if (operation === "printers.submit")
-      return printer.submit({
+      return await printer.submit({
         ...assertPlain(payload, 21 * 1024 * 1024),
         ownerUserId: user.id,
       });
     if (operation === "printers.reprint")
-      return printer.reprint(validId(payload), { ownerUserId: user.id });
-    return operations[operation](payload);
+      return await printer.reprint(validId(payload), { ownerUserId: user.id });
+    return await operations[operation](payload);
+    } finally { nativeOperations--; }
   });
   powerMonitor.on("suspend", () => scale.suspend());
-  powerMonitor.on("resume", () => scale.resume().catch(() => {}));
+  powerMonitor.on("resume", () => { if (!closingForUpdate) scale.resume().catch(() => {}); });
   mainWindow.on("ready-to-show", () => {
     if (!smoke && !selfTest) mainWindow.show();
   });
   await mainWindow.loadURL(origin + "/");
+  if (!selfTest && !smoke) {
+    updateTimers.push(setTimeout(() => { void updater.check(); }, 30000));
+    updateTimers.push(setInterval(() => { void updater.check(); }, 6 * 60 * 60 * 1000));
+  }
   if (selfTest) {
     const report = await require("./self-test.cjs").runSelfTest({
       window: mainWindow,
@@ -342,12 +434,15 @@ async function start() {
     await require("serialport").SerialPort.list();
     if (!checks.bridge || checks.node !== "undefined" || checks.body < 1)
       throw new Error("Packaged smoke checks failed");
+    if (app.isPackaged && !driverSetup.status().bundled)
+      throw new Error("Packaged scale driver helper is missing");
     const report = {
       passed: true,
       version: app.getVersion(),
       platform: process.platform,
       arch: process.arch,
       packaged: app.isPackaged,
+      scaleDriver: driverSetup.status(),
       checks,
       at: new Date().toISOString(),
     };
@@ -360,7 +455,16 @@ async function start() {
     app.quit();
   }
 }
-app.on("before-quit", () => {
+// Quit must wait for asynchronous close preflight/helper acknowledgement just
+// like clicking the window's close button. Re-enter quit only after approval.
+app.on('before-quit', event => {
+  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && ['armed','installing'].includes(updater?.status().state)) {
+    event.preventDefault();
+    mainWindow.close();
+  }
+});
+app.on("will-quit", () => {
+  for (const timer of updateTimers) { clearTimeout(timer); clearInterval(timer); }
   fixtureServer?.close();
   scale?.dispose();
   desktopSession?.cookies.flushStore();

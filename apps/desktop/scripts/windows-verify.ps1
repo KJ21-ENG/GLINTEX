@@ -2,6 +2,7 @@ param(
   [Parameter(Mandatory=$true)][string]$PackagedExe,
   [Parameter(Mandatory=$true)][string]$Installer,
   [string]$UpgradeInstaller,
+  [string]$BootstrapInstaller,
   [string]$OutputDirectory = (Join-Path $PSScriptRoot '../out/verification'),
   [switch]$AllowLocalInstall
 )
@@ -12,6 +13,15 @@ if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
 $report = [ordered]@{ passed=$false; startedAt=(Get-Date).ToUniversalTime().ToString('o'); os=[Environment]::OSVersion.VersionString; architecture='x64'; packagedLaunch=$false; installedLaunch=$false; shortcut=$false; upgradePreserved=$false; uninstall=$false; physicalHardwareTested=$false }
+$sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
+$report.sourceCommit = (git -C $sourceRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or ($env:CI -and $report.sourceCommit -ne $env:EXPECTED_SOURCE_SHA)) { throw 'Verification source does not match requested build' }
+$report.sourceTree = (git -C $sourceRoot rev-parse 'HEAD^{tree}').Trim()
+$report.repository = $env:GITHUB_REPOSITORY
+$report.runId = $env:GITHUB_RUN_ID
+$report.runAttempt = $env:GITHUB_RUN_ATTEMPT
+$report.installerSha256 = (Get-FileHash ([IO.Path]::GetFullPath($Installer)) -Algorithm SHA256).Hash.ToLower()
+$report.installerBytes = (Get-Item ([IO.Path]::GetFullPath($Installer))).Length
 $installRoot = Join-Path $env:LOCALAPPDATA 'GLINTEX'
 $userData = Join-Path $env:APPDATA 'GLINTEX'
 if (Test-Path $installRoot) { throw 'Existing GLINTEX installation found. Use a clean disposable Windows test user/runner.' }
@@ -22,10 +32,18 @@ function Invoke-Bounded([string]$File, [string[]]$Arguments, [int]$Timeout=120) 
   try {
     $script:processSequence++
     $logStem = Join-Path $OutputDirectory ("process-$script:processSequence-" + [IO.Path]::GetFileName($File))
+    Write-Host "[$((Get-Date).ToUniversalTime().ToString('o'))] Start process $script:processSequence $File $Arguments (limit $Timeout seconds)"
     $process = Start-Process -FilePath $File -ArgumentList $Arguments -PassThru -RedirectStandardOutput ($logStem + '.stdout.txt') -RedirectStandardError ($logStem + '.stderr.txt')
-    if (-not $process.WaitForExit($Timeout * 1000)) { $process.Kill($true); throw "Timed out: $([IO.Path]::GetFileName($File))" }
+    if (-not $process.WaitForExit($Timeout * 1000)) {
+      # Bound cleanup too. A hung tree enumeration must not defeat the test limit.
+      $killer = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32/taskkill.exe') -ArgumentList @('/PID', $process.Id, '/T', '/F') -PassThru -WindowStyle Hidden
+      if (-not $killer.WaitForExit(10000)) { $killer.Kill() }
+      Get-Content -Tail 18 ($logStem + '.stderr.txt') | Write-Host
+      throw "Timed out: $([IO.Path]::GetFileName($File))"
+    }
     $process.Refresh()
-    if ($process.ExitCode -ne 0) { throw "Process exited $($process.ExitCode): $([IO.Path]::GetFileName($File))" }
+    if ($process.ExitCode -ne 0) { Get-Content -Tail 18 ($logStem + '.stderr.txt') | Write-Host; throw "Process exited $($process.ExitCode): $([IO.Path]::GetFileName($File))" }
+    Write-Host "[$((Get-Date).ToUniversalTime().ToString('o'))] Completed process $script:processSequence"
   } finally { if ($isSetup) { Remove-Item Env:GLINTEX_INSTALL_TEST -ErrorAction SilentlyContinue } }
 }
 function Stop-TestApp {
@@ -53,17 +71,30 @@ function Invoke-Uninstall([string]$Name) {
   $result.scope = 'Application registration, shortcuts and processes removed; Squirrel dead cache files explicitly recorded.'
   return $result
 }
-function Invoke-Smoke([string]$Exe, [string]$Name, [string]$Data) {
-  Invoke-SelfTest $Exe $Name $Data
+function Get-InstalledVersionExe([string]$Version) {
+  Write-Host "[$((Get-Date).ToUniversalTime().ToString('o'))] Verify active installed version $Version"
+  $exe = Join-Path $installRoot "app-$Version/GLINTEX.exe"
+  if (-not (Test-Path $exe)) { throw "Expected installed application $Version is missing" }
+  $registration = @(Get-ChildItem 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall' -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DisplayName -eq 'GLINTEX' })
+  if ($registration.Count -ne 1 -or $registration[0].DisplayVersion -ne $Version) { throw "Windows application registration does not select $Version" }
+  $index = Join-Path $installRoot 'packages/RELEASES'
+  $versions = @(Get-Content $index | ForEach-Object { if ($_ -match '(?<version>\d+\.\d+\.\d+)-full\.nupkg') { [version]$Matches.version } } | Sort-Object -Descending)
+  if ($versions.Count -eq 0 -or $versions[0].ToString() -ne $Version) { throw "Squirrel release index does not select $Version" }
+  return Get-Item $exe
+}
+function Invoke-Smoke([string]$Exe, [string]$Name, [string]$Data, [bool]$ExpectRestoredSession=$false) {
+  Invoke-SelfTest $Exe $Name $Data $ExpectRestoredSession
   $result = Get-Content -Raw (Join-Path $OutputDirectory "$Name-reports/packaged-second.json") | ConvertFrom-Json
   if (-not $result.passed -or -not $result.packaged -or $result.platform -ne 'win32' -or $result.arch -ne 'x64') { throw "Invalid $Name report" }
   $result | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $OutputDirectory ($Name + '.json'))
 }
-function Invoke-SelfTest([string]$Exe, [string]$Name, [string]$Data) {
+function Invoke-SelfTest([string]$Exe, [string]$Name, [string]$Data, [bool]$ExpectRestoredSession=$false) {
   $env:GLINTEX_TEST_DATA = $Data
   $env:GLINTEX_TEST_REPORTS = Join-Path $OutputDirectory ($Name + '-reports')
   New-Item -ItemType Directory -Force $env:GLINTEX_TEST_REPORTS | Out-Null
-  foreach ($phase in @('first', 'second')) {
+  $firstPhase = if ($ExpectRestoredSession) { 'restored' } else { 'first' }
+  foreach ($phase in @($firstPhase, 'second')) {
+    Write-Host "[$((Get-Date).ToUniversalTime().ToString('o'))] Smoke $Name phase $phase"
     $env:GLINTEX_TEST_PHASE = $phase
     Invoke-Bounded $Exe @('--self-test') 180
   }
@@ -74,13 +105,16 @@ function Invoke-SelfTest([string]$Exe, [string]$Name, [string]$Data) {
 }
 try {
   Invoke-Smoke ([IO.Path]::GetFullPath($PackagedExe)) 'packaged-smoke' (Join-Path $OutputDirectory 'isolated-smoke-data')
+  if ((Get-Content -Raw (Join-Path $OutputDirectory 'packaged-smoke.json') | ConvertFrom-Json).sourceCommit -ne $report.sourceCommit) { throw 'Packaged runtime source identity mismatch' }
   $report.packagedLaunch = $true
   Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
   Start-Sleep -Seconds 8
   Stop-TestApp
-  $installedExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object FullName -Descending | Select-Object -First 1
+  $candidateVersion = (Get-Content -Raw (Join-Path $sourceRoot 'apps/desktop/package.json') | ConvertFrom-Json).version
+  $installedExe = Get-InstalledVersionExe $candidateVersion
   if (-not $installedExe) { throw 'Installed executable missing' }
   Invoke-Smoke $installedExe.FullName 'installed-smoke' $userData
+  if ((Get-Content -Raw (Join-Path $OutputDirectory 'installed-smoke.json') | ConvertFrom-Json).sourceCommit -ne $report.sourceCommit) { throw 'Installed runtime source identity mismatch' }
   $report.installedLaunch = $true
   $shortcut = Get-ChildItem (Join-Path $env:APPDATA 'Microsoft/Windows/Start Menu/Programs') -Filter '*GLINTEX*.lnk' -Recurse | Select-Object -First 1
   if (-not $shortcut) { throw 'Start menu shortcut missing' }
@@ -95,16 +129,33 @@ try {
   $beforeSettings = (Get-FileHash $settingsFile -Algorithm SHA256).Hash
   $beforeQueue = (Get-FileHash $queueSentinel -Algorithm SHA256).Hash
   if ($UpgradeInstaller) {
-    Invoke-Bounded ([IO.Path]::GetFullPath($UpgradeInstaller)) @('--silent')
+    $v = [version](Get-Content -Raw (Join-Path $OutputDirectory 'installed-smoke.json') | ConvertFrom-Json).version
+    $next = "$($v.Major).$($v.Minor).$($v.Build + 1)"
+    $env:GLINTEX_TEST_DATA = $userData
+    $env:GLINTEX_TEST_REPORTS = Join-Path $OutputDirectory 'authenticated-update-reports'
+    $env:GLINTEX_TEST_PHASE = 'update'
+    $env:GLINTEX_TEST_UPDATE_INSTALLER = [IO.Path]::GetFullPath($UpgradeInstaller)
+    $env:GLINTEX_TEST_UPDATE_VERSION = $next
+    $env:GLINTEX_INSTALL_TEST = '1'
+    try { Invoke-Bounded $installedExe.FullName @('--self-test') 300 }
+    finally { Remove-Item Env:GLINTEX_TEST_DATA, Env:GLINTEX_TEST_REPORTS, Env:GLINTEX_TEST_PHASE, Env:GLINTEX_TEST_UPDATE_INSTALLER, Env:GLINTEX_TEST_UPDATE_VERSION, Env:GLINTEX_INSTALL_TEST -ErrorAction SilentlyContinue }
+    $updateReport = Get-Content -Raw (Join-Path $OutputDirectory 'authenticated-update-reports/packaged-update.json') | ConvertFrom-Json
+    if (-not $updateReport.passed -or $updateReport.sourceCommit -ne $report.sourceCommit -or $updateReport.checks -notcontains 'main-process-mid-save-close-block') { throw 'Authenticated update report is missing or does not prove pending-save protection' }
+    $deadline = (Get-Date).AddSeconds(120)
+    while (-not (Test-Path (Join-Path $installRoot "app-$next/GLINTEX.exe"))) { if ((Get-Date) -gt $deadline) { throw 'User-controlled update installer did not create the next-version application' }; Start-Sleep -Seconds 2 }
     Start-Sleep -Seconds 8
     Stop-TestApp
-    $upgradedExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    Invoke-Smoke $upgradedExe.FullName 'upgraded-smoke' $userData
+    $upgradedExe = Get-InstalledVersionExe $next
+    Invoke-Smoke $upgradedExe.FullName 'upgraded-smoke' $userData $true
+    $restored = Get-Content -Raw (Join-Path $OutputDirectory 'upgraded-smoke-reports/packaged-restored.json') | ConvertFrom-Json
+    if (-not $restored.passed -or -not $restored.restoredSession -or $restored.checks -notcontains 'restored-session-after-authenticated-upgrade') { throw 'Upgrade did not preserve the authenticated session' }
+    $report.upgradeSessionPreserved = $true
     $firstVersion = (Get-Content -Raw (Join-Path $OutputDirectory 'installed-smoke.json') | ConvertFrom-Json).version
     $nextVersion = (Get-Content -Raw (Join-Path $OutputDirectory 'upgraded-smoke.json') | ConvertFrom-Json).version
     if ([version]$nextVersion -le [version]$firstVersion) { throw 'Upgrade fixture did not increase version' }
     if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Upgrade changed persisted settings or queue marker' }
     $report.upgradePreserved = $true
+    $report.authenticatedUpdate = $true
     $report.upgradeFrom = $firstVersion; $report.upgradeTo = $nextVersion
   }
   $report.uninstallDetails = Invoke-Uninstall 'uninstall-details'
@@ -114,7 +165,7 @@ try {
   Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
   Start-Sleep -Seconds 8
   Stop-TestApp
-  $reinstalledExe = Get-ChildItem $installRoot -Filter GLINTEX.exe -Recurse | Where-Object { $_.Directory.Name -like 'app-*' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  $reinstalledExe = Get-InstalledVersionExe $candidateVersion
   Invoke-Smoke $reinstalledExe.FullName 'reinstalled-smoke' $userData
   $originalVersion = (Get-Content -Raw (Join-Path $OutputDirectory 'installed-smoke.json') | ConvertFrom-Json).version
   $reinstalledVersion = (Get-Content -Raw (Join-Path $OutputDirectory 'reinstalled-smoke.json') | ConvertFrom-Json).version
@@ -123,12 +174,30 @@ try {
   if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Reinstall changed retained settings or queue marker' }
   $report.reinstallPreserved = $true
   $report.finalUninstallDetails = Invoke-Uninstall 'final-uninstall-details'
+  if ($BootstrapInstaller) {
+    Invoke-Bounded ([IO.Path]::GetFullPath($BootstrapInstaller)) @('--silent')
+    Start-Sleep -Seconds 8; Stop-TestApp
+    $bootstrapExe = Get-InstalledVersionExe '1.0.0'
+    Invoke-Smoke $bootstrapExe.FullName 'bootstrap-1.0.0' $userData
+    if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-1.0.0.json') | ConvertFrom-Json).version -ne '1.0.0') { throw 'Bootstrap fixture is not the delivered 1.0.0' }
+    Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
+    Start-Sleep -Seconds 8; Stop-TestApp
+    $bootstrappedExe = Get-InstalledVersionExe $candidateVersion
+    Invoke-Smoke $bootstrappedExe.FullName 'bootstrap-upgraded' $userData
+    if ((Get-Content -Raw (Join-Path $OutputDirectory 'bootstrap-upgraded.json') | ConvertFrom-Json).version -ne $originalVersion) { throw 'Manual 1.0.0 bootstrap did not select the candidate' }
+    if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Manual bootstrap changed workstation settings or queue' }
+    $report.manualBootstrapPreserved = $true
+    $report.bootstrapFrom = '1.0.0'; $report.bootstrapTo = $originalVersion
+    $report.bootstrapUninstallDetails = Invoke-Uninstall 'bootstrap-uninstall-details'
+  }
   if ((Get-FileHash $settingsFile -Algorithm SHA256).Hash -ne $beforeSettings -or (Get-FileHash $queueSentinel -Algorithm SHA256).Hash -ne $beforeQueue) { throw 'Final uninstall changed retained settings or queue marker' }
   $report.installerSignature = (Get-AuthenticodeSignature ([IO.Path]::GetFullPath($Installer))).Status.ToString()
   $report.settingsSha256 = $beforeSettings.ToLower(); $report.queueMarkerSha256 = $beforeQueue.ToLower()
   $report.passed = $true
 } catch { $report.error = $_.Exception.Message; throw }
 finally {
+  $helperStatus = Join-Path $userData 'updates/install-status.json'
+  if (Test-Path $helperStatus) { Copy-Item $helperStatus (Join-Path $OutputDirectory 'update-helper-status.json') }
   foreach ($log in @((Join-Path $env:LOCALAPPDATA 'SquirrelTemp/SquirrelSetup.log'), (Join-Path $env:TEMP 'SquirrelTemp/SquirrelSetup.log'), (Join-Path $env:TEMP 'SquirrelSetup.log'), (Join-Path $installRoot 'SquirrelSetup.log'))) {
     if (Test-Path $log) { Copy-Item $log (Join-Path $OutputDirectory ('squirrel-' + (Split-Path (Split-Path $log) -Leaf) + '.txt')) }
   }

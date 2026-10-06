@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "driverVersion": "5.1.12.0",
+  "provider": "Prolific Technology Inc.",
+  "copyright": "Copyright (c) 2026, Prolific Technology Inc. Vendor files are unmodified.",
+  "operatingSystem": "Windows 10 x64",
+  "hardwareModel": "BAFO BF-812 with Prolific PL2303GT",
+  "supportedHardwareIds": [
+    "USB\\VID_067B&PID_23A3&REV_0305"
+  ],
+  "archive": {
+    "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2026/08/91b528a8-af94-4ca7-b086-a0e7fe0b49ac_4511747c527a4b847a193ef187f5a36a2deff936.cab",
+    "sha256": "b8bfcbbcf6a1656a60e044dda66499b6ef7fa053b66de1ba8e3ab2be6945be01",
+    "bytes": 270156
+  },
+  "catalogUpdateId": "0f6706ef-1885-4a5a-bfec-75965b37eba5",
+  "catalogSource": "https://www.catalog.update.microsoft.com/Search.aspx?q=Prolific%205.1.12.0",
+  "vendorSource": "https://www.prolific.com.tw/en/portfolio-item/pl2303gt/",
+  "files": [
+    {
+      "name": "plser.cat",
+      "sha256": "f3bab793ecc9e929c78b38df21e07843a4075710d9ddf7a4e6f96d8795eb8a7d",
+      "bytes": 14771
+    },
+    {
+      "name": "plser.dll",
+      "sha256": "494205b5f4ebd753bf03680c6e78511084fbbe0405da227b964c19f4a7f5a5ed",
+      "bytes": 126936
+    },
+    {
+      "name": "plser.inf",
+      "sha256": "258e70ff133d47998caeca5b9724d1176f12e33ffd507657a91359237ff9c732",
+      "bytes": 6630
+    },
+    {
+      "name": "plser.sys",
+      "sha256": "be43b140a8ab457832d176f32a33b7b8834f3196fd8f9450870a10e38b572ce4",
+      "bytes": 292696
+    },
+    {
+      "name": "plser64.dll",
+      "sha256": "4d4f2c92afbb9b22b3767b5c386430b358967be320f90c3bd583677500fced3c",
+      "bytes": 134080
+    },
+    {
+      "name": "plser64.sys",
+      "sha256": "68cfa9b80cf32b1f4b4e23db69a873776c0f086ac1bf0e987262e38ebe19a78c",
+      "bytes": 338776
+    }
+  ],
+  "validation": {
+    "date": "2026-10-05",
+    "windowsVersion": "Windows 10 Pro x64 build 18362",
+    "deviceErrorCodeAfterInstall": 0,
+    "serialSettings": {
+      "baudRate": 2400,
+      "dataBits": 8,
+      "parity": "none",
+      "stopBits": 1,
+      "flowControl": "none"
+    },
+    "weightFrames": "[01363]",
+    "parsedWeightKg": 1.363,
+    "existingSourcePackageFilesMatch": true,
+    "ownerConfirmedGLINTEXWorking": true
+  }
+}

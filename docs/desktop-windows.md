@@ -4,7 +4,7 @@
 
 Electron is the desktop application; the old Tauri helper is not required. The bundled React UI uses **https://app.glintex.in/api/** and its existing sessions, roles and cloud database. No workstation backend/database is installed. Production transactions are not test fixtures.
 
-Initial delivered version **1.0.0**; private updater was introduced in **1.1.0**; preparation-only driver handoff is **1.1.1**; editable factory scale defaults and browser bracket capture are **1.1.2**; immediate update discovery and the compact update notice are **1.1.3**. Windows **x64**, Electron **44.5.1**, Forge **8.0.1**. Exact release commit and executed checks: `build-info.json`, delivery `manifest.json` and Windows verification reports.
+Initial delivered version **1.0.0**; private updater was introduced in **1.1.0**; preparation-only driver handoff is **1.1.1**; editable factory scale defaults and browser bracket capture are **1.1.2**; immediate update discovery and the compact update notice are **1.1.3**; Windows status-file lock recovery is **1.1.4**. Windows **x64**, Electron **44.5.1**, Forge **8.0.1**. Exact release commit and executed checks: `build-info.json`, delivery `manifest.json` and Windows verification reports.
 
 A workflow definition is not execution evidence. Windows packaging, launch, installation, upgrade and uninstall remain **pending until the Windows run and its JSON reports pass**. Physical accuracy/protocol compatibility/alignment always await the owner's checks below. This document must not be described as a successful test report.
 
@@ -216,7 +216,18 @@ Choose **Download update** to use the existing HttpOnly session at the fixed HTT
 Choose **Install after I close GLINTEX** after download verification. Continue working or cancel the choice. Only deliberate app close plus final save/discard confirmation starts installation. Connected scales, driver setup, native/server operations and queued print submissions block that close. Check the Windows print queue: accepted jobs may still print physically. Settings/cookies are flushed, then the helper must acknowledge startup before GLINTEX closes. A first-party GUI host waits for app exit, rechecks the installer with .NET SHA-256 and opens it. It runs without elevation, services or scheduled tasks and records local status in `%APPDATA%\GLINTEX\updates\install-status.json`; a failed handoff is shown on the next launch. There is no forced app close, startup installation or Windows reboot; restart clears the installation choice.
 Version 1.1.3 labels the same choice **Install when I close GLINTEX**.
 
-Existing 1.0.0 needs **one manual upgrade** to the current version (1.1.3) under the same Windows account. Finish capture/save/print, close GLINTEX, back up `%APPDATA%\GLINTEX`, then run the verified newer Setup.exe. Keep app identity/user profile. Squirrel nupkg/RELEASES files are temporary packaging output excluded from the new delivery artifact; the client uses authenticated first-party routes.
+Version 1.1.4 fixes a Windows sharing race during helper acknowledgement. The
+helper writes complete JSON to a temporary file and replaces the status file
+only after closing that file. Transient sharing/access failures retry within
+bounded deadlines on both sides, including old-status cleanup. Persistent locks,
+helper failure and mismatched acknowledgements still keep GLINTEX open and
+cancel installation. The installer size/hash and deliberate-close gates remain
+required. If an older version reports `EBUSY` for `install-status.json`, finish
+and save work, close GLINTEX normally, then run the verified latest Setup.exe
+under the same account. Keep `%APPDATA%\GLINTEX`; do not delete settings or use
+Task Manager as an update procedure.
+
+Existing 1.0.0 needs **one manual upgrade** to the current version (1.1.4) under the same Windows account. Finish capture/save/print, close GLINTEX, back up `%APPDATA%\GLINTEX`, then run the verified newer Setup.exe. Keep app identity/user profile. Squirrel nupkg/RELEASES files are temporary packaging output excluded from the new delivery artifact; the client uses authenticated first-party routes.
 
 ### Private release administration
 

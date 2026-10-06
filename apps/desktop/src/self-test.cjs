@@ -121,6 +121,7 @@ async function runSelfTest({
         evaluate("return window.glintexDesktop.printers.listJobs()"),
       );
       await assert.rejects(evaluate("return window.glintexDesktop.scale.driverSetup()"));
+      if (process.platform === 'win32') assert.equal((await evaluate('return window.glintexDesktop.updates.check()')).state, 'signin');
       await evaluate(
         `const inputs=document.querySelectorAll('form input');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;for(const [i,input] of Array.from(inputs).entries()){setter.call(input,i?'fixture-password':'fixture-operator');input.dispatchEvent(new Event('input',{bubbles:true}));}return true;`,
       );
@@ -133,6 +134,10 @@ async function runSelfTest({
     }
     await waitFor("document.body.innerText.includes('Workstation setup')");
     assert.equal(await fetchStatus("/api/auth/me"), 200, "existing session must survive the authenticated upgrade");
+    if (process.platform === 'win32' && phase !== 'restored') {
+      await waitFor("!['signin','checking'].includes((await window.glintexDesktop.updates.status()).state)");
+      assert.equal((await evaluate('return window.glintexDesktop.updates.status()')).state, phase === 'update' ? 'available' : 'current');
+    }
     const cookies = await session.cookies.get({ name: "glintex_fixture" });
     assert.equal(cookies[0].httpOnly, true);
     assert.equal(cookies[0].sameSite, "lax");
@@ -218,6 +223,7 @@ async function runSelfTest({
       "no-renderer-node",
       "native-serial-load",
       "login-or-restored-session",
+      ...(process.platform === 'win32' && ['first','update'].includes(phase) ? ['automatic-discovery-after-signin'] : []),
       "httponly-samesite-cookie",
       "hardware-auth-gate",
       "same-origin-challan-frame-no-bridge",

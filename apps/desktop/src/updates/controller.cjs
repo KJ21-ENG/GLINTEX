@@ -102,6 +102,14 @@ class UpdateController extends EventEmitter {
     this.checking = this.performCheck(manual).finally(() => { this.checking = null; });
     return this.checking;
   }
+  authenticationCompleted({ url, statusCode }) {
+    if (this.data.state !== 'signin' || statusCode !== 200) return Promise.resolve(this.status());
+    try {
+      const response = new URL(url);
+      if (response.origin === this.origin && /^\/api\/auth\/(login|me)\/?$/.test(response.pathname)) return this.check();
+    } catch { }
+    return Promise.resolve(this.status());
+  }
   async performCheck(manual) {
     this.set({ state: "checking", ...(manual ? { prompt: true } : {}), message: "Checking the private GLINTEX release service…" });
     try {

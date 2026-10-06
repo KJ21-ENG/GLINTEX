@@ -27,6 +27,22 @@ test('stable version ordering and bounded manifests reject unsupported or direct
   assert.throws(() => new UpdateController({ version: '1.1.0', origin: 'http://app.glintex.in' }));
   assert.throws(() => new UpdateController({ version: '1.1.0', origin: 'https://other.invalid' }));
 });
+test('successful trusted sign-in retries waiting discovery without download or installation', async t => {
+  let signedIn=false;
+  const { c, calls, launches } = await fixture(t, async () => signedIn ? new Response(JSON.stringify(release)) : new Response('', { status:401 }));
+  assert.equal((await c.check()).state,'signin');
+  for (const details of [
+    {url:'https://foreign.invalid/api/auth/login',statusCode:200},
+    {url:c.origin+'/api/auth/logout',statusCode:200},
+    {url:c.origin+'/api/auth/login',statusCode:401},
+  ]) assert.equal((await c.authenticationCompleted(details)).state,'signin');
+  assert.equal(calls.length,1);
+  signedIn=true;
+  await Promise.all(['login','me','login'].map(name=>c.authenticationCompleted({url:c.origin+'/api/auth/'+name,statusCode:200})));
+  assert.equal(c.status().state,'available'); assert.equal(calls.length,2); assert.equal(launches.length,0);
+  await c.authenticationCompleted({url:c.origin+'/api/auth/me',statusCode:200}); assert.equal(calls.length,2);
+  assert.equal(await c.verified(),false,'discovery never downloads an installer');
+});
 test('authenticated discovery and verified download never install until explicit arm and safe close', async t => {
   const { c, launches } = await fixture(t);
   assert.equal((await c.check()).state, 'available'); assert.equal(launches.length, 0);

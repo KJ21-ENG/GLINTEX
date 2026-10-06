@@ -13,7 +13,7 @@ function Assert-Package {
 
   $entry = Get-Item -LiteralPath $Directory -Force
   if (-not $entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Package directory must be a directory and not a link.' }
-  $names = @(Get-ChildItem -LiteralPath $Directory | Select-Object -ExpandProperty Name | Sort-Object)
+  $names = @(Get-ChildItem -LiteralPath $Directory -Force | Select-Object -ExpandProperty Name | Sort-Object)
   if (($names -join ',') -ne (($Manifest.files.name | Sort-Object) -join ',')) { throw 'Unexpected package files.' }
 
   foreach ($file in $Manifest.files) {

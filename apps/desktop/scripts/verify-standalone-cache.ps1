@@ -13,7 +13,7 @@ $ast=[Management.Automation.Language.Parser]::ParseFile($source,[ref]$tokens,[re
 if ($errors.Count) { throw 'Standalone helper syntax failed.' }
 # Test the exact cache functions without running the full preparer, its admin
 # guard, extraction or any driver operation under the CI runner's admin token.
-foreach ($name in @('Assert-Archive','Get-PreparedArchive')) {
+foreach ($name in @('Assert-Archive','Get-PreparedArchive','Assert-Package')) {
   $functions=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true) | Where-Object { $_.Name -eq $name })
   if ($functions.Count -ne 1) { throw 'Cache test function identity mismatch.' }
   . ([scriptblock]::Create($functions[0].Extent.Text))
@@ -49,7 +49,14 @@ try {
     if ($script:downloads -ne $before+1) { throw 'Healthy cached archive downloaded again.' }
     $cases += $kind
   }
-  @{passed=$true;actualPinnedMicrosoftArchive=$true;cases=$cases;healthyArchiveReused=$true;linkTargetPreserved=$true;driverInstalled=$false;elevationRequested=$false;fullStandaloneStandardUserExecutionTested=$false;scope='Exact standalone cache functions on isolated CI fixtures; no full preparer or driver install.'} | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $OutputDirectory 'standalone-cache-recovery.json')
+  $hiddenDirectory=Join-Path $temporary 'hidden-package';[IO.Directory]::CreateDirectory($hiddenDirectory) | Out-Null
+  foreach ($file in $manifest.files) { [IO.File]::WriteAllText((Join-Path $hiddenDirectory $file.name),'isolated fixture') }
+  $hidden=Join-Path $hiddenDirectory 'extra.inf';[IO.File]::WriteAllText($hidden,'unexpected hidden fixture');[IO.File]::SetAttributes($hidden,[IO.FileAttributes]::Hidden)
+  $rejected=$false
+  try { Assert-Package -Directory $hiddenDirectory -Manifest $manifest }
+  catch { if ($_.Exception.Message -eq 'Unexpected package files.') { $rejected=$true } else { throw } }
+  if (-not $rejected) { throw 'Hidden extra file was accepted.' }
+  @{passed=$true;actualPinnedMicrosoftArchive=$true;cases=$cases;healthyArchiveReused=$true;linkTargetPreserved=$true;hiddenExtraFileRejected=$true;driverInstalled=$false;elevationRequested=$false;fullStandaloneStandardUserExecutionTested=$false;scope='Exact standalone cache functions on isolated CI fixtures; no full preparer or driver install.'} | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $OutputDirectory 'standalone-cache-recovery.json')
 } finally {
   Remove-Item Function:Invoke-WebRequest -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $temporary -Recurse -Force

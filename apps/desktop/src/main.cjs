@@ -150,7 +150,10 @@ async function start() {
     if (allowed && businessRequest && !closingForUpdate) apiRequests.add(details.id);
     callback({ cancel: !allowed || (closingForUpdate && businessRequest) });
   });
-  desktopSession.webRequest.onCompleted(details => apiRequests.delete(details.id));
+  desktopSession.webRequest.onCompleted(details => {
+    apiRequests.delete(details.id);
+    void updater.authenticationCompleted(details);
+  });
   desktopSession.webRequest.onErrorOccurred(details => apiRequests.delete(details.id));
   mainWindow = new BrowserWindow({
     width: 1360,

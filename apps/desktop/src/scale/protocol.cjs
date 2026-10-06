@@ -1,4 +1,19 @@
 "use strict";
+const DEFAULT_SCALE_SETTINGS = Object.freeze({
+  profileId: "bracket-integer",
+  baudRate: 2400,
+  dataBits: 8,
+  parity: "none",
+  stopBits: 1,
+  flowControl: "none",
+  unit: "kg",
+  decimalPlaces: 2,
+  minKg: 0,
+  maxKg: 5000,
+  stabilitySamples: 3,
+  toleranceKg: 0.001,
+  staleMs: 1500,
+});
 const PROFILES = Object.freeze([
   { id: "unknown", label: "Unknown — diagnostics only, capture disabled" },
   {
@@ -101,4 +116,4 @@ class FrameBuffer {
     return frames;
   }
 }
-module.exports = { PROFILES, parseFrame, FrameBuffer };
+module.exports = { DEFAULT_SCALE_SETTINGS, PROFILES, parseFrame, FrameBuffer };

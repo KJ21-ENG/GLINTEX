@@ -4,7 +4,7 @@
 
 Electron is the desktop application; the old Tauri helper is not required. The bundled React UI uses **https://app.glintex.in/api/** and its existing sessions, roles and cloud database. No workstation backend/database is installed. Production transactions are not test fixtures.
 
-Initial delivered version **1.0.0**; private updater was introduced in **1.1.0**; preparation-only driver handoff is **1.1.1**. Windows **x64**, Electron **44.5.1**, Forge **8.0.1**. Exact release commit and executed checks: `build-info.json`, delivery `manifest.json` and Windows verification reports. Integration branch: `codex/integrate-desktop-1.1.0-20261006`.
+Initial delivered version **1.0.0**; private updater was introduced in **1.1.0**; preparation-only driver handoff is **1.1.1**; editable factory scale defaults and browser bracket capture are **1.1.2**. Windows **x64**, Electron **44.5.1**, Forge **8.0.1**. Exact release commit and executed checks: `build-info.json`, delivery `manifest.json` and Windows verification reports.
 
 A workflow definition is not execution evidence. Windows packaging, launch, installation, upgrade and uninstall remain **pending until the Windows run and its JSON reports pass**. Physical accuracy/protocol compatibility/alignment always await the owner's checks below. This document must not be described as a successful test report.
 
@@ -64,15 +64,28 @@ If policy blocks the script, use Electron preparation or IT's approved process.
 The Electron button needs cloud login; Device Manager can use the prepared folder
 on an offline PC. Keep vendor caches out of public Git/Actions artifacts.
 
-For the tested GT-5 bracket scale, refresh devices and choose its actual port
-(currently COM3, not a default for other PCs), set **2400/8/none/1/no flow control**,
-profile **bracket-integer**, **kg**, **3 decimal places**. Save settings, connect,
-then test a fresh capture and compare with the display. `[01363]` means 1.363 kg
-only with that explicit configuration. Native parser validation is not physical
-Electron capture acceptance. Electron requires no Chrome authorization; current
-browser protocol support rejects this bracket frame and is unchanged here.
+Both browser and Electron default to **2400/8/none/1/no flow control**,
+profile **bracket-integer**, **kg**, and **Integer decimal places: 2**.
+The port is selected from the actual available/authorized devices; COM3 is not
+hard-coded. Browser users authorize the scale once and can edit **Scale settings**
+in the capture dialog. Electron users select the port and edit settings in
+**Workstation setup & print jobs**; it needs no Chrome authorization.
+Disconnect before editing settings, save, reconnect and test a fresh capture.
+On GT-5, the owner physically compared `[03626]` with **36.260 kg** on
+2026-10-06: the integer is divided by **100**, not 1000. Display formatting
+does not determine the integer scaling. Additional zero/test-weight checks
+remain necessary for physical accuracy acceptance.
 
-No scale model/protocol is assumed. Start at **Unknown**, explicitly select the COM port, verify available USB/serial identity, and set baud rate/data bits/parity/stop bits/flow control from the instrument manual. Connect and inspect bounded raw-frame diagnostics. Unknown profile cannot capture. Never select a profile just because its result looks plausible.
+Existing supported custom profiles are preserved. On first upgrade to 1.1.2,
+an older Electron profile still marked **Unknown** receives the new defaults
+while preserving its selected port/device identity; this happens only once.
+Users can subsequently choose any supported profile or Unknown without a restart
+overwriting their choice. Browser settings are saved locally for that browser.
+
+The initial factory profile is the bracket configuration above. For another scale,
+select its documented protocol and serial settings and verify available USB/serial
+identity. Connect and inspect bounded raw-frame diagnostics. Unknown profile
+cannot capture. Never select a profile just because its result looks plausible.
 
 | Profile | Complete input | Meaning |
 | --- | --- | --- |
@@ -178,7 +191,7 @@ refresh/push or dispatch a new release.
 ## Upgrade, rollback and recovery
 
 Versions 1.1.0 and later check the private first-party service after startup (30 seconds) and every six hours, with **Check for updates** in the GLINTEX menu/workstation panel. It shows offline, sign-in, unavailable and no-new-version states. Discovery never downloads or installs automatically. **Later** hides that version's prompt for six hours in the current session; a manual check can show it sooner.
-Starting in1.1.1, a successful GLINTEX sign-in/session response immediately retries
+Starting in 1.1.1, a successful GLINTEX sign-in/session response immediately retries
 discovery if the first check was waiting for sign-in. A late sign-in therefore
 does not wait for the six-hour timer. This retry still only discovers releases.
 
@@ -186,7 +199,7 @@ Choose **Download update** to use the existing HttpOnly session at the fixed HTT
 
 Choose **Install after I close GLINTEX** after download verification. Continue working or cancel the choice. Only deliberate app close plus final save/discard confirmation starts installation. Connected scales, driver setup, native/server operations and queued print submissions block that close. Check the Windows print queue: accepted jobs may still print physically. Settings/cookies are flushed, then the helper must acknowledge startup before GLINTEX closes. A first-party GUI host waits for app exit, rechecks the installer with .NET SHA-256 and opens it. It runs without elevation, services or scheduled tasks and records local status in `%APPDATA%\GLINTEX\updates\install-status.json`; a failed handoff is shown on the next launch. There is no forced app close, startup installation or Windows reboot; restart clears the installation choice.
 
-Existing 1.0.0 needs **one manual upgrade** to the current version (1.1.1) under the same Windows account. Finish capture/save/print, close GLINTEX, back up `%APPDATA%\GLINTEX`, then run the verified newer Setup.exe. Keep app identity/user profile. Squirrel nupkg/RELEASES files are temporary packaging output excluded from the new delivery artifact; the client uses authenticated first-party routes.
+Existing 1.0.0 needs **one manual upgrade** to the current version (1.1.2) under the same Windows account. Finish capture/save/print, close GLINTEX, back up `%APPDATA%\GLINTEX`, then run the verified newer Setup.exe. Keep app identity/user profile. Squirrel nupkg/RELEASES files are temporary packaging output excluded from the new delivery artifact; the client uses authenticated first-party routes.
 
 ### Private release administration
 

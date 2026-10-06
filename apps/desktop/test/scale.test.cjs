@@ -129,7 +129,7 @@ test("disconnect rejects capture and reconnect keeps configured port and serial 
   await assert.rejects(capture, /disconnected/);
   await c.connect();
   assert.equal(c.port.options.path, "COM3");
-  assert.equal(c.port.options.baudRate, 9600);
+  assert.equal(c.port.options.baudRate, 2400);
   await c.suspend();
   assert.equal(c.status().status, "suspended");
   await c.resume();
@@ -163,7 +163,7 @@ test("busy port failure, bounded diagnostics and configuration validation", asyn
   assert.equal(good.status().diagnostics.length, 40);
   assert.throws(() => validateConfig({ baudRate: 0 }));
   assert.throws(() => validateConfig({ evil: true }));
-  const unknown = make(t, { config: { path: "COM3" } });
+  const unknown = make(t, { config: { path: "COM3", profileId: "unknown" } });
   await assert.rejects(unknown.capture(), /Unknown scale protocol/);
 });
 test("unstable frame interrupts an otherwise stable sequence", async (t) => {

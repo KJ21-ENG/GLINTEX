@@ -1,25 +1,13 @@
 "use strict";
 const { EventEmitter } = require("node:events");
 const { randomUUID } = require("node:crypto");
-const { PROFILES, parseFrame, FrameBuffer } = require("./protocol.cjs");
+const { DEFAULT_SCALE_SETTINGS, PROFILES, parseFrame, FrameBuffer } = require("./protocol.cjs");
 function validateConfig(input) {
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw new Error("Invalid scale configuration");
   const c = {
     path: "",
-    profileId: "unknown",
-    baudRate: 9600,
-    dataBits: 8,
-    stopBits: 1,
-    parity: "none",
-    flowControl: "none",
-    decimalPlaces: 3,
-    unit: "kg",
-    minKg: 0,
-    maxKg: 5000,
-    stabilitySamples: 3,
-    toleranceKg: 0.001,
-    staleMs: 1500,
+    ...DEFAULT_SCALE_SETTINGS,
     ...input,
   };
   const allowed = [

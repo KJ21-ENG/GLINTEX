@@ -1,7 +1,7 @@
 /**
  * Weight Scale Utility - Web Serial API integration
  *
- * Browser fallback supports only complete decimal/unit lines, optionally ST/US.
+ * Browser capture uses editable bracket-integer or complete explicit-unit line profiles.
  * - Unrecognized protocols never become guessed numeric readings.
  * - It requires stable complete samples within tolerance.
  * - It supports selecting/remembering the right port
@@ -12,10 +12,11 @@
  * secure contexts (https or localhost).
  */
 
-import { parseWeightReading } from './weightScaleParser.js';
+import { DEFAULT_SCALE_SETTINGS, parseWeightReading, ScaleFrameBuffer, validateScaleSettings } from './weightScaleParser.js';
 
 const SCALE_PREF_KEY = 'glintex.weightScale.preferredPortInfo';
-const DEFAULT_BAUD_RATES = [9600, 2400, 4800, 1200, 19200, 38400, 57600, 115200];
+const SCALE_SETTINGS_KEY = 'glintex.weightScale.settings';
+const DEFAULT_BAUD_RATES = [2400, 9600, 4800, 1200, 19200, 38400, 57600, 115200];
 
 function getSerial() {
   // Guard for non-browser contexts
@@ -87,18 +88,15 @@ function savePreferredPortInfo(info) {
   safeLocalStorageSet(SCALE_PREF_KEY, JSON.stringify(info));
 }
 
-function closeQuietly(port) {
-  if (!port || !port.readable) return Promise.resolve();
-  return port.close().catch(() => {});
+async function closeQuietly(port) {
+  if (port) await port.close();
 }
 
-function openPort(port, baudRate) {
+function openPort(port, settings) {
   return port.open({
-    baudRate,
-    dataBits: 8,
-    parity: 'none',
-    stopBits: 1,
-    flowControl: 'none',
+    baudRate: settings.baudRate, dataBits: settings.dataBits,
+    parity: settings.parity, stopBits: settings.stopBits,
+    flowControl: settings.flowControl === 'rtscts' ? 'hardware' : 'none',
   });
 }
 
@@ -115,479 +113,214 @@ function pickPreferredPort(ports, preferredInfo) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-function computeStableReading(samples, { toleranceKg, windowMs, minSamples }) {
-  const tol = Number.isFinite(toleranceKg) ? toleranceKg : 0.01;
-  const window = Number.isFinite(windowMs) ? windowMs : 1200;
-  const min = Number.isFinite(minSamples) ? minSamples : 4;
-
-  const now = Date.now();
-  const recent = (samples || []).filter((s) => s && now - s.ts <= window);
-  if (recent.length < min) {
-    // If the device explicitly flags stable, we can accept earlier.
-    const last = recent.length ? recent[recent.length - 1] : null;
-    if (last?.meta?.stable && recent.length >= 2) return last;
-    return null;
-  }
-
-  let minW = Infinity;
-  let maxW = -Infinity;
-  recent.forEach((s) => {
-    minW = Math.min(minW, s.weightKg);
-    maxW = Math.max(maxW, s.weightKg);
-  });
-
-  if (maxW - minW <= tol) {
-    // Prefer explicitly stable if present; otherwise use the latest.
-    for (let i = recent.length - 1; i >= 0; i--) {
-      if (recent[i]?.meta?.stable) return recent[i];
-    }
-    return recent[recent.length - 1];
-  }
-  return null;
+function computeStableReading(samples, settings) {
+  const recent = samples.filter(sample => Date.now() - sample.ts <= settings.staleMs)
+    .slice(-settings.stabilitySamples);
+  if (recent.length < settings.stabilitySamples) return null;
+  const weights = recent.map(sample => sample.weightKg);
+  return Math.max(...weights) - Math.min(...weights) <= settings.toleranceKg ? recent.at(-1) : null;
 }
 
 class WeightScaleManager {
   constructor() {
-    this.port = null;
-    this.portInfo = null;
-    this.baudRate = null;
-    this.status = 'disconnected'; // disconnected | connecting | connected | error
+    this.config = { ...DEFAULT_SCALE_SETTINGS };
     this.error = null;
-
-    this.reader = null;
-    this._readAbort = null;
-    this._connectPromise = null;
-
-    this.lastReading = null; // { weightKg, ts, meta }
-    this.samples = [];
-    this.stable = null; // same shape as lastReading
-
-    this._subscribers = new Set();
-    this._rawSubscribers = new Set();
-    this._captureLock = Promise.resolve();
-
+    try {
+      const saved = safeLocalStorageGet(SCALE_SETTINGS_KEY);
+      if (saved) this.config = validateScaleSettings(JSON.parse(saved));
+    } catch (_) { this.error = 'Saved scale settings are invalid. Review and save the settings below.'; }
+    this.port = null; this.portInfo = null; this.baudRate = null;
+    this.status = 'disconnected'; this._opened = false;
+    this.reader = null; this._readAbort = null; this._connectPromise = null;
+    this.lastReading = null; this.samples = []; this.stable = null;
+    this._subscribers = new Set(); this._rawSubscribers = new Set();
+    this._captureLock = Promise.resolve(); this._generation = 0;
     const serial = getSerial();
-    if (serial && typeof serial.addEventListener === 'function') {
-      serial.addEventListener('disconnect', (event) => {
-        if (event?.target && this.port && event.target === this.port) {
-          this._setError('Scale disconnected');
-          this.disconnect().catch(() => {});
-        }
-      });
-    }
-
-    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-      window.addEventListener('beforeunload', () => {
-        this.disconnect().catch(() => {});
-      });
-    }
-  }
-
-  subscribe(fn) {
-    if (typeof fn !== 'function') return () => {};
-    this._subscribers.add(fn);
-    fn(this.getState());
-    return () => this._subscribers.delete(fn);
-  }
-
-  subscribeRaw(fn) {
-    if (typeof fn !== 'function') return () => {};
-    this._rawSubscribers.add(fn);
-    return () => this._rawSubscribers.delete(fn);
-  }
-
-  _emit() {
-    const state = this.getState();
-    this._subscribers.forEach((fn) => {
-      try { fn(state); } catch (_) {}
+    serial?.addEventListener?.('disconnect', event => {
+      if (event.target === this.port) this.disconnect().catch(() => {}).finally(() => this._setError('Scale disconnected'));
     });
+    if (typeof window !== 'undefined') window.addEventListener?.('beforeunload', () => this.disconnect().catch(() => {}));
   }
-
-  _emitRaw(line) {
-    this._rawSubscribers.forEach((fn) => {
-      try { fn(line); } catch (_) {}
-    });
-  }
-
-  _setStatus(next) {
-    if (this.status === next) return;
-    this.status = next;
-    this._emit();
-  }
-
-  _setError(message) {
-    this.error = message || null;
-    if (message) this.status = 'error';
-    this._emit();
-  }
-
+  subscribe(fn) { this._subscribers.add(fn); fn(this.getState()); return () => this._subscribers.delete(fn); }
+  subscribeRaw(fn) { this._rawSubscribers.add(fn); return () => this._rawSubscribers.delete(fn); }
+  _emit() { const state = this.getState(); this._subscribers.forEach(fn => { try { fn(state); } catch (_) {} }); }
+  _emitRaw(line) { this._rawSubscribers.forEach(fn => { try { fn(line); } catch (_) {} }); }
+  _setStatus(status) { this.status = status; this._emit(); }
+  _setError(message) { this.error = message; this.status = 'error'; this.clearReadings(); }
   getState() {
     return {
-      status: this.status,
-      error: this.error,
-      portInfo: this.portInfo,
-      baudRate: this.baudRate,
-      lastReading: this.lastReading,
-      stableReading: this.stable && Date.now() - this.stable.ts <= 1200 ? this.stable : null,
-      isConnected: this.status === 'connected',
+      status: this.status, error: this.error, config: { ...this.config },
+      portInfo: this.portInfo, baudRate: this.baudRate, lastReading: this.lastReading,
+      stableReading: this.stable && Date.now() - this.stable.ts <= this.config.staleMs ? this.stable : null,
+      isConnected: this._opened, captureReady: this._opened && this.status === 'connected' && this.config.profileId !== 'unknown',
     };
   }
-
-  clearReadings() {
-    this.lastReading = null;
-    this.samples = [];
-    this.stable = null;
-    this._emit();
+  clearReadings() { this.lastReading = null; this.samples = []; this.stable = null; this._emit(); }
+  async configure(settings) {
+    if (this._opened || this._connectPromise || this._capturing) throw new Error('Disconnect the scale before changing settings');
+    this.config = validateScaleSettings(settings);
+    safeLocalStorageSet(SCALE_SETTINGS_KEY, JSON.stringify(this.config));
+    this.error = null; this.clearReadings();
+    return { ...this.config };
   }
-
   async listAuthorizedPorts() {
-    const serial = getSerial();
-    if (!serial) return [];
-    const ports = await serial.getPorts();
-    return ports.map((p, idx) => {
-      const info = getPortInfo(p);
-      return {
-        port: p,
-        info,
-        label: formatPortLabel(info, idx),
-      };
-    });
+    const ports = await getSerial()?.getPorts() || [];
+    return ports.map((port, index) => { const info = getPortInfo(port); return { port, info, label: formatPortLabel(info, index) }; });
   }
-
   async getPreferredAuthorizedPort() {
-    const serial = getSerial();
-    if (!serial) return null;
-    const ports = await serial.getPorts();
-    if (!ports.length) return null;
-    const preferredInfo = loadPreferredPortInfo();
-    return pickPreferredPort(ports, preferredInfo);
+    return pickPreferredPort(await getSerial()?.getPorts() || [], loadPreferredPortInfo());
   }
-
   async requestPort() {
-    const serial = getSerial();
-    if (!serial) throw new Error('Web Serial API not supported in this browser');
-    const port = await serial.requestPort();
-    const info = getPortInfo(port);
-    if (info) savePreferredPortInfo(info);
+    if (!getSerial()) throw new Error('Web Serial API not supported in this browser');
+    const port = await getSerial().requestPort();
+    const info = getPortInfo(port); if (info) savePreferredPortInfo(info);
     return port;
   }
-
-  async connect({
-    port = null,
-    baudRate = null,
-    baudRates = DEFAULT_BAUD_RATES,
-    autoBaud = true,
-    probeMs = 900,
-    minKg = 0,
-    maxKg = 5000,
-  } = {}) {
-    const serial = getSerial();
-    if (!serial) throw new Error('Web Serial API not supported in this browser');
-
-    if (this._connectPromise) return await this._connectPromise;
-
+  async connect({ port = null, baudRate, baudRates = DEFAULT_BAUD_RATES, autoBaud = false, probeMs = 900, minKg, maxKg } = {}) {
+    if (!getSerial()) throw new Error('Web Serial API not supported in this browser');
+    if (this._connectPromise) return this._connectPromise;
     this._connectPromise = (async () => {
-      this._setStatus('connecting');
-      this.error = null;
-
-      const resolvedPort = port || (await this.getPreferredAuthorizedPort());
-      if (!resolvedPort) {
-        this._setStatus('disconnected');
-        throw new Error('No authorized scale port found');
-      }
-
-      // If switching ports, tear down the old connection first.
-      if (this.port && this.port !== resolvedPort) {
-        await this._stopReadLoop();
-        if (this.port.readable) await closeQuietly(this.port);
-        this.port = null;
-        this.portInfo = null;
-        this.baudRate = null;
-        this.clearReadings();
-      }
-
-      this.port = resolvedPort;
-      this.portInfo = getPortInfo(resolvedPort);
+      const selected = port || await this.getPreferredAuthorizedPort();
+      if (!selected) throw new Error('Select or authorize the scale port. Multiple ports require an explicit selection.');
+      if (this.port === selected && this._opened && this._readAbort && this.status === 'connected') return this.getState();
+      if (this.port) await this.disconnect();
+      const generation = this._generation;
+      const settings = validateScaleSettings({ ...this.config,
+        ...(baudRate == null ? {} : { baudRate }), ...(minKg == null ? {} : { minKg }), ...(maxKg == null ? {} : { maxKg }),
+      });
+      this.error = null; this._setStatus('connecting');
+      this.port = selected; this.portInfo = getPortInfo(selected);
+      if (autoBaud) settings.baudRate = await this._openWithAutoBaud(selected, baudRates, { ...settings, probeMs });
+      await openPort(selected, settings); this._opened = true;
+      if (generation !== this._generation) { await closeQuietly(selected); this._opened = false; throw new Error('Connection cancelled'); }
+      this.config = settings; this.baudRate = settings.baudRate;
       if (this.portInfo) savePreferredPortInfo(this.portInfo);
-
-      if (!resolvedPort.readable) {
-        if (autoBaud) {
-          const result = await this._openWithAutoBaud(resolvedPort, baudRates, { probeMs, minKg, maxKg });
-          this.baudRate = result.baudRate;
-        } else {
-          const br = Number.isFinite(Number(baudRate)) ? Number(baudRate) : baudRates[0];
-          await openPort(resolvedPort, br);
-          this.baudRate = br;
-        }
-      } else {
-        // Port already open - baudRate unknown (WebSerial doesn’t expose it)
-        const br = Number(baudRate);
-        if (baudRate != null && Number.isFinite(br) && br > 0) this.baudRate = br;
-      }
-
-      this._startReadLoop({ minKg, maxKg });
-      this._setStatus('connected');
+      this.clearReadings(); this._startReadLoop();
+      this._setStatus(settings.profileId === 'unknown' ? 'unknown-protocol' : 'connected');
       return this.getState();
     })();
-
-    try {
-      return await this._connectPromise;
-    } catch (err) {
-      // Ensure UI doesn't get stuck in "connecting" on failures.
-      const message = err?.message || 'Failed to connect to scale';
-      this._setError(message);
-      throw err;
-    } finally {
-      this._connectPromise = null;
-    }
+    try { return await this._connectPromise; }
+    catch (error) { this._setError(error.message || 'Failed to connect to scale'); throw error; }
+    finally { this._connectPromise = null; }
   }
-
-  async _openWithAutoBaud(port, baudRates, { probeMs, minKg, maxKg }) {
-    const rates = Array.isArray(baudRates) && baudRates.length ? baudRates : DEFAULT_BAUD_RATES;
-
-    // Some scales stream continuously; probe each baud rate briefly and pick the first that yields a plausible parse.
-    for (const br of rates) {
-      try {
-        await openPort(port, br);
-        const ok = await this._probePortForParse(port, { probeMs, minKg, maxKg });
-        if (ok) return { baudRate: br, probed: true };
-      } catch (_) {
-        // ignore and try next
-      }
-
-      // If probe failed (or threw), close and retry.
-      if (port.readable) await closeQuietly(port);
+  async _openWithAutoBaud(port, rates, settings) {
+    for (const baudRate of rates) {
+      // A port-open failure (busy/permission/disconnected) is not a baud mismatch.
+      await openPort(port, { ...settings, baudRate }); this._opened = true;
+      let recognized;
+      try { recognized = await this._probePortForParse(port, settings); }
+      finally { await closeQuietly(port); this._opened = false; }
+      if (recognized) return baudRate;
     }
-
     throw new Error('No supported complete weight frames found. Verify scale protocol and baud rate.');
   }
-
-  async _probePortForParse(port, { probeMs, minKg, maxKg }) {
-    if (!port?.readable) return false;
-    const reader = port.readable.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    const deadline = Date.now() + (Number.isFinite(probeMs) ? probeMs : 900);
-
+  async _probePortForParse(port, settings) {
+    if (!port.readable) return false;
+    const reader = port.readable.getReader(), decoder = new TextDecoder();
+    const frames = new ScaleFrameBuffer(settings.profileId);
+    const deadline = Date.now() + settings.probeMs;
     try {
-      // IMPORTANT: never call `reader.read()` while a previous `read()` is pending.
-      // Some scales stream slowly and the old Promise.race(timeout) approach would
-      // leave the pending read unresolved and immediately call `read()` again,
-      // which throws in Chromium. Instead we keep a single pending read and
-      // periodically "tick" until it resolves or we hit the probe deadline.
-      let pendingRead = reader.read();
-
+      let pending = reader.read();
       while (Date.now() < deadline) {
-        const sliceMs = Math.min(250, Math.max(0, deadline - Date.now()));
-        const raced = await Promise.race([
-          pendingRead
-            .then((r) => ({ kind: 'read', r }))
-            .catch((e) => ({ kind: 'error', e })),
-          new Promise((resolve) => setTimeout(() => resolve({ kind: 'tick' }), sliceMs)),
+        const result = await Promise.race([
+          pending.then(value => ({ value })),
+          new Promise(resolve => setTimeout(() => resolve(null), Math.min(50, Math.max(1, deadline - Date.now())))),
         ]);
-
-        if (raced.kind === 'tick') {
-          continue;
+        if (!result) continue;
+        if (result.value.done) return false;
+        for (const raw of frames.push(decoder.decode(result.value.value || new Uint8Array(), { stream: true }))) {
+          if (raw) this._emitRaw(raw.slice(0, 512));
+          if (parseWeightReading(raw, settings)) return true;
         }
-        if (raced.kind === 'error') {
-          return false;
-        }
-
-        const { value, done } = raced.r || {};
-        if (done) return false;
-
-        if (value) {
-          buffer += decoder.decode(value, { stream: true });
-          if (buffer.length > 4096) return false;
-
-          const lines = buffer.split(/\r\n|\r|\n/);
-          buffer = lines.pop() || '';
-          if (lines.some(line => parseWeightReading(line, { minKg, maxKg }))) {
-            try { await reader.cancel(); } catch (_) {}
-            return true;
-          }
-        }
-
-        // Only issue the next read after the current one resolves.
-        pendingRead = reader.read();
+        pending = reader.read();
       }
-
-      // Deadline reached while a read might still be pending; cancel so we can release the lock.
-      try { await reader.cancel(); } catch (_) { }
       return false;
     } finally {
-      try { reader.releaseLock(); } catch (_) {}
+      // Probing always closes and reopens its port before the continuous reader starts.
+      try { await reader.cancel(); } finally { reader.releaseLock(); }
     }
   }
-
   async disconnect() {
+    ++this._generation;
     await this._stopReadLoop();
-    if (this.port?.readable) {
-      await closeQuietly(this.port);
-    }
-    this.port = null;
-    this.portInfo = null;
-    this.baudRate = null;
-    this.status = 'disconnected';
-    this.error = null;
-    this.clearReadings();
+    if (this._opened) { await closeQuietly(this.port); this._opened = false; }
+    this.port = null; this.portInfo = null; this.baudRate = null;
+    this.error = null; this.status = 'disconnected'; this.clearReadings();
   }
-
-  _startReadLoop({ minKg, maxKg }) {
-    if (!this.port?.readable) return;
-    if (this._readAbort) return; // already running
-
-    const reader = this.port.readable.getReader();
-    this.reader = reader;
-    const decoder = new TextDecoder();
-    const abort = new AbortController();
-    this._readAbort = abort;
-
-    let buffer = '';
-    let discardFrame = false;
-    this._resetFrame = () => { buffer = ''; discardFrame = false; };
-    let lastEmitTs = 0;
-    let lastEmittedWeight = null;
-
-    const handleText = (text, { isBufferSample = false } = {}) => {
-      const parsed = parseWeightReading(text, { minKg, maxKg });
-      if (!parsed) { this.clearReadings(); return; }
-      const weightKg = parsed.weightKg;
-      if (!Number.isFinite(weightKg)) return;
-
-      const ts = Date.now();
-      // Avoid spamming duplicates when parsing from rolling buffers.
-      if (lastEmittedWeight != null && Math.abs(weightKg - lastEmittedWeight) < 0.0005 && ts - lastEmitTs < (isBufferSample ? 150 : 80)) {
-        return;
-      }
-
-      lastEmittedWeight = weightKg;
-      lastEmitTs = ts;
-      const sample = { weightKg, ts, meta: parsed };
-      this.lastReading = sample;
-      this.samples.push(sample);
-      if (this.samples.length > 30) this.samples.splice(0, this.samples.length - 30);
-      this.stable = computeStableReading(this.samples, { toleranceKg: 0.01, windowMs: 1200, minSamples: 4 });
-      this._emit();
-    };
-
+  _startReadLoop() {
+    if (!this.port?.readable) throw new Error('Scale has no readable stream');
+    const reader = this.port.readable.getReader(), decoder = new TextDecoder();
+    const frames = new ScaleFrameBuffer(this.config.profileId), abort = new AbortController();
+    this.reader = reader; this._readAbort = abort;
+    this._resetFrame = () => frames.discardPartial();
     this._readTask = (async () => {
       try {
         while (!abort.signal.aborted) {
           const { value, done } = await reader.read();
           if (done) break;
-          if (!value) continue;
-
-          const chunk = decoder.decode(value, { stream: true });
-          if (!chunk) continue;
-
-          for (const char of chunk) {
-            if (char === '\r' || char === '\n') {
-              if (!discardFrame && buffer.trim()) { this._emitRaw(buffer.slice(0, 512)); handleText(buffer); }
-              buffer = ''; discardFrame = false;
-            } else if (!discardFrame) {
-              buffer += char;
-              if (buffer.length > 512) { buffer = ''; discardFrame = true; this.clearReadings(); }
-            }
+          for (const raw of frames.push(decoder.decode(value || new Uint8Array(), { stream: true }))) {
+            if (raw) this._emitRaw(raw.slice(0, 512));
+            const parsed = parseWeightReading(raw, this.config);
+            if (!parsed) { this.clearReadings(); continue; }
+            const sample = { weightKg: parsed.weightKg, ts: Date.now(), meta: parsed };
+            this.lastReading = sample; this.samples.push(sample);
+            this.samples = this.samples.filter(item => Date.now() - item.ts <= this.config.staleMs).slice(-this.config.stabilitySamples);
+            this.stable = computeStableReading(this.samples, this.config); this._emit();
           }
-
-          // Incomplete frames are never measurements. Wait for CR/LF.
         }
-      } catch (err) {
-        if (!abort.signal.aborted) {
-          this._setError(err?.message || 'Scale read error');
-        }
-      } finally {
-        try { reader.releaseLock(); } catch (_) {}
-        if (!abort.signal.aborted) {
-          // Reader ended unexpectedly
-          this._setStatus('disconnected');
-        }
-        this.reader = null;
-        this._readAbort = null;
-        this._resetFrame = null;
-        this._emit();
+        if (!abort.signal.aborted) this._setError('Scale stopped sending data. Disconnect and reconnect.');
+      } catch (error) { if (!abort.signal.aborted) this._setError(error.message || 'Scale read error'); }
+      finally {
+        reader.releaseLock();
+        if (this.reader === reader) { this.reader = null; this._readAbort = null; this._resetFrame = null; }
       }
     })();
   }
-
   async _stopReadLoop() {
-    if (!this.reader && !this._readAbort) return;
-    try { this._readAbort?.abort(); } catch (_) {}
-    try { await this.reader?.cancel(); } catch (_) {}
-    try { await this._readTask; } catch (_) {}
+    this._readAbort?.abort();
+    if (this.reader) await this.reader.cancel();
+    await this._readTask;
     this._readTask = null;
-    try { this.reader?.releaseLock(); } catch (_) {}
-    this.reader = null;
-    this._readAbort = null;
   }
-
-  async captureStableWeight({
-    timeoutMs = 8000,
-    allowUserPrompt = false,
-    forcePrompt = false,
-    port = null,
-    minKg = 0,
-    maxKg = 5000,
-  } = {}) {
+  async captureStableWeight({ timeoutMs = 8000, allowUserPrompt = false, forcePrompt = false, port = null } = {}) {
     const run = async () => {
-    if (!isWebSerialSupported()) {
-      throw new Error('Weight scale not supported in this browser. Please use Chrome or Edge.');
-    }
-
-    let resolvedPort = port;
-    if (!resolvedPort && !forcePrompt) {
-      resolvedPort = await this.getPreferredAuthorizedPort();
-    }
-    if (!resolvedPort && (allowUserPrompt || forcePrompt)) {
-      resolvedPort = await this.requestPort();
-    }
-    if (!resolvedPort) {
-      throw new Error('No authorized scale port found. Please connect/authorize the scale.');
-    }
-
-    await this.connect({ port: resolvedPort, autoBaud: true, minKg, maxKg });
-    // Reset only framing; cancelling Web Serial's readable stream can close it.
-    // A pre-capture partial message must not be completed as a fresh sample.
-    this._resetFrame?.();
-    this.clearReadings();
-
-    const deadline = Date.now() + (Number.isFinite(timeoutMs) ? timeoutMs : 8000);
-
-    return await new Promise((resolve, reject) => {
-      let intervalId = null;
-      let unsub = () => {};
-      unsub = this.subscribe((state) => {
-        if (state.status === 'error' || state.status === 'disconnected') {
-          if (intervalId) clearInterval(intervalId);
-          unsub(); reject(new Error(state.error || 'Scale disconnected')); return;
-        }
-        const stable = state?.stableReading;
-        if (stable && Date.now() - stable.ts <= 1200 && Number.isFinite(stable.weightKg) && stable.weightKg > 0) {
-          if (intervalId) clearInterval(intervalId);
-          unsub();
-          resolve({
-            weightKg: stable.weightKg,
-            meta: stable.meta || null,
-            portInfo: state.portInfo || null,
-            baudRate: state.baudRate || null,
+      if (this.config.profileId === 'unknown') throw new Error('Choose a supported scale protocol in Scale settings first');
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30000) throw new Error('Invalid capture timeout');
+      this._capturing = true;
+      try {
+        let selected = port || (!forcePrompt ? this.port || await this.getPreferredAuthorizedPort() : null);
+        if (!selected && (allowUserPrompt || forcePrompt)) selected = await this.requestPort();
+        if (!selected) throw new Error('Select or authorize the scale port before capture');
+        await this.connect({ port: selected });
+        this._resetFrame?.(); this.clearReadings();
+        return await new Promise((resolve, reject) => {
+          let unsub = () => {}, finished = false;
+          const finish = (error, value) => {
+            if (finished) return;
+            finished = true; clearTimeout(timer); unsub();
+            if (error) reject(error); else resolve(value);
+          };
+          const timer = setTimeout(() => finish(new Error('Could not read a fresh stable weight. Check the scale and its settings.')), timeoutMs);
+          unsub = this.subscribe(state => {
+            if (state.status === 'error' || state.status === 'disconnected') { finish(new Error(state.error || 'Scale disconnected')); return; }
+            const reading = state.stableReading;
+            if (!reading || reading.weightKg <= 0) return;
+            finish(null, {
+              weightKg: reading.weightKg, captureId: globalThis.crypto?.randomUUID?.() || null,
+              timestamp: new Date(reading.ts).toISOString(), rawFrame: reading.meta.raw,
+              source: 'browser-scale', profileId: this.config.profileId, unit: reading.meta.unit,
+              profile: { id: this.config.profileId, unit: this.config.unit, decimalPlaces: this.config.decimalPlaces,
+                stabilitySamples: this.config.stabilitySamples, toleranceKg: this.config.toleranceKg, staleMs: this.config.staleMs },
+              meta: { ...reading.meta, stable: true }, portInfo: state.portInfo, baudRate: state.baudRate,
+            });
           });
-        }
-      });
-
-      intervalId = setInterval(() => {
-        if (Date.now() <= deadline) return;
-        clearInterval(intervalId);
-        try { unsub(); } catch (_) {}
-        reject(new Error('Could not read a stable weight. Ensure the scale is connected and stable.'));
-      }, 120);
-    });
+          if (finished) unsub();
+        });
+      } finally { this._capturing = false; }
     };
-
-    // Serialize captures to avoid multiple concurrent readers/timeouts fighting each other.
-    const chained = this._captureLock.then(run, run);
-    this._captureLock = chained.catch(() => {});
-    return await chained;
+    const pending = this._captureLock.then(run, run);
+    this._captureLock = pending.catch(() => {});
+    return pending;
   }
 }
 
@@ -603,13 +336,13 @@ class DesktopScaleManager {
   }
   accept(state) {
     this.state = state;
-    this.listeners.forEach(fn => fn(state));
+    this.listeners.forEach(fn => fn(this.getState()));
     const last = state.diagnostics?.at(-1);
     const key = last ? last.timestamp + last.raw : '';
     if (key && key !== this.lastDiagnostic) { this.lastDiagnostic = key; this.rawListeners.forEach(fn => fn(last.raw)); }
   }
-  getState() { return this.state; }
-  subscribe(fn) { this.listeners.add(fn); fn(this.state); return () => this.listeners.delete(fn); }
+  getState() { return { ...this.state, isDesktop: true, captureReady: Boolean(this.state.isConnected && this.state.config?.profileId && this.state.config.profileId !== 'unknown') }; }
+  subscribe(fn) { this.listeners.add(fn); fn(this.getState()); return () => this.listeners.delete(fn); }
   subscribeRaw(fn) { this.rawListeners.add(fn); return () => this.rawListeners.delete(fn); }
   async listAuthorizedPorts() {
     // Device choice and protocol are explicitly saved in Desktop settings. Do not
@@ -622,6 +355,7 @@ class DesktopScaleManager {
   async requestPort() { throw new Error('Use Desktop device settings to select the COM port and protocol profile'); }
   async connect() { const state = await this.bridge.connect(); this.accept(state); return state; }
   async disconnect() { await this.bridge.disconnect(); this.accept(await this.bridge.status()); }
+  async configure(settings) { return this.bridge.configure(settings); }
   async captureStableWeight({ timeoutMs = 8000 } = {}) { return this.bridge.capture({ timeoutMs }); }
 }
 
@@ -649,7 +383,7 @@ export async function requestScalePort() {
 
 /**
  * Get a previously authorized port automatically.
- * Returns the preferred port if possible, otherwise the first available port.
+ * Returns the preferred unambiguous port, or the sole authorized port.
  */
 export async function getActiveScalePort() {
   return await getScaleManager().getPreferredAuthorizedPort();
@@ -659,10 +393,10 @@ export async function getActiveScalePort() {
  * Legacy helper kept for backwards compatibility.
  * Open connection to the scale with a specific baud rate.
  */
-export async function openScale(port, { baudRate = DEFAULT_BAUD_RATES[0] } = {}) {
+export async function openScale(port, { baudRate = DEFAULT_SCALE_SETTINGS.baudRate } = {}) {
   if (!port) throw new Error('Port is required');
   if (!port.readable) {
-    await openPort(port, baudRate);
+    await openPort(port, { ...DEFAULT_SCALE_SETTINGS, baudRate });
   }
   return port;
 }
@@ -688,8 +422,8 @@ export async function readWeight(port, timeoutMs = 2000) {
 /**
  * Main function: Catch weight from scale
  *
- * Auto-detects port, auto-baud probes, waits for a stable reading,
- * and returns the weight in kg (3 decimals).
+ * Uses the selected port and saved serial/profile settings, waits for fresh
+ * stable samples, and returns the original captured kg precision.
  */
 export async function catchWeight(options = {}) {
   const { weightKg } = await getScaleManager().captureStableWeight({

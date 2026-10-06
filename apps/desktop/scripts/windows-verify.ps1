@@ -133,6 +133,17 @@ try {
   $report.driverPreparation = $driver
   if ((Get-Content -Raw (Join-Path $OutputDirectory 'packaged-smoke.json') | ConvertFrom-Json).sourceCommit -ne $report.sourceCommit) { throw 'Packaged runtime source identity mismatch' }
   $report.packagedLaunch = $true
+  $firstScaleFile = Join-Path $OutputDirectory 'isolated-smoke-data/workstation/workstation.json'
+  $firstScale = (Get-Content -Raw $firstScaleFile | ConvertFrom-Json).scale
+  if ($firstScale.path -ne '' -or $firstScale.profileId -ne 'bracket-integer' -or $firstScale.unit -ne 'kg' -or $firstScale.decimalPlaces -ne 2 -or $firstScale.baudRate -ne 2400 -or $firstScale.dataBits -ne 8 -or $firstScale.parity -ne 'none' -or $firstScale.stopBits -ne 1 -or $firstScale.flowControl -ne 'none') { throw 'Packaged first-run scale defaults mismatch' }
+  $legacyData = Join-Path $OutputDirectory 'legacy-scale-migration-data'
+  $legacyScaleFile = Join-Path $legacyData 'workstation/workstation.json'
+  New-Item -ItemType Directory -Force (Split-Path $legacyScaleFile) | Out-Null
+  '{"schemaVersion":1,"startAtLogin":false,"scale":{"path":"COM999","profileId":"unknown","baudRate":9600,"decimalPlaces":3,"serialNumber":"SIMULATED-LEGACY"}}' | Set-Content -NoNewline -Encoding utf8 $legacyScaleFile
+  Invoke-Smoke ([IO.Path]::GetFullPath($PackagedExe)) 'legacy-scale-migration' $legacyData
+  $migrated = Get-Content -Raw $legacyScaleFile | ConvertFrom-Json
+  if ($migrated.scaleDefaultsVersion -ne 1 -or $migrated.scale.path -ne 'COM999' -or $migrated.scale.serialNumber -ne 'SIMULATED-LEGACY' -or $migrated.scale.profileId -ne 'bracket-integer' -or $migrated.scale.unit -ne 'kg' -or $migrated.scale.decimalPlaces -ne 2 -or $migrated.scale.baudRate -ne 2400) { throw 'Packaged legacy scale defaults migration failed' }
+  $report.scaleDefaults = @{ firstRunVerified=$true; legacyUnknownMigrated=$true; dynamicPortPreserved=$true; integerDecimalPlaces=2 }
   Invoke-Bounded ([IO.Path]::GetFullPath($Installer)) @('--silent')
   Start-Sleep -Seconds 8
   Stop-TestApp
@@ -149,7 +160,7 @@ try {
   # either category, without submitting labels or inventing transaction records.
   $settingsFile = Join-Path $userData 'workstation/workstation.json'
   New-Item -ItemType Directory -Force (Split-Path $settingsFile), (Join-Path $userData 'print-jobs') | Out-Null
-  '{"schemaVersion":1,"startAtLogin":false,"scale":{"path":"COM999","profileId":"unknown"}}' | Set-Content -NoNewline -Encoding utf8 $settingsFile
+  '{"schemaVersion":1,"startAtLogin":false,"scaleDefaultsVersion":1,"scale":{"path":"COM999","profileId":"st-us-line","baudRate":19200,"unit":"g","decimalPlaces":0}}' | Set-Content -NoNewline -Encoding utf8 $settingsFile
   $queueSentinel = Join-Path $userData 'print-jobs/upgrade-preservation-test.txt'
   'GLINTEX CI preservation marker; not a job.' | Set-Content -NoNewline -Encoding utf8 $queueSentinel
   $beforeSettings = (Get-FileHash $settingsFile -Algorithm SHA256).Hash

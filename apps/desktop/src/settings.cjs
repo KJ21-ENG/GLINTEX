@@ -1,5 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { DEFAULT_SCALE_SETTINGS } = require("./scale/protocol.cjs");
 class SettingsStore {
   constructor(directory) {
     this.directory = directory;
@@ -20,13 +21,25 @@ class SettingsStore {
           "Workstation settings are unreadable. Preserve the file and use the troubleshooting guide.",
         );
     }
+    // Migrate only the old non-capturing placeholder. Working profiles retain
+    // their operator-selected protocol, units, scaling and serial settings.
+    if (!this.data.scaleDefaultsVersion) {
+      if (!this.data.scale || this.data.scale.profileId === "unknown") {
+        await this.set("scale", {
+          path: "",
+          ...this.data.scale,
+          ...DEFAULT_SCALE_SETTINGS,
+        });
+      }
+      await this.set("scaleDefaultsVersion", 1);
+    }
     return this;
   }
   get(key) {
     return structuredClone(key ? this.data[key] : this.data);
   }
   async set(key, value) {
-    if (!["scale", "printer", "startAtLogin"].includes(key))
+    if (!["scale", "printer", "startAtLogin", "scaleDefaultsVersion"].includes(key))
       throw new Error("Unknown setting");
     const copied = structuredClone(value);
     this.pending = this.pending

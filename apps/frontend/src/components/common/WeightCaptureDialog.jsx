@@ -3,6 +3,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Loader2, PlugZap, Unplug } from 'lucide-react';
 import * as api from '../../api/client';
 import { getScaleManager, isWebSerialSupported } from '../../utils/weightScale';
+import { DEFAULT_SCALE_SETTINGS } from '../../utils/weightScaleParser';
+import ScaleSettingsFields from './ScaleSettingsFields';
 import { Button, Input, Label, Select, Badge } from '../ui';
 import { Dialog, DialogContent } from '../ui/Dialog';
 
@@ -31,6 +33,8 @@ export function WeightCaptureDialog({
   const [manualReason, setManualReason] = useState('');
   const [showRaw, setShowRaw] = useState(false);
   const [rawLines, setRawLines] = useState([]);
+  const [scaleSettings, setScaleSettings] = useState({ ...DEFAULT_SCALE_SETTINGS });
+  const desktop = Boolean(window.glintexDesktop?.scale);
 
   const rawLinesRef = useRef([]);
   const showRawRef = useRef(false);
@@ -38,7 +42,7 @@ export function WeightCaptureDialog({
   const selectedPort = useMemo(() => {
     if (!ports.length) return null;
     const match = ports.find(p => p.label === selectedPortLabel);
-    return match?.port || ports[0].port;
+    return match?.port || (ports.length === 1 ? ports[0].port : null);
   }, [ports, selectedPortLabel]);
 
   useEffect(() => {
@@ -67,7 +71,7 @@ export function WeightCaptureDialog({
         if (list.length) {
           const preferred = await manager.getPreferredAuthorizedPort().catch(() => null);
           const match = preferred ? list.find(p => p.port === preferred) : null;
-          setSelectedPortLabel((match || list[0]).label);
+          setSelectedPortLabel((match || (list.length === 1 ? list[0] : null))?.label || '');
         }
       } catch (e) {
         setPorts([]);
@@ -88,6 +92,18 @@ export function WeightCaptureDialog({
 
   const liveWeight = state?.lastReading?.weightKg;
   const stableWeight = state?.stableReading?.weightKg;
+  const captureReady = Boolean(state?.captureReady);
+
+  useEffect(() => {
+    if (!desktop && state?.config) setScaleSettings({ ...state.config });
+  }, [desktop, state?.config]);
+
+  async function handleSaveScaleSettings() {
+    setBusy(true); setError('');
+    try { await manager.configure(scaleSettings); }
+    catch (e) { setError(e?.message || 'Failed to save scale settings'); }
+    finally { setBusy(false); }
+  }
 
   async function refreshPorts() {
     const list = await manager.listAuthorizedPorts();
@@ -99,11 +115,16 @@ export function WeightCaptureDialog({
     if (selectedPortLabel && list.some(p => p.label === selectedPortLabel)) return;
     const preferred = await manager.getPreferredAuthorizedPort().catch(() => null);
     const match = preferred ? list.find(p => p.port === preferred) : null;
-    setSelectedPortLabel((match || list[0]).label);
+    setSelectedPortLabel((match || (list.length === 1 ? list[0] : null))?.label || '');
   }
 
   async function handleAuthorize() {
     if (!supported) return;
+    if (desktop) {
+      window.dispatchEvent(new Event('glintex:open-workstation'));
+      onOpenChange(false);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -124,7 +145,7 @@ export function WeightCaptureDialog({
       if (!selectedPort) {
         throw new Error('No authorized ports. Click "Authorize Scale" first.');
       }
-      await manager.connect({ port: selectedPort, autoBaud: true });
+      await manager.connect({ port: selectedPort });
     } catch (e) {
       setError(e?.message || 'Failed to connect to scale');
     } finally {
@@ -203,7 +224,7 @@ export function WeightCaptureDialog({
       <DialogContent
         title="Capture Weight"
         onOpenChange={onOpenChange}
-        className="max-w-3xl"
+        className="max-w-3xl max-h-[90vh] overflow-y-auto"
       >
         <div className="space-y-4">
           {!supported && (
@@ -235,8 +256,8 @@ export function WeightCaptureDialog({
               </Button>
             </div>
 
-            {error ? (
-              <div className="text-sm text-destructive">{error}</div>
+            {error || state?.error ? (
+              <div className="text-sm text-destructive">{error || state.error}</div>
             ) : null}
           </div>
 
@@ -248,9 +269,10 @@ export function WeightCaptureDialog({
                   <Select
                     value={selectedPortLabel}
                     onChange={(e) => setSelectedPortLabel(e.target.value)}
-                    disabled={!supported || busy}
+                    disabled={!supported || busy || state?.isConnected}
                   >
                     {!ports.length && <option value="">No authorized ports</option>}
+                    {ports.length > 1 && <option value="">Choose scale port</option>}
                     {ports.map(p => (
                       <option key={p.label} value={p.label}>{p.label}</option>
                     ))}
@@ -259,7 +281,7 @@ export function WeightCaptureDialog({
                 <div className="flex gap-2">
                   <Button type="button" variant="outline" onClick={handleAuthorize} disabled={!supported || busy} className="gap-2">
                     <PlugZap className="w-4 h-4" />
-                    Authorize Scale
+                    {desktop ? 'Scale setup' : 'Authorize Scale'}
                   </Button>
                   {state?.isConnected ? (
                     <Button type="button" variant="outline" onClick={handleDisconnect} disabled={busy} className="gap-2">
@@ -275,13 +297,25 @@ export function WeightCaptureDialog({
                 </div>
                 <div className="flex items-center gap-2 justify-start md:justify-end">
                   <Badge className={state?.isConnected ? 'bg-green-600' : 'bg-muted text-foreground'}>
-                    {state?.isConnected ? 'Connected' : 'Not Connected'}
+                    {state?.isConnected ? (captureReady ? 'Connected' : 'Setup required') : 'Not Connected'}
                   </Badge>
                   {state?.baudRate ? (
                     <Badge variant="outline">Baud: {state.baudRate}</Badge>
                   ) : null}
                 </div>
               </div>
+
+              {!desktop && <details className="rounded-md border p-3">
+                <summary className="cursor-pointer text-sm font-medium">Scale settings</summary>
+                <div className="mt-3 space-y-3">
+                  <p className="text-xs text-muted-foreground">Settings are saved for this browser. Disconnect before changing them; choose the port separately.</p>
+                  <ScaleSettingsFields value={scaleSettings} disabled={busy || state?.isConnected}
+                    onChange={(key, value) => setScaleSettings(current => ({ ...current, [key]: value }))}/>
+                  <Button type="button" variant="outline" onClick={handleSaveScaleSettings} disabled={busy || state?.isConnected}>Save scale settings</Button>
+                </div>
+              </details>}
+
+              {state?.config?.profileId === 'unknown' && <p className="text-sm text-destructive">Choose a supported protocol in {desktop ? 'Scale setup' : 'Scale settings'} before capturing weight.</p>}
 
               <div className="rounded-md border p-4">
                 <div className="flex items-center justify-between gap-2">
@@ -302,7 +336,7 @@ export function WeightCaptureDialog({
                   <Button
                     type="button"
                     onClick={handleCapture}
-                    disabled={!supported || busy || !state?.isConnected}
+                    disabled={!supported || busy || !captureReady}
                     className="gap-2"
                   >
                     {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}

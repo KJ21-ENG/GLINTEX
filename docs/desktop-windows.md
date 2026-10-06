@@ -4,7 +4,7 @@
 
 Electron is the desktop application; the old Tauri helper is not required. The bundled React UI uses **https://app.glintex.in/api/** and its existing sessions, roles and cloud database. No workstation backend/database is installed. Production transactions are not test fixtures.
 
-Initial delivered version **1.0.0**; private updater was introduced in **1.1.0**; preparation-only driver handoff is **1.1.1**; editable factory scale defaults and browser bracket capture are **1.1.2**. Windows **x64**, Electron **44.5.1**, Forge **8.0.1**. Exact release commit and executed checks: `build-info.json`, delivery `manifest.json` and Windows verification reports.
+Initial delivered version **1.0.0**; private updater was introduced in **1.1.0**; preparation-only driver handoff is **1.1.1**; editable factory scale defaults and browser bracket capture are **1.1.2**; immediate update discovery and the compact update notice are **1.1.3**. Windows **x64**, Electron **44.5.1**, Forge **8.0.1**. Exact release commit and executed checks: `build-info.json`, delivery `manifest.json` and Windows verification reports.
 
 A workflow definition is not execution evidence. Windows packaging, launch, installation, upgrade and uninstall remain **pending until the Windows run and its JSON reports pass**. Physical accuracy/protocol compatibility/alignment always await the owner's checks below. This document must not be described as a successful test report.
 
@@ -190,16 +190,33 @@ refresh/push or dispatch a new release.
 
 ## Upgrade, rollback and recovery
 
-Versions 1.1.0 and later check the private first-party service after startup (30 seconds) and every six hours, with **Check for updates** in the GLINTEX menu/workstation panel. It shows offline, sign-in, unavailable and no-new-version states. Discovery never downloads or installs automatically. **Later** hides that version's prompt for six hours in the current session; a manual check can show it sooner.
+Versions 1.1.0–1.1.2 check the private first-party service 30 seconds after startup and every six hours, with **Check for updates** in the GLINTEX menu/workstation panel. It shows offline, sign-in, unavailable and no-new-version states. Discovery never downloads or installs automatically. **Later** hides that version's prompt for six hours in the current session; a manual check can show it sooner.
 Starting in 1.1.1, a successful GLINTEX sign-in/session response immediately retries
 discovery if the first check was waiting for sign-in. A late sign-in therefore
 does not wait for the six-hour timer. This retry still only discovers releases.
 
-Choose **Download update** to use the existing HttpOnly session at the fixed HTTPS installer endpoint. Redirects, other origins, unsupported manifests, downgrades, wrong size and SHA-256 mismatches are rejected. Interrupted/cancelled downloads are not installable. Release version/date/notes appear first. No GitHub token or signing secret is in the client. The candidate is an **unsigned test installer**: trusted HTTPS and hash validation establish source/integrity, not Windows publisher signing; OS warnings remain enabled.
+Version 1.1.3 removes the 30-second delay: the restored session or a
+successful sign-in starts discovery immediately. Page load also triggers an
+immediate check if session discovery has not already run. Failures retry after
+30 seconds, two minutes, five minutes and then every 15 minutes. Returning online
+or waking Windows retries a failed check immediately. Concurrent checks share
+one request, and downloading or selecting installation pauses discovery.
+
+The update notice is a compact strip with one primary action for its current
+state and a download progress bar. Background checking, offline errors and
+up-to-date status stay quiet in the workspace; manual checks and workstation
+settings show their feedback. **What’s new** expands the version, formatted date
+and release notes; **Details** contains download verification and installation
+information. **Later** hides the notice while keeping the update accessible in
+workstation settings. Write release notes in short user-facing sentences with
+newlines between changes; keep build, protocol and CI details in delivery reports.
+
+Choose **Download update** to use the existing HttpOnly session at the fixed HTTPS installer endpoint. Redirects, other origins, unsupported manifests, downgrades, wrong size and SHA-256 mismatches are rejected. Interrupted/cancelled downloads are not installable. **What’s new** expands the release version, formatted date and notes in 1.1.3. No GitHub token or signing secret is in the client. The candidate is an **unsigned test installer**: trusted HTTPS and hash validation establish source/integrity, not Windows publisher signing; OS warnings remain enabled.
 
 Choose **Install after I close GLINTEX** after download verification. Continue working or cancel the choice. Only deliberate app close plus final save/discard confirmation starts installation. Connected scales, driver setup, native/server operations and queued print submissions block that close. Check the Windows print queue: accepted jobs may still print physically. Settings/cookies are flushed, then the helper must acknowledge startup before GLINTEX closes. A first-party GUI host waits for app exit, rechecks the installer with .NET SHA-256 and opens it. It runs without elevation, services or scheduled tasks and records local status in `%APPDATA%\GLINTEX\updates\install-status.json`; a failed handoff is shown on the next launch. There is no forced app close, startup installation or Windows reboot; restart clears the installation choice.
+Version 1.1.3 labels the same choice **Install when I close GLINTEX**.
 
-Existing 1.0.0 needs **one manual upgrade** to the current version (1.1.2) under the same Windows account. Finish capture/save/print, close GLINTEX, back up `%APPDATA%\GLINTEX`, then run the verified newer Setup.exe. Keep app identity/user profile. Squirrel nupkg/RELEASES files are temporary packaging output excluded from the new delivery artifact; the client uses authenticated first-party routes.
+Existing 1.0.0 needs **one manual upgrade** to the current version (1.1.3) under the same Windows account. Finish capture/save/print, close GLINTEX, back up `%APPDATA%\GLINTEX`, then run the verified newer Setup.exe. Keep app identity/user profile. Squirrel nupkg/RELEASES files are temporary packaging output excluded from the new delivery artifact; the client uses authenticated first-party routes.
 
 ### Private release administration
 

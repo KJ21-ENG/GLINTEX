@@ -31,13 +31,22 @@ window.fixtureScaleConnected = value => { connected = value; };
 window.glintexDesktop.getController = async () => ({ version: '1.1.1-fixture', scaleDriver: { available: true } });
 let updateState = { state: 'current', installedVersion: '1.1.1', message: 'No newer version is available.' }, updateListener;
 const setUpdate = values => { updateState = { ...updateState, ...values }; updateListener?.(updateState); return updateState; };
+window.fixtureUpdate = setUpdate;
+window.fixtureRetryCalls = 0;
+window.fixtureDownloadCalls = 0;
 window.fixtureUpdateFeedback = state => setUpdate({ state, release: null, prompt: true, message: ({current:'No newer version is available.',signin:'Sign in again to check private updates.',unavailable:'Private update hosting is unavailable.',error:'Could not check for updates. Check your connection and retry.'})[state] });
 window.fixtureUpdateChoice = 0;
 window.glintexDesktop.updates = {
   status: async () => updateState, onStatus: callback => { updateListener = callback; return () => { updateListener = null; }; },
   check: async () => setUpdate({ state: 'available', prompt: true, message: 'GLINTEX 1.1.2 is available.', release: { version: '1.1.2', publishedAt: '2026-10-05T00:00:00Z', notes: 'Simulated private update' } }),
-  download: async () => setUpdate({ state: 'ready', message: 'Simulated installer verified; no file downloaded.' }),
-  later: async () => setUpdate({ prompt: false }), cancel: async () => setUpdate({ state: 'available' }),
+  retry: async () => { window.fixtureRetryCalls++; return window.glintexDesktop.updates.check(); },
+  download: async () => {
+    window.fixtureDownloadCalls++;
+    setUpdate({ state: 'downloading', progress: 0, message: 'Simulated download; no file downloaded.' });
+    if (window.fixtureDelayDownload) return new Promise(resolve => { window.fixtureFinishDownload = () => resolve(setUpdate({ state: 'ready', progress: 100, message: 'Simulated installer verified; no file downloaded.' })); window.fixtureCancelDownload = () => resolve(updateState); });
+    return setUpdate({ state: 'ready', message: 'Simulated installer verified; no file downloaded.' });
+  },
+  later: async () => setUpdate({ prompt: false }), cancel: async () => { const status = setUpdate({ state: 'available' }); window.fixtureCancelDownload?.(); return status; },
   arm: async () => { window.fixtureUpdateChoice++; return setUpdate({ state: 'armed', message: 'Update selected. Finish work, disconnect the scale, then close GLINTEX to install.' }); },
   disarm: async () => { window.fixtureDisarmCalls++; setUpdate({ state: 'ready', message: 'Cancelling installation choice…' }); if (window.fixtureDelayDisarm) await new Promise(resolve => { window.fixtureFinishDisarm = resolve; }); return setUpdate({ state: 'ready', message: 'Installation cancelled.' }); },
 };

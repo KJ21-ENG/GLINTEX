@@ -100,7 +100,13 @@ async function main() {
     if (!panelText.includes(expected))
       throw Error("Panel missing expected fixture state: " + expected);
   const driverUI = await require("./driver-ui-assertions.cjs").verifyDriverUI(code => win.webContents.executeJavaScript(code));
-  const updateUI = await require("./update-ui-assertions.cjs").verifyUpdateUI(code => win.webContents.executeJavaScript(code));
+  const updateUI = await require("./update-ui-assertions.cjs").verifyUpdateUI(code => win.webContents.executeJavaScript(code), async (name, width = 1360) => {
+    win.setSize(width, 960);
+    await win.webContents.executeJavaScript("document.querySelector('#panel').scrollIntoView({block:'start'})");
+    await delay(150);
+    const rect = await win.webContents.executeJavaScript("(() => { const panel=document.querySelector('#panel');const r=panel.getBoundingClientRect();const notice=panel.querySelector('[aria-label=\"Application updates\"]');if(notice.scrollWidth>notice.clientWidth)throw Error('Update notice overflows the window');return {x:Math.floor(r.x),y:Math.floor(r.y),width:Math.ceil(r.width),height:Math.min(300,Math.ceil(r.height))}; })()");
+    await fs.writeFile(path.join(output, `${name}.png`), (await win.webContents.capturePage(rect)).toPNG());
+  });
   await fs.writeFile(
     path.join(output, "workstation-panel.png"),
     (await win.webContents.capturePage()).toPNG(),

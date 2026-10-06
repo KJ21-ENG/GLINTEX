@@ -123,7 +123,17 @@ class DriverSetup {
       const manifest = await this.manifest(), cache = this.status().cacheDirectory;
       await this.directory(cache);
       const packageDirectory = path.join(cache, PACKAGE_NAME);
-      if (!existsSync(packageDirectory)) {
+      const entry = await fs.lstat(packageDirectory).catch(error => { if (error.code !== "ENOENT") throw error; return null; });
+      let packageVerified = false;
+      if (entry) {
+        try { await this.verify(packageDirectory, manifest); packageVerified = true; }
+        catch (error) {
+          if (verifyOnly) throw error;
+          // Rename the entry itself; never follow a link or delete its target.
+          await fs.rename(packageDirectory, path.join(cache, "invalid-" + randomUUID()));
+        }
+      }
+      if (!packageVerified) {
         if (verifyOnly) throw new Error("No cached driver package. Prepare it on an internet-connected Windows PC first.");
         temporary = path.join(cache, "prepare-" + randomUUID()); await this.directory(temporary);
         const archive = path.join(temporary, "driver.cab"), cachedArchive = path.join(cache, PACKAGE_NAME + ".cab");
@@ -138,7 +148,7 @@ class DriverSetup {
         await this.verify(extracted, manifest);
         await fs.rename(extracted, packageDirectory);
       }
-      await this.verify(packageDirectory, manifest);
+      if (!packageVerified) await this.verify(packageDirectory, manifest);
       const output = `Verified Prolific ${manifest.driverVersion}. No driver was installed or changed.\nPackage: ${packageDirectory}\nFor Windows 10 x64 and USB\\VID_067B&PID_23A3&REV_0305 only.\nIf the adapter has no working COM port, use Device Manager > adapter > Update driver > Browse my computer for drivers and select this folder. Windows may require an administrator. Leave a working driver unchanged.`;
       await fs.writeFile(logPath, output, { flag: "wx" });
       return { success: true, installed: false, elevationRequested: false, preparationOnly: true, driverVersion: manifest.driverVersion, packageDirectory, logPath, output };

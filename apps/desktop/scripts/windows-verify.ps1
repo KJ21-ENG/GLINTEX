@@ -77,11 +77,30 @@ function Get-InstalledVersionExe([string]$Version) {
   $exe = Join-Path $installRoot "app-$Version/GLINTEX.exe"
   if (-not (Test-Path $exe)) { throw "Expected installed application $Version is missing" }
   $registration = @(Get-ChildItem 'HKCU:/Software/Microsoft/Windows/CurrentVersion/Uninstall' -ErrorAction SilentlyContinue | Get-ItemProperty | Where-Object { $_.DisplayName -eq 'GLINTEX' })
+  $registration | Select-Object DisplayName, DisplayVersion, UninstallString | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $OutputDirectory "registration-$Version.json")
   if ($registration.Count -ne 1 -or $registration[0].DisplayVersion -ne $Version) { throw "Windows application registration does not select $Version" }
   $index = Join-Path $installRoot 'packages/RELEASES'
   $versions = @(Get-Content $index | ForEach-Object { if ($_ -match '(?<version>\d+\.\d+\.\d+)-full\.nupkg') { [version]$Matches.version } } | Sort-Object -Descending)
   if ($versions.Count -eq 0 -or $versions[0].ToString() -ne $Version) { throw "Squirrel release index does not select $Version" }
   return Get-Item $exe
+}
+function Wait-UpdateCompleted([string]$Version) {
+  # Unpacking creates app-* before Setup updates registration and RELEASES.
+  # Wait for the real helper's successful installer exit, then check all three.
+  $statusFile = Join-Path $userData 'updates/install-status.json'
+  $deadline = (Get-Date).AddSeconds(180)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path $statusFile) {
+      $status = $null
+      try { $status = Get-Content -Raw $statusFile | ConvertFrom-Json } catch { }
+      if ($status -and $status.version -eq $Version) {
+        if ($status.state -eq 'completed') { return }
+        if ($status.state -in @('failed', 'cancelled')) { throw "Update helper $($status.state): $($status.message)" }
+      }
+    }
+    Start-Sleep -Seconds 2
+  }
+  throw "Update installer did not report completion for $Version within 180 seconds"
 }
 function Invoke-Smoke([string]$Exe, [string]$Name, [string]$Data, [bool]$ExpectRestoredSession=$false) {
   Invoke-SelfTest $Exe $Name $Data $ExpectRestoredSession
@@ -147,8 +166,7 @@ try {
     finally { Remove-Item Env:GLINTEX_TEST_DATA, Env:GLINTEX_TEST_REPORTS, Env:GLINTEX_TEST_PHASE, Env:GLINTEX_TEST_UPDATE_INSTALLER, Env:GLINTEX_TEST_UPDATE_VERSION, Env:GLINTEX_INSTALL_TEST -ErrorAction SilentlyContinue }
     $updateReport = Get-Content -Raw (Join-Path $OutputDirectory 'authenticated-update-reports/packaged-update.json') | ConvertFrom-Json
     if (-not $updateReport.passed -or $updateReport.sourceCommit -ne $report.sourceCommit -or $updateReport.checks -notcontains 'main-process-mid-save-close-block') { throw 'Authenticated update report is missing or does not prove pending-save protection' }
-    $deadline = (Get-Date).AddSeconds(120)
-    while (-not (Test-Path (Join-Path $installRoot "app-$next/GLINTEX.exe"))) { if ((Get-Date) -gt $deadline) { throw 'User-controlled update installer did not create the next-version application' }; Start-Sleep -Seconds 2 }
+    Wait-UpdateCompleted $next
     Start-Sleep -Seconds 8
     Stop-TestApp
     $upgradedExe = Get-InstalledVersionExe $next
@@ -197,8 +215,7 @@ try {
     finally { Remove-Item Env:GLINTEX_TEST_DATA, Env:GLINTEX_TEST_REPORTS, Env:GLINTEX_TEST_PHASE, Env:GLINTEX_TEST_UPDATE_INSTALLER, Env:GLINTEX_TEST_UPDATE_VERSION, Env:GLINTEX_INSTALL_TEST -ErrorAction SilentlyContinue }
     $previousUpdate = Get-Content -Raw (Join-Path $OutputDirectory 'previous-release-update-reports/packaged-update.json') | ConvertFrom-Json
     if (-not $previousUpdate.passed -or $previousUpdate.version -ne $BootstrapVersion -or $previousUpdate.checks -notcontains 'main-process-mid-save-close-block') { throw 'Previous-release authenticated update proof missing' }
-    $deadline = (Get-Date).AddSeconds(120)
-    while (-not (Test-Path (Join-Path $installRoot "app-$candidateVersion/GLINTEX.exe"))) { if ((Get-Date) -gt $deadline) { throw 'Previous updater did not install the candidate' }; Start-Sleep -Seconds 2 }
+    Wait-UpdateCompleted $candidateVersion
     Start-Sleep -Seconds 8; Stop-TestApp
     $bootstrappedExe = Get-InstalledVersionExe $candidateVersion
     Invoke-Smoke $bootstrappedExe.FullName 'bootstrap-upgraded' $userData $true

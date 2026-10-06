@@ -44,6 +44,9 @@ access. It uses the current user's token to download the exact pinned Microsoft
 package and verify CAB/file hashes, sizes and Windows signatures. It never
 executes bundled PowerShell scripts, requests elevation or installs a driver.
 Logs/cache live in `%APPDATA%\GLINTEX\scale-driver` and survive upgrades.
+Normal preparation quarantines damaged package entries in an `invalid-*` folder
+and verifies a fresh package. It preserves the old entry; verification-only mode
+does not replace cached data.
 
 If the compatible adapter has no working COM port, check its exact Hardware IDs
 in Windows Device Manager, then choose **Update driver > Browse my computer for

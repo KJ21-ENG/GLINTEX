@@ -60,13 +60,13 @@ test("modified manifest, archive, file, unknown file and unsigned package fail v
   await fs.appendFile(path.join(f.kitDirectory, "manifest.json"), " "); assert.match((await f.helper.prepare()).output, /manifest checksum/); assert.equal(f.calls.length, 0);
   await fs.writeFile(path.join(f.kitDirectory, "manifest.json"), original); await fs.mkdir(f.cache, { recursive: true }); await fs.writeFile(path.join(f.cache, PACKAGE_NAME + ".cab"), Buffer.alloc(270156));
   assert.match((await f.helper.prepare()).output, /Cached archive checksum/); assert.equal(f.calls.length, 0);
-  await f.offline(); await fs.writeFile(path.join(f.packageDirectory, "plser.sys"), Buffer.from("tampered")); assert.equal((await f.helper.prepare()).success, false);
-  await f.offline(); await fs.writeFile(path.join(f.packageDirectory, "attacker.ps1"), "evil"); assert.match((await f.helper.prepare()).output, /Unexpected package files/);
+  await f.offline(); await fs.writeFile(path.join(f.packageDirectory, "plser.sys"), Buffer.from("tampered")); assert.equal((await f.helper.prepare({ verifyOnly: true })).success, false);
+  await f.offline(); await fs.writeFile(path.join(f.packageDirectory, "attacker.ps1"), "evil"); assert.match((await f.helper.prepare({ verifyOnly: true })).output, /Unexpected package files/);
   const unsigned = await fixture(t, { invalidSignature: true }); await unsigned.offline(); assert.match((await unsigned.helper.prepare()).output, /Invalid Windows signature/);
 });
 test("replacement during signature check is detected; later changes never launch privileged code", async t => {
   const f = await fixture(t, { duringSignature: async helper => fs.writeFile(path.join(helper.status().cacheDirectory, PACKAGE_NAME, "plser.inf"), "replaced") });
-  await f.offline(); const result = await f.helper.prepare(); assert.equal(result.success, false); assert.match(result.output, /Checksum mismatch/); assert.equal(f.calls.length, 1);
+  await f.offline(); const result = await f.helper.prepare({ verifyOnly: true }); assert.equal(result.success, false); assert.match(result.output, /Checksum mismatch/); assert.equal(f.calls.length, 1);
   const safe = await fixture(t); await safe.offline(); assert.equal((await safe.helper.prepare()).success, true);
   await fs.writeFile(path.join(safe.packageDirectory, "plser.inf"), "post-check replacement");
   assert.equal(safe.calls.length, 1, "preparation has no automatic installation continuation");
@@ -74,9 +74,27 @@ test("replacement during signature check is detected; later changes never launch
 });
 test("linked package files/cache paths and excessive download size are rejected", async t => {
   const f = await fixture(t); await f.offline(); await fs.unlink(path.join(f.packageDirectory, "plser.sys")); await fs.symlink(path.join(f.packageDirectory, "plser64.sys"), path.join(f.packageDirectory, "plser.sys"));
-  assert.equal((await f.helper.prepare()).success, false); assert.equal(f.calls.length, 0);
+  assert.equal((await f.helper.prepare({ verifyOnly: true })).success, false); assert.equal(f.calls.length, 0);
   const linked = await fixture(t); await fs.mkdir(path.dirname(linked.cache), { recursive: true }); await fs.symlink(linked.root, linked.cache, "junction"); assert.match((await linked.helper.prepare()).output, /must not be a link/);
   const oversized = await fixture(t, { overrides: { fetch: async () => new Response(Buffer.alloc(270157)) } }); assert.match((await oversized.helper.prepare()).output, /exceeds pinned size/); assert.equal(oversized.calls.length, 0);
+});
+test("normal preparation quarantines invalid entries, preserves link targets and keeps verification cache unchanged", async t => {
+  for (const kind of ["partial", "file", "link"]) {
+    const f = await fixture(t); await fs.mkdir(f.cache, { recursive: true });
+    const outside = path.join(f.root, "outside.txt"); await fs.writeFile(outside, "leave untouched");
+    if (kind === "partial") { await fs.mkdir(f.packageDirectory); await fs.writeFile(path.join(f.packageDirectory, "plser.inf"), "partial"); }
+    if (kind === "file") await fs.writeFile(f.packageDirectory, "wrong entry");
+    if (kind === "link") await fs.symlink(outside, f.packageDirectory);
+    const before = (await fs.readdir(f.cache)).sort();
+    assert.equal((await f.helper.prepare({ verifyOnly: true })).success, false);
+    assert.deepEqual((await fs.readdir(f.cache)).sort(), before);
+    assert.equal(f.downloads.length, 0);
+    const result = await f.helper.prepare(); assert.equal(result.success, true); assert.equal(result.installed, false);
+    assert.equal(f.downloads.length, 1); assert.equal(await fs.readFile(outside, "utf8"), "leave untouched");
+    const quarantined = (await fs.readdir(f.cache)).filter(name => name.startsWith("invalid-")); assert.equal(quarantined.length, 1);
+    if (kind === "link") assert.ok((await fs.lstat(path.join(f.cache, quarantined[0]))).isSymbolicLink());
+    assert.equal((await f.helper.prepare({ verifyOnly: true })).success, true);
+  }
 });
 test("concurrent preparation is refused and download failure reports no driver changes", async t => {
   let finish; const f = await fixture(t, { overrides: { fetch: () => new Promise(resolve => { finish = resolve; }) } });

@@ -39,6 +39,7 @@ async function verifyUpdateUI(evaluate, capture = async () => {}) {
   assert.equal(await evaluate("document.querySelector('[aria-label=\"Update download\"]').getAttribute('aria-valuenow')"), '42');
   await capture('update-downloading');
   await click('Cancel download'); await wait('Download update');
+  assert.equal(await evaluate("document.querySelector('[aria-label=\"Update download\"]')===null"), true, 'a stale cancellation reply must not restore download progress');
   await evaluate('window.fixtureDelayDownload=false');
   await waitFor("![...document.querySelectorAll('[aria-label=\"Application updates\"] button')].find(b=>b.textContent==='Download update').disabled");
   await click('Download update'); await wait('Install when I close GLINTEX');
@@ -53,6 +54,6 @@ async function verifyUpdateUI(evaluate, capture = async () => {}) {
   await evaluate('window.fixtureFinishDisarm()');
   await waitFor("![...document.querySelectorAll('[aria-label=\"Application updates\"] button')].find(b=>b.textContent==='Install when I close GLINTEX').disabled");
   assert.equal(await evaluate('window.glintexDesktop.updates.status().then(s=>s.message)'), 'Installation cancelled.');
-  return { passed: true, checks: ['compact-notice','quiet-background-check','collapsed-release-notes','formatted-date','expandable-integrity-details','new-release-resets-expanded-details','manual-check','closed-panel-current-signin-unavailable-offline-feedback','online-retry','later','download-progress','cancel-download','explicit-download','explicit-install-choice','cancel-install-choice','pending-cancel-blocks-rearm-and-duplicate-disarm'], simulated: true, installedAnything: false };
+  return { passed: true, checks: ['compact-notice','quiet-background-check','collapsed-release-notes','formatted-date','expandable-integrity-details','new-release-resets-expanded-details','manual-check','closed-panel-current-signin-unavailable-offline-feedback','online-retry','later','download-progress','cancel-download','stale-cancellation-reply-keeps-live-status','explicit-download','explicit-install-choice','cancel-install-choice','pending-cancel-blocks-rearm-and-duplicate-disarm'], simulated: true, installedAnything: false };
 }
 module.exports = { verifyUpdateUI };

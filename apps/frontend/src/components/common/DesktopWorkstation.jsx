@@ -25,6 +25,7 @@ export default function DesktopWorkstation() {
   const [updateBusy, setUpdateBusy] = useState(false);
   const updatePending = useRef(false);
   const updateGeneration = useRef(0);
+  const updateStatusRevision = useRef(0);
   const [scale, setScale] = useState(initialScale);
   const [ports, setPorts] = useState([]);
   const [printers, setPrinters] = useState([]);
@@ -87,7 +88,7 @@ export default function DesktopWorkstation() {
     if (!bridge?.updates) return;
     let live = true;
     let receivedStatus = false;
-    const unsubscribe = bridge.updates.onStatus(state => { receivedStatus = true; if (live) setUpdate(state); });
+    const unsubscribe = bridge.updates.onStatus(state => { receivedStatus = true; if (live) { updateStatusRevision.current++; setUpdate(state); } });
     bridge.updates.status().then(state => { if (live && !receivedStatus) setUpdate(state); }).catch(e => live && setUpdateError(e.message));
     const retry = () => { bridge.updates.retry?.().catch(() => {}); };
     window.addEventListener('online', retry);
@@ -98,7 +99,8 @@ export default function DesktopWorkstation() {
     if (updatePending.current && !cancelDownload) return;
     updatePending.current = true; setUpdateBusy(true); setUpdateError('');
     const generation = ++updateGeneration.current;
-    try { const state = await action(); if (generation === updateGeneration.current) setUpdate(state); }
+    const revision = updateStatusRevision.current;
+    try { const state = await action(); if (generation === updateGeneration.current && revision === updateStatusRevision.current) setUpdate(state); }
     catch (e) { if (generation === updateGeneration.current) setUpdateError(e.message || 'Update operation failed'); }
     finally { if (generation === updateGeneration.current) { updatePending.current = false; setUpdateBusy(false); } }
   };

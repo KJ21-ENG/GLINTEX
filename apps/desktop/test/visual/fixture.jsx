@@ -46,7 +46,12 @@ window.glintexDesktop.updates = {
     if (window.fixtureDelayDownload) return new Promise(resolve => { window.fixtureFinishDownload = () => resolve(setUpdate({ state: 'ready', progress: 100, message: 'Simulated installer verified; no file downloaded.' })); window.fixtureCancelDownload = () => resolve(updateState); });
     return setUpdate({ state: 'ready', message: 'Simulated installer verified; no file downloaded.' });
   },
-  later: async () => setUpdate({ prompt: false }), cancel: async () => { const status = setUpdate({ state: 'available' }); window.fixtureCancelDownload?.(); return status; },
+  later: async () => setUpdate({ prompt: false }), cancel: async () => {
+    // Native cancellation can return its pre-abort snapshot after the status event.
+    const pending = { ...updateState };
+    setUpdate({ state: 'available' }); window.fixtureCancelDownload?.();
+    await Promise.resolve(); return pending;
+  },
   arm: async () => { window.fixtureUpdateChoice++; return setUpdate({ state: 'armed', message: 'Update selected. Finish work, disconnect the scale, then close GLINTEX to install.' }); },
   disarm: async () => { window.fixtureDisarmCalls++; setUpdate({ state: 'ready', message: 'Cancelling installation choice…' }); if (window.fixtureDelayDisarm) await new Promise(resolve => { window.fixtureFinishDisarm = resolve; }); return setUpdate({ state: 'ready', message: 'Installation cancelled.' }); },
 };

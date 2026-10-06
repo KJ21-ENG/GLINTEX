@@ -1,8 +1,10 @@
 import { useAuth } from '../../context/AuthContext';
 import React, { useEffect, useRef, useState } from 'react';
 import { buildPrintableArtifact } from '../../utils/labelBitmap';
+import { DEFAULT_SCALE_SETTINGS } from '../../utils/weightScaleParser';
+import ScaleSettingsFields from './ScaleSettingsFields';
 
-const initialScale = { path: '', baudRate: 9600, dataBits: 8, parity: 'none', stopBits: 1, flowControl: 'none', profileId: 'unknown', unit: 'kg', decimalPlaces: 3, stabilitySamples: 3, toleranceKg: 0.001, staleMs: 1500, minKg: 0, maxKg: 5000 };
+const initialScale = { path: '', ...DEFAULT_SCALE_SETTINGS };
 const fieldClass = 'border rounded bg-background px-2 py-1 w-full';
 const buttonClass = 'border rounded px-3 py-2 disabled:opacity-50 hover:bg-muted';
 function Field({ label, children }) { return <label className="block text-sm space-y-1"><span>{label}</span>{children}</label>; }
@@ -12,6 +14,7 @@ export default function DesktopWorkstation() {
   const canConfigure = user?.isAdmin || user?.permissions?.settings >= 2;
   const bridge = window.glintexDesktop;
   const [open, setOpen] = useState(false);
+  const setupRef = useRef(null);
   const [server, setServer] = useState({ state: 'checking' });
   const [scaleStatus, setScaleStatus] = useState({ state: 'not configured' });
   const [printerStatus, setPrinterStatus] = useState({});
@@ -69,6 +72,11 @@ export default function DesktopWorkstation() {
     return () => { live = false; clearInterval(timer); unsubscribe?.(); };
   }, [bridge]);
   useEffect(() => {
+    const showSetup = () => { setOpen(true); setupRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }); };
+    window.addEventListener('glintex:open-workstation', showSetup);
+    return () => window.removeEventListener('glintex:open-workstation', showSetup);
+  }, []);
+  useEffect(() => {
     if (!open || !bridge) return;
     refreshDevices().catch(e => setError(e.message));
     const timer = setInterval(() => bridge.printers.listJobs().then(setJobs).catch(() => {}), 5000);
@@ -102,7 +110,7 @@ export default function DesktopWorkstation() {
     artifact.templateSnapshot.stageKey = 'calibration';
     setTestArtifact(artifact); setMessage('Check the media dimensions and preview before submitting the test label. No production record is created.');
   }
-  return <section className="border-b bg-card text-foreground" aria-label="Desktop workstation">
+  return <section ref={setupRef} className="border-b bg-card text-foreground" aria-label="Desktop workstation">
     <div className="flex flex-wrap gap-4 items-center px-4 py-2 text-sm">
       <span>Server: {server.state}</span><span>Scale: {scaleLabel}</span>
       <span>Printer: {printerStatus.available ? `${printerStatus.profile?.printerName || 'Selected'} (installed)` : 'unavailable / not selected'}</span>
@@ -159,25 +167,18 @@ export default function DesktopWorkstation() {
         <p className="text-sm">Select the exact scale and its documented protocol. Unknown protocol never produces a measurement. Disconnect before changing settings; no automatic port substitution.</p>
         <div className="grid sm:grid-cols-3 gap-3">
           <Field label="COM port"><select className={fieldClass} value={scale.path} onChange={e => { const device = ports.find(p => p.path === e.target.value); setScale(s => ({ ...s, path: e.target.value, serialNumber: device?.serialNumber || undefined, vendorId: device?.vendorId || undefined, productId: device?.productId || undefined, pnpId: device?.pnpId || undefined })); }}><option value="">Choose scale</option>{scale.path && !ports.some(p => p.path === scale.path) && <option value={scale.path}>{scale.path} (not present)</option>}{ports.map(p => <option key={p.path} value={p.path}>{p.path} {p.manufacturer || ''} {p.serialNumber || ''}</option>)}</select></Field>
-          <Field label="Protocol"><select className={fieldClass} value={scale.profileId} onChange={e => changeScale('profileId', e.target.value)}><option value="unknown">Unknown / diagnostics only</option><option value="st-us-line">ST / US explicit-unit line</option><option value="explicit-unit-line">Explicit unit line (sample stability)</option><option value="bracket-integer">Bracket integer (configured decimal scale)</option></select></Field>
-          <Field label="Baud rate"><select className={fieldClass} value={scale.baudRate} onChange={e => changeScale('baudRate', Number(e.target.value))}>{[1200,2400,4800,9600,19200,38400,57600,115200].map(v => <option key={v}>{v}</option>)}</select></Field>
-          <Field label="Data bits"><select className={fieldClass} value={scale.dataBits} onChange={e => changeScale('dataBits', Number(e.target.value))}>{[7,8].map(v => <option key={v}>{v}</option>)}</select></Field>
-          <Field label="Parity"><select className={fieldClass} value={scale.parity} onChange={e => changeScale('parity', e.target.value)}>{['none','even','odd'].map(v => <option key={v}>{v}</option>)}</select></Field>
-          <Field label="Stop bits"><select className={fieldClass} value={scale.stopBits} onChange={e => changeScale('stopBits', Number(e.target.value))}>{[1,2].map(v => <option key={v}>{v}</option>)}</select></Field>
-          <Field label="Flow control"><select className={fieldClass} value={scale.flowControl} onChange={e => changeScale('flowControl', e.target.value)}>{['none','rtscts'].map(v => <option key={v}>{v}</option>)}</select></Field>
-          <Field label="Integer-profile unit"><select className={fieldClass} value={scale.unit} onChange={e => changeScale('unit', e.target.value)}>{['kg','g','lb','oz'].map(v => <option key={v}>{v}</option>)}</select></Field>
-          <Field label="Integer decimal places"><input className={fieldClass} type="number" min="0" max="6" value={scale.decimalPlaces} onChange={e => changeScale('decimalPlaces', Number(e.target.value))}/></Field>
           <Field label="Stable sample count"><input className={fieldClass} type="number" min="2" max="20" value={scale.stabilitySamples} onChange={e => changeScale('stabilitySamples', Number(e.target.value))}/></Field>
           <Field label="Stability tolerance (kg)"><input className={fieldClass} type="number" min="0" step="0.0001" value={scale.toleranceKg} onChange={e => changeScale('toleranceKg', Number(e.target.value))}/></Field>
           <Field label="Minimum accepted weight (kg)"><input className={fieldClass} type="number" value={scale.minKg} onChange={e => changeScale('minKg', Number(e.target.value))}/></Field>
           <Field label="Maximum accepted weight (kg)"><input className={fieldClass} type="number" value={scale.maxKg} onChange={e => changeScale('maxKg', Number(e.target.value))}/></Field>
           <Field label="Stale after (ms)"><input className={fieldClass} type="number" min="100" max="10000" value={scale.staleMs} onChange={e => changeScale('staleMs', Number(e.target.value))}/></Field>
         </div>
+        <ScaleSettingsFields value={scale} onChange={changeScale} disabled={busy || !canConfigure}/>
         <div className="flex flex-wrap gap-2">
           <button type="button" className={buttonClass} onClick={() => act(async () => { await bridge.scale.configure(scale); setMessage('Scale settings saved.'); })}>Save scale settings</button>
           <button type="button" className={buttonClass} onClick={() => act(() => bridge.scale.connect())}>Connect saved scale</button>
           <button type="button" className={buttonClass} onClick={() => act(() => bridge.scale.disconnect())}>Disconnect</button>
-          <button type="button" className={buttonClass} onClick={() => act(async () => { const r = await bridge.scale.capture({ timeoutMs: 8000 }); setMessage(`Test capture: ${r.weightKg} kg · ${r.captureId}. Diagnostic only; no receipt saved.`); })}>Test fresh capture</button>
+          <button type="button" className={buttonClass} disabled={!scaleStatus.isConnected || scaleStatus.config?.profileId === 'unknown'} onClick={() => act(async () => { const r = await bridge.scale.capture({ timeoutMs: 8000 }); setMessage(`Test capture: ${r.weightKg} kg · ${r.captureId}. Diagnostic only; no receipt saved.`); })}>Test fresh capture</button>
           <button type="button" className={buttonClass} onClick={() => setDiagnostics(v => !v)}>{diagnostics ? 'Hide' : 'Show'} bounded diagnostics</button>
         </div>
         {scaleStatus.identityWarning && <p className="text-amber-700">{scaleStatus.identityWarning}</p>}

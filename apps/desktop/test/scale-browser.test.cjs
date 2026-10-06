@@ -43,6 +43,7 @@ test("browser USB metadata, retained baud diagnostics and complete-frame capture
   });
   const { getScaleManager } = await import(moduleUrl + "?browser-test");
   const manager = getScaleManager();
+  await manager.configure({ profileId: 'st-us-line' });
   t.after(async () => {
     await manager.disconnect();
     delete globalThis.navigator;

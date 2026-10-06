@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $env:CI -or $env:OS -ne 'Windows_NT') { throw 'Isolated Windows CI fixture only.' }
 Import-Module ([IO.Path]::Combine($PSHOME,'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1')) -ErrorAction Stop
 Import-Module ([IO.Path]::Combine($PSHOME,'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1')) -ErrorAction Stop
+Import-Module ([IO.Path]::Combine($PSHOME,'Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1')) -ErrorAction Stop
 $source = Join-Path $PSScriptRoot '../../../hardware/scale-driver/Install-ScaleDriver.ps1'
 $manifestPath = Join-Path (Split-Path $source) 'manifest.json'
 if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -ine '6ece02cbcf3e84a1a1168a11652cb22a63bac358c12e6a77f2804fd77dad4f67') { throw 'Test manifest identity mismatch.' }

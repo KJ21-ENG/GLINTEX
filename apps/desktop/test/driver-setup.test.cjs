@@ -26,7 +26,7 @@ async function fixture(t, options = {}) {
       if (exe.endsWith("expand.exe")) { for (const [name, bytes] of Object.entries(files)) await fs.writeFile(path.join(args[2], name), bytes); return { stdout: "extracted" }; }
       assert.ok(exe.endsWith("powershell.exe"));
       const command = Buffer.from(args.at(-1), "base64").toString("utf16le");
-      assert.match(command, /Get-AuthenticodeSignature -LiteralPath/); assert.doesNotMatch(command, /Invoke-Expression|Start-Process|RunAs|Install-ScaleDriver/i);
+      assert.match(command, /Get-AuthenticodeSignature -LiteralPath/); assert.ok(command.includes("Import-Module ([IO.Path]::Combine($PSHOME")); assert.ok(command.includes("Microsoft.PowerShell.Security.psd1")); assert.ok(command.includes("Microsoft.PowerShell.Utility.psd1")); assert.ok(!command.includes("$env:PSModulePath")); assert.doesNotMatch(command, /Invoke-Expression|Start-Process|RunAs|Install-ScaleDriver/i);
       assert.ok(command.includes("user''s [path] $()"), "paths are literal quoted, including apostrophes and metacharacters");
       await options.duringSignature?.(helper, calls);
       return { stdout: JSON.stringify(["plser.cat", "plser64.dll", "plser64.sys"].map(Name => ({ Name, Status: options.invalidSignature ? "NotSigned" : "Valid", Subject: "Microsoft Windows Hardware Compatibility Publisher" }))) };

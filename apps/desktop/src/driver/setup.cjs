@@ -77,7 +77,7 @@ class DriverSetup {
   async verify(directory, manifest) {
     await this.checkFiles(directory, manifest);
     const files = signatureFiles.map(name => literal(path.join(directory, name))).join(",");
-    const command = "$ErrorActionPreference='Stop'; @(" + files + ") | ForEach-Object { $s=Microsoft.PowerShell.Security\\Get-AuthenticodeSignature -LiteralPath $_; [pscustomobject]@{Name=[IO.Path]::GetFileName($_);Status=[string]$s.Status;Subject=[string]$s.SignerCertificate.Subject} } | ConvertTo-Json -Compress";
+    const command = "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; Import-Module ([IO.Path]::Combine($PSHOME,'Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1')) -ErrorAction Stop; Import-Module ([IO.Path]::Combine($PSHOME,'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1')) -ErrorAction Stop; @(" + files + ") | ForEach-Object { $s=Microsoft.PowerShell.Security\\Get-AuthenticodeSignature -LiteralPath $_; [pscustomobject]@{Name=[IO.Path]::GetFileName($_);Status=[string]$s.Status;Subject=[string]$s.SignerCertificate.Subject} } | ConvertTo-Json -Compress";
     const executable = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     const { stdout } = await this.run(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")], { windowsHide: true, timeout: 60000, maxBuffer: 65536 });
     const signatures = JSON.parse(stdout.replace(/^\uFEFF/, "").trim());

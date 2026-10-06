@@ -57,3 +57,9 @@ For substantial Advanced work, create a task capsule with declared scope, preser
 
 Use the global `project-workflow` skill and CLI for selection, task capsules, checkpoints, semantic validation, repair, gaps, and approved evolution.
 <!-- project-workflow:end -->
+
+## Retired staging environment
+
+The Dispatch V2 VPS staging environment was retired on 2026-10-06 at the owner's request. Do not recreate `/var/www/glintex-staging`, the `glintex-staging` Compose project, its database/backups, `staging.glintex.in`, or its deployment workflow without new explicit authorization. `release/dispatch-v2` is a retained source branch, not an active deployment target.
+
+Production remains `/var/www/glintex-app`, the `glintex-app-*` containers, `glintex-app_postgres-data`, `app.glintex.in`, and loopback ports `4002`/`4173`. Production changes require separate explicit authorization. Validate features and hotfixes in an explicitly scoped temporary environment; forward-port production hotfixes to active development branches without deploying retired staging.

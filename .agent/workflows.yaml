@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "workflow_version": 1,
+  "workflow_version": 2,
   "status": "evidence-inferred",
   "project_kind": "brownfield",
   "archetype": "generic-software-project",
@@ -83,7 +83,10 @@
     },
     "runtime_surfaces": [
       "web-assets"
-    ]
+    ],
+    "steward_notes": {
+      "retired_staging": "Retired 2026-10-06: glintex-staging VPS stack/database/backups deleted, GitHub staging workflow disabled and environment removed. release/dispatch-v2 has no active staging target. Recreation requires new explicit user authorization. Preserve production containers, volume, app.glintex.in and ports 4002/4173."
+    }
   },
   "authority_classes": {
     "observe": "Read-only inspection and analysis.",
@@ -151,5 +154,9 @@
     "repeat_threshold": 2,
     "steward_approval_required": true,
     "protected_policy_approval_required": true
-  }
+  },
+  "last_evolved_at": "2026-10-06T11:17:00Z",
+  "last_evolved_by": "Kush",
+  "last_change": "Owner retired persistent VPS staging on 2026-10-06; preserve production and require new authority before recreation.",
+  "last_protected_policy_approval": "User teardown request in task 01a03e28-5bfc-7202-958a-5ef78b4f744b on 2026-10-06"
 }

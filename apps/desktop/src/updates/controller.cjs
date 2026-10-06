@@ -4,6 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { compareVersions, validateRelease, MAX_BYTES } = require("./protocol.cjs");
+const { retryStatusAccess, waitForHelper } = require('./status-file.cjs');
 const PREFIX = "/api/desktop/releases/windows-x64";
 async function hashFile(file) {
   const hash = crypto.createHash("sha256");
@@ -15,11 +16,11 @@ async function hashFile(file) {
 const quote = value => "'" + String(value).replaceAll("'", "''") + "'";
 function launchCommand({ file, release, marker, parentPid, silent = false, statusFile }) {
   // Fixed PowerShell command, no renderer paths/arguments; rehash after app exit.
-  return `$ErrorActionPreference='Stop'; function Report([string]$state,[string]$message=''){ @{state=$state; message=$message; version=${quote(release.version)}; parentPid=${parentPid}; at=(Get-Date).ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress | Set-Content -LiteralPath ${quote(statusFile)} -Encoding UTF8 }; try { Report 'waiting'; $deadline=(Get-Date).AddSeconds(120); while($true){$parent=Get-Process -Id ${parentPid} -ErrorAction SilentlyContinue; if(-not $parent -or $parent.HasExited){if($parent){$parent.Dispose()}; break}; $parent.Dispose(); if(-not(Test-Path -LiteralPath ${quote(marker)}) -or (Get-Date) -gt $deadline){Report 'cancelled'; exit 2}; Start-Sleep -Milliseconds 250}; if(-not(Test-Path -LiteralPath ${quote(marker)})){Report 'cancelled'; exit 2}; Report 'parent-closed'; $stream=[IO.File]::OpenRead(${quote(file)}); $hasher=[Security.Cryptography.SHA256]::Create(); try { if($stream.Length -ne ${release.bytes} -or [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-','').ToLowerInvariant() -ne '${release.sha256}'){throw 'Update integrity check failed'} } finally { $hasher.Dispose(); $stream.Dispose() }; Remove-Item -LiteralPath ${quote(marker)}; Report 'verified'; $installer=Start-Process -FilePath ${quote(file)} -WorkingDirectory ${quote(path.win32.dirname(file))}${silent ? " -ArgumentList '--silent'" : ""} -PassThru -Wait; if($installer.ExitCode -ne 0){throw ('Installer exited '+$installer.ExitCode)}; Report 'completed' } catch { Report 'failed' $_.Exception.Message; exit 1 }`;
+  return `$ErrorActionPreference='Stop'; function Report([string]$state,[string]$message=''){ $json=@{state=$state; message=$message; version=${quote(release.version)}; parentPid=${parentPid}; at=(Get-Date).ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress; $temporary=${quote(statusFile)}+'.'+[Guid]::NewGuid().ToString('N')+'.tmp'; $reportDeadline=(Get-Date).AddSeconds(3); try { while($true){ try { [IO.File]::WriteAllText($temporary,$json,(New-Object Text.UTF8Encoding($false))); Move-Item -LiteralPath $temporary -Destination ${quote(statusFile)} -Force -ErrorAction Stop; break } catch { if((Get-Date)-ge $reportDeadline -or ($_.Exception -isnot [IO.IOException] -and $_.Exception -isnot [UnauthorizedAccessException])){throw}; Start-Sleep -Milliseconds 100 } } } finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue } }; try { Report 'waiting'; $deadline=(Get-Date).AddSeconds(120); while($true){$parent=Get-Process -Id ${parentPid} -ErrorAction SilentlyContinue; if(-not $parent -or $parent.HasExited){if($parent){$parent.Dispose()}; break}; $parent.Dispose(); if(-not(Test-Path -LiteralPath ${quote(marker)}) -or (Get-Date) -gt $deadline){Report 'cancelled'; exit 2}; Start-Sleep -Milliseconds 250}; if(-not(Test-Path -LiteralPath ${quote(marker)})){Report 'cancelled'; exit 2}; Report 'parent-closed'; $stream=[IO.File]::OpenRead(${quote(file)}); $hasher=[Security.Cryptography.SHA256]::Create(); try { if($stream.Length -ne ${release.bytes} -or [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-','').ToLowerInvariant() -ne '${release.sha256}'){throw 'Update integrity check failed'} } finally { $hasher.Dispose(); $stream.Dispose() }; Remove-Item -LiteralPath ${quote(marker)}; Report 'verified'; $installer=Start-Process -FilePath ${quote(file)} -WorkingDirectory ${quote(path.win32.dirname(file))}${silent ? " -ArgumentList '--silent'" : ""} -PassThru -Wait; if($installer.ExitCode -ne 0){throw ('Installer exited '+$installer.ExitCode)}; Report 'completed' } catch { Report 'failed' $_.Exception.Message; exit 1 }`;
 }
 async function launchAfterExit(options) {
   const statusFile = path.join(path.dirname(options.marker), 'install-status.json');
-  await fs.rm(statusFile, { force: true });
+  await retryStatusAccess(() => fs.rm(statusFile, { force: true }));
   const command = launchCommand({ ...options, statusFile });
   const hostDirectory = options.hostDirectory || path.join(process.resourcesPath, 'update-host');
   const identity = JSON.parse(await fs.readFile(path.join(hostDirectory, 'identity.json'), 'utf8'));
@@ -35,24 +36,7 @@ async function launchAfterExit(options) {
   const child = spawn(executable, [Buffer.from(command, "utf16le").toString("base64")], { detached: true, windowsHide: true, stdio: "ignore" });
   // A successful spawn does not prove PowerShell parsed/started the helper. Keep
   // the application open until the helper acknowledges it is waiting for us.
-  let failure;
-  child.once('error', error => { failure = error; });
-  child.once('exit', code => { failure = new Error(`Update helper exited before acknowledgement (${code})`); });
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    if (failure) throw failure;
-    try {
-      const text = await fs.readFile(statusFile, 'utf8');
-      if (text.length <= 4096) {
-        const status = JSON.parse(text.replace(/^\uFEFF/, ''));
-        if (status.state === 'waiting' && status.parentPid === options.parentPid && status.version === options.release.version) { child.unref(); return; }
-        if (status.state === 'failed') throw new Error('The Windows update helper could not start. GLINTEX remains open.');
-      }
-    } catch (error) { if (!['ENOENT'].includes(error.code) && !(error instanceof SyntaxError)) { child.kill(); throw error; } }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  child.kill();
-  throw new Error('The Windows update helper did not acknowledge startup. GLINTEX remains open.');
+  await waitForHelper(child, statusFile, options);
 }
 class UpdateController extends EventEmitter {
   constructor({ version, directory, fetch, origin = "https://app.glintex.in", supported = process.platform === "win32" && process.arch === "x64", fixture = false, launch = launchAfterExit, clock = Date.now }) {

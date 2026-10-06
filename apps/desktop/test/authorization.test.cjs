@@ -7,6 +7,12 @@ const {
 } = require("../src/authorization.cjs");
 test("logged-out hardware access rejected", () =>
   assert.throws(() => assertPermission(null, "scale.capture")));
+test("optional driver setup requires a signed-in Settings writer", () => {
+  for (const user of [null, { id: "reader", permissions: { settings: 1 } }, { id: "operator", permissions: { inbound: 2 } }])
+    assert.throws(() => assertPermission(user, "scale.driverSetup"));
+  for (const user of [{ id: "writer", permissions: { settings: 2 } }, { id: "admin", isAdmin: true }])
+    assert.doesNotThrow(() => assertPermission(user, "scale.driverSetup"));
+});
 test("settings writes and print stages preserve role boundaries", () => {
   const user = { id: "operator", permissions: { "receive.cutter": 2 } };
   assert.doesNotThrow(() => assertPermission(user, "scale.capture"));

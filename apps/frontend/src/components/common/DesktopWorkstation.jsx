@@ -1,5 +1,5 @@
 import { useAuth } from '../../context/AuthContext';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { buildPrintableArtifact } from '../../utils/labelBitmap';
 
 const initialScale = { path: '', baudRate: 9600, dataBits: 8, parity: 'none', stopBits: 1, flowControl: 'none', profileId: 'unknown', unit: 'kg', decimalPlaces: 3, stabilitySamples: 3, toleranceKg: 0.001, staleMs: 1500, minKg: 0, maxKg: 5000 };
@@ -16,6 +16,11 @@ export default function DesktopWorkstation() {
   const [scaleStatus, setScaleStatus] = useState({ state: 'not configured' });
   const [printerStatus, setPrinterStatus] = useState({});
   const [controller, setController] = useState({});
+  const [update, setUpdate] = useState({ state: 'idle' });
+  const [updateError, setUpdateError] = useState('');
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const updatePending = useRef(false);
+  const updateGeneration = useRef(0);
   const [scale, setScale] = useState(initialScale);
   const [ports, setPorts] = useState([]);
   const [printers, setPrinters] = useState([]);
@@ -25,6 +30,7 @@ export default function DesktopWorkstation() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [driverResult, setDriverResult] = useState(null);
   const [diagnostics, setDiagnostics] = useState(false);
   const [testArtifact, setTestArtifact] = useState(null);
   const [media, setMedia] = useState({ width: 48, height: 25, pageWidth: 104, columns: 2, horizontalGap: 2, verticalGap: 2, marginLeft: 0, marginTop: 0, offsetX: 0, offsetY: 0 });
@@ -68,7 +74,20 @@ export default function DesktopWorkstation() {
     const timer = setInterval(() => bridge.printers.listJobs().then(setJobs).catch(() => {}), 5000);
     return () => clearInterval(timer);
   }, [open, bridge]);
+  useEffect(() => {
+    if (!bridge?.updates) return;
+    bridge.updates.status().then(setUpdate).catch(e => setUpdateError(e.message));
+    return bridge.updates.onStatus(setUpdate);
+  }, [bridge]);
   if (!bridge) return null;
+  const updateAction = async (action, cancelDownload = false) => {
+    if (updatePending.current && !cancelDownload) return;
+    updatePending.current = true; setUpdateBusy(true); setUpdateError('');
+    const generation = ++updateGeneration.current;
+    try { const state = await action(); if (generation === updateGeneration.current) setUpdate(state); }
+    catch (e) { if (generation === updateGeneration.current) setUpdateError(e.message || 'Update operation failed'); }
+    finally { if (generation === updateGeneration.current) { updatePending.current = false; setUpdateBusy(false); } }
+  };
   const changeScale = (key, value) => setScale(s => ({ ...s, [key]: value }));
   const changeMedia = (key, value) => { setMedia(s => ({ ...s, [key]: Number(value) })); setTestArtifact(null); };
   const scaleLabel = scaleStatus.state || scaleStatus.status || (scaleStatus.isConnected ? 'connected' : 'disconnected');
@@ -87,8 +106,25 @@ export default function DesktopWorkstation() {
     <div className="flex flex-wrap gap-4 items-center px-4 py-2 text-sm">
       <span>Server: {server.state}</span><span>Scale: {scaleLabel}</span>
       <span>Printer: {printerStatus.available ? `${printerStatus.profile?.printerName || 'Selected'} (installed)` : 'unavailable / not selected'}</span>
+      <span>GLINTEX {controller.version || update.installedVersion || '…'}</span>
       <button type="button" className="underline ml-auto" onClick={() => setOpen(v => !v)} aria-expanded={open}>Workstation setup & print jobs</button>
     </div>
+    {bridge.updates && (open || update.prompt || ['downloading','armed'].includes(update.state)) && <section aria-label="Application updates" className="border-t p-3 space-y-2">
+      <h2 className="font-semibold">Application updates · installed {update.installedVersion || controller.version}</h2>
+      <p role="status" className="text-sm">{update.message}{update.state === 'downloading' ? ` ${update.progress || 0}%` : ''}</p>
+      {update.release && <p className="text-sm">Release {update.release.version} · {update.release.publishedAt} · {update.release.notes}</p>}
+      {updateError && <p role="alert" className="text-sm text-destructive">{updateError}</p>}
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={buttonClass} disabled={updateBusy || ['unsupported','checking','downloading','armed','installing'].includes(update.state)} onClick={() => updateAction(bridge.updates.check)}>Check for updates</button>
+        {update.release && ['available','error'].includes(update.state) && <button type="button" className={buttonClass} disabled={updateBusy} onClick={() => updateAction(bridge.updates.download)}>Download update</button>}
+        {update.state === 'downloading' && <button type="button" className={buttonClass} onClick={() => updateAction(bridge.updates.cancel, true)}>Cancel download</button>}
+        {update.state === 'ready' && <button type="button" className={buttonClass} disabled={updateBusy} onClick={() => updateAction(bridge.updates.arm)}>Install after I close GLINTEX</button>}
+        {update.state === 'armed' && <button type="button" className={buttonClass} disabled={updateBusy} onClick={() => updateAction(bridge.updates.disarm)}>Cancel installation choice</button>}
+        {['available','ready','error'].includes(update.state) && <button type="button" className={buttonClass} disabled={updateBusy} onClick={() => updateAction(bridge.updates.later)}>Later</button>}
+        {!update.release && ['current','signin','unavailable'].includes(update.state) && update.prompt && <button type="button" className={buttonClass} disabled={updateBusy} onClick={() => updateAction(bridge.updates.later)}>Dismiss</button>}
+      </div>
+      {update.release && <p className="text-xs">Private download uses your GLINTEX sign-in and verifies installer size and SHA-256. This is an unsigned test installer. Finish and save work, disconnect the scale and check the Windows print queue before closing; a final confirmation is required. Windows will not be restarted.</p>}
+    </section>}
     {open && <div className="p-4 space-y-5 max-h-[75vh] overflow-auto border-t">
       <div className="text-xs text-muted-foreground">Controller {controller.version || '…'} · API {controller.apiOrigin || server.apiOrigin} · Settings apply to this Windows user on this workstation</div>
       {error && <div role="alert" className="border border-destructive text-destructive rounded p-3">{error}</div>}
@@ -99,6 +135,25 @@ export default function DesktopWorkstation() {
       {!canConfigure && <p className="text-sm">Device configuration requires Settings write permission. Contact your administrator to change this workstation.</p>}
       <button type="button" className={buttonClass} disabled={busy} onClick={() => act(refreshDevices)}>Refresh devices and jobs</button>
       <button type="button" className={`${buttonClass} ml-2`} disabled={busy} onClick={() => act(async () => { const saved = await bridge.settings.get(); setScale({ ...initialScale, ...saved.scale }); setPrinter(saved.printer || { printerName: '', dpi: 203 }); setStartAtLogin(Boolean(saved.startAtLogin)); setTestArtifact(null); setMessage('Saved workstation settings reloaded.'); })}>Reload saved settings</button>
+      {controller.scaleDriver?.available && <section className="border rounded p-3 space-y-2" aria-label="Optional scale driver setup">
+        <h2 className="font-semibold">Optional one-time scale driver setup</h2>
+        <p className="text-sm">For the BAFO BF-812 / Prolific PL2303GT adapter with hardware ID USB\VID_067B&amp;PID_23A3&amp;REV_0305 on Windows 10 x64. The Windows driver exposes a COM port; GLINTEX still needs the correct port and scale protocol. Leave a working driver unchanged.</p>
+        <p className="text-sm">Preparation downloads and verifies the pinned Microsoft package, or verifies a prepared offline cache. It runs with your current permissions and installs nothing. Disconnect the scale in GLINTEX before preparation.</p>
+        <button type="button" className={buttonClass} disabled={busy || !canConfigure || scaleStatus.isConnected || scaleLabel === 'connecting'} onClick={() => act(async () => {
+          setDriverResult(null);
+          const result = await bridge.scale.driverSetup(); setDriverResult(result);
+          if (!result.success) throw new Error('Driver preparation failed. No driver was installed or changed. Review the log below.');
+          setMessage('Driver package verified. No driver was installed. If needed, continue in Windows Device Manager as described below.');
+        })}>Prepare verified scale driver</button>
+        {driverResult?.success && <div className="text-sm space-y-2">
+          <p>Open Device Manager from Windows Start. Check the adapter’s Hardware IDs: use this package only for USB\VID_067B&amp;PID_23A3&amp;REV_0305 on Windows 10 x64. If the adapter already has a working COM port, skip installation.</p>
+          <p>If the compatible adapter has no working driver: select it &gt; Update driver &gt; Browse my computer for drivers and select this verified folder:</p>
+          <p className="font-mono break-all select-all">{driverResult.packageDirectory}</p>
+          <p>Windows handles administrator permission and checks the signed driver package. Do not run the bundled scripts as administrator. Follow any Windows restart request manually.</p>
+          <p>Then refresh devices, select this PC’s actual COM port, save the documented scale settings, connect and test a fresh capture.</p>
+        </div>}
+        {driverResult && <details open={!driverResult.success}><summary className="cursor-pointer">Driver preparation log</summary><p className="text-xs break-all">{driverResult.logPath}</p><pre className="text-xs whitespace-pre-wrap max-h-48 overflow-auto">{driverResult.output}</pre></details>}
+      </section>}
       <fieldset className="border rounded p-3 space-y-3" disabled={busy || !canConfigure}>
         <legend className="px-2 font-semibold">Scale connection</legend>
         <p className="text-sm">Select the exact scale and its documented protocol. Unknown protocol never produces a measurement. Disconnect before changing settings; no automatic port substitution.</p>

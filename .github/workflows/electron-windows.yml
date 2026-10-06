@@ -7,6 +7,11 @@ on:
         type: boolean
         required: true
         default: false
+      bootstrap_installer_path:
+        description: 'Path to an already staged, verified delivered-version installer on the runner. Missing fixture fails release verification; use the private build pipeline for delivery.'
+        type: string
+        required: false
+        default: ''
   push:
     branches: ['codex/electron-*']
     paths:
@@ -34,10 +39,17 @@ jobs:
     env:
       PUPPETEER_SKIP_DOWNLOAD: 'true'
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      EXPECTED_SOURCE_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Require verified delivered-version fixture before release checks
+        env:
+          BOOTSTRAP_INSTALLER: ${{ inputs.bootstrap_installer_path }}
+        run: |
+          if (-not $env:BOOTSTRAP_INSTALLER -or -not (Test-Path -LiteralPath $env:BOOTSTRAP_INSTALLER -PathType Leaf)) { throw 'Delivered-version fixture missing. Use the authorized private pipeline; do not copy credentials or publish a private fixture.' }
+          if ((Get-Item -LiteralPath $env:BOOTSTRAP_INSTALLER).Length -ne 161559552 -or (Get-FileHash -LiteralPath $env:BOOTSTRAP_INSTALLER -Algorithm SHA256).Hash.ToLower() -ne '320549a24659b6418db4c95bee582b08d1c6c0a40299d13651e3100ed40b2a64') { throw 'The delivered1.1.0 fixture checksum does not match.' }
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -68,9 +80,12 @@ jobs:
           npm run make --workspaces=false
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force out/delivery | Out-Null
+          New-Item -ItemType Directory -Force out/verification | Out-Null
           Copy-Item out/make/squirrel.windows/x64/* out/delivery/
           Copy-Item build-info.json out/delivery/
           $packaged = Get-ChildItem out -Directory -Filter '*-win32-x64' | Select-Object -First 1
+          node scripts/audit-package.cjs $packaged.FullName | Set-Content out/verification/package-audit.json
+          if ($LASTEXITCODE -ne 0) { throw 'Complete package audit failed' }
           Copy-Item -Recurse $packaged.FullName out/base-package
           Copy-Item ../../docs/desktop-windows.md out/delivery/
           $source = git rev-parse HEAD
@@ -89,11 +104,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Upgrade fixture packaging failed' }
           } finally { Move-Item -Force package.json.before-upgrade package.json }
       - name: Verify packaged launch, installation, upgrade, shortcuts and uninstall
+        env:
+          BOOTSTRAP_INSTALLER: ${{ inputs.bootstrap_installer_path }}
         run: |
+          if (-not $env:BOOTSTRAP_INSTALLER -or -not (Test-Path -LiteralPath $env:BOOTSTRAP_INSTALLER -PathType Leaf)) { throw 'Delivered-version fixture missing. Use the authorized private pipeline; do not copy credentials or publish a private fixture.' }
           $installer = Get-ChildItem apps/desktop/out/delivery/*Setup.exe | Select-Object -First 1
-          $upgrade = Get-ChildItem apps/desktop/out/make/squirrel.windows/x64/*Setup.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $v = [version](Get-Content apps/desktop/package.json | ConvertFrom-Json).version
+          $next = "$($v.Major).$($v.Minor).$($v.Build + 1)"
+          $upgrade = Get-Item "apps/desktop/out/make/squirrel.windows/x64/GLINTEX-$next-x64-Setup.exe"
           $packaged = Get-ChildItem apps/desktop/out/base-package/GLINTEX.exe | Select-Object -First 1
-          ./apps/desktop/scripts/windows-verify.ps1 -PackagedExe $packaged.FullName -Installer $installer.FullName -UpgradeInstaller $upgrade.FullName
+          ./apps/desktop/scripts/windows-verify.ps1 -PackagedExe $packaged.FullName -Installer $installer.FullName -UpgradeInstaller $upgrade.FullName -BootstrapInstaller $env:BOOTSTRAP_INSTALLER -BootstrapVersion 1.1.0
       - name: Upload installer and verification evidence
         if: success()
         uses: actions/upload-artifact@v7

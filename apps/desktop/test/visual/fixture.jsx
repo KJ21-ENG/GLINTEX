@@ -21,6 +21,31 @@ const ports=[{path:'COM7',serialNumber:'SIMULATED-ONLY',manufacturer:'QA fixture
 const jobs=[{id:'fixture-job-uncertain',state:'outcome uncertain',createdAt:'2026-10-05T08:00:00.000Z',profile,error:'Simulated timeout: check labels before reprinting'}];
 window.glintexDesktop={getController:async()=>({version:'1.0.0-test',platform:'win32',capabilities:['printing','serial']}),settings:{get:async()=>({printer:profile}),update:async v=>v},server:{status:async()=>({state:'connected'})},scale:{status:async()=>({state:'unsupported',error:'Select a verified protocol. No scale connected.'}),enumerate:async()=>ports,onStatus:()=>()=>{},configure:async v=>v,diagnostics:async()=>[],capture:async()=>{throw Error('Unknown scale protocol; capture refused')}},printers:{status:async()=>({profile,available:true,pending:0}),enumerate:async()=>[{name:profile.printerName}],configure:async v=>v,listJobs:async()=>jobs,reprint:async()=>({success:false,error:'Simulated offline printer'}),submit:async()=>({success:false,error:'Simulated offline printer'})}};
 createRoot(document.getElementById('editor')).render(<MemoryRouter><LabelDesigner/></MemoryRouter>);
+// Synthetic helper outcomes only: this fixture never launches PowerShell.
+let driverExit = 0, connected = false;
+window.fixtureDisarmCalls = 0;
+window.fixtureDelayDisarm = false;
+window.fixtureDriverCalls = 0;
+window.fixtureDriverOutcome = code => { driverExit = code; };
+window.fixtureScaleConnected = value => { connected = value; };
+window.glintexDesktop.getController = async () => ({ version: '1.1.1-fixture', scaleDriver: { available: true } });
+let updateState = { state: 'current', installedVersion: '1.1.1', message: 'No newer version is available.' }, updateListener;
+const setUpdate = values => { updateState = { ...updateState, ...values }; updateListener?.(updateState); return updateState; };
+window.fixtureUpdateFeedback = state => setUpdate({ state, release: null, prompt: true, message: ({current:'No newer version is available.',signin:'Sign in again to check private updates.',unavailable:'Private update hosting is unavailable.',error:'Could not check for updates. Check your connection and retry.'})[state] });
+window.fixtureUpdateChoice = 0;
+window.glintexDesktop.updates = {
+  status: async () => updateState, onStatus: callback => { updateListener = callback; return () => { updateListener = null; }; },
+  check: async () => setUpdate({ state: 'available', prompt: true, message: 'GLINTEX 1.1.2 is available.', release: { version: '1.1.2', publishedAt: '2026-10-05T00:00:00Z', notes: 'Simulated private update' } }),
+  download: async () => setUpdate({ state: 'ready', message: 'Simulated installer verified; no file downloaded.' }),
+  later: async () => setUpdate({ prompt: false }), cancel: async () => setUpdate({ state: 'available' }),
+  arm: async () => { window.fixtureUpdateChoice++; return setUpdate({ state: 'armed', message: 'Update selected. Finish work, disconnect the scale, then close GLINTEX to install.' }); },
+  disarm: async () => { window.fixtureDisarmCalls++; setUpdate({ state: 'ready', message: 'Cancelling installation choice…' }); if (window.fixtureDelayDisarm) await new Promise(resolve => { window.fixtureFinishDisarm = resolve; }); return setUpdate({ state: 'ready', message: 'Installation cancelled.' }); },
+};
+window.glintexDesktop.scale.status = async () => ({ state: connected ? 'connected' : 'unsupported', isConnected: connected, error: connected ? null : 'Select a verified protocol. No scale connected.' });
+window.glintexDesktop.scale.driverSetup = async () => {
+  window.fixtureDriverCalls++;
+  return { success: driverExit === 0, installed: false, elevationRequested: false, packageDirectory: 'SIMULATED user profile/scale-driver/cache/verified-package', logPath: 'SIMULATED user profile/scale-driver/prepare.log', output: driverExit ? 'SIMULATED checksum verification failure; no driver changed' : 'SIMULATED package verified; no driver installed' };
+};
 createRoot(document.getElementById('panel')).render(<AuthProvider><DesktopWorkstation/></AuthProvider>);
 const results=[];
 const data={barcode:'RCO-123456-C001',lotNo:'123456',seq:'0001',pieceId:'123456-0001',itemName:'POLYESTER METALLIC SILVER EXTRA LONG MATERIAL NAME',firmName:'GLINTEX',operatorName:'REPRESENTATIVE OPERATOR',machineName:'MACHINE 007',netWeight:'12.345',grossWeight:'13.000',tareWeight:'0.655',weight:'12.345',totalWeight:'24.690',date:'2026-10-05',cut:'1/64',twist:'120',yarnName:'POLYESTER',coneCount:'6',rollCount:'2',shift:'DAY'};

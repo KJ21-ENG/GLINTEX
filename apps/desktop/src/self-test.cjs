@@ -3,6 +3,8 @@ const http = require("node:http");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
+const { validateRelease } = require("./updates/protocol.cjs");
 const TEST_USER = {
   id: "fixture-operator",
   username: "fixture-operator",
@@ -13,6 +15,12 @@ const TEST_USER = {
   roleKeys: ["admin"],
 };
 async function startFixture() {
+  let updateRelease, installer;
+  if (process.env.GLINTEX_TEST_UPDATE_INSTALLER) {
+    installer = path.resolve(process.env.GLINTEX_TEST_UPDATE_INSTALLER);
+    const bytes = await fs.readFile(installer);
+    updateRelease = validateRelease({ schemaVersion: 1, product: "GLINTEX", platform: "win32", arch: "x64", channel: "stable", version: process.env.GLINTEX_TEST_UPDATE_VERSION, sourceCommit: require("../build-info.json").sourceCommit, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), signing: "unsigned-test-installer", notes: "Disposable next-version fixture; never publish", publishedAt: new Date().toISOString() });
+  }
   const server = http.createServer((req, res) => {
     res.setHeader("Content-Type", "application/json");
     const authorized = String(req.headers.cookie || "").includes(
@@ -50,6 +58,15 @@ async function startFixture() {
     }
     if (req.url === "/api/auth/me")
       return res.end(JSON.stringify({ ok: true, user: TEST_USER }));
+    if (req.url === "/api/fixture/hold") return setTimeout(() => res.end('{"ok":true,"simulatedPendingSave":true}'), 2000);
+    if (req.url === "/api/desktop/releases/windows-x64/latest") {
+      if (!updateRelease) { res.statusCode = 204; return res.end(); }
+      return res.end(JSON.stringify(updateRelease));
+    }
+    if (updateRelease && req.url === `/api/desktop/releases/windows-x64/${updateRelease.version}/setup`) {
+      res.setHeader("Content-Type", "application/octet-stream"); res.setHeader("Content-Length", updateRelease.bytes);
+      require("node:fs").createReadStream(installer).pipe(res); return;
+    }
     if (req.url === "/api/bootstrap")
       return res.end('{"slices":{},"allowed":{},"brand":{}}');
     if (req.url.startsWith("/api/module")) return res.end('{"slices":{}}');
@@ -85,6 +102,7 @@ async function runSelfTest({
     "return window.glintexDesktop.getController()",
   );
   assert.ok(controller.capabilities.includes("native-scale"));
+  if (process.platform === "win32") assert.equal(controller.scaleDriver.available, true, "packaged driver helper must exist outside ASAR");
   const frameCheck = await evaluate(
     `const frame=document.createElement('iframe');frame.style.display='none';document.body.appendChild(frame);frame.contentDocument.open();frame.contentDocument.write('<p>Challan fixture</p>');frame.contentDocument.close();const result={text:frame.contentDocument.body.innerText,bridge:typeof frame.contentWindow.glintexDesktop,print:typeof frame.contentWindow.print};frame.remove();return result;`,
   );
@@ -96,22 +114,30 @@ async function runSelfTest({
     evaluate(
       `return (await fetch(${JSON.stringify(route)},{credentials:'include'})).status`,
     );
-  if (phase === "first") {
-    await waitFor("document.querySelector('input[type=password]')!==null");
-    await assert.rejects(
-      evaluate("return window.glintexDesktop.printers.listJobs()"),
-    );
-    await evaluate(
-      `const inputs=document.querySelectorAll('form input');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;for(const [i,input] of Array.from(inputs).entries()){setter.call(input,i?'fixture-password':'fixture-operator');input.dispatchEvent(new Event('input',{bubbles:true}));}return true;`,
-    );
-    await waitFor(
-      "document.querySelector('form button[type=submit]') && !document.querySelector('form button[type=submit]').disabled",
-    );
-    await evaluate(
-      "document.querySelector('form button[type=submit]').click();return true;",
-    );
+  if (["first", "update", "restored"].includes(phase)) {
+    if (phase !== "restored") {
+      await waitFor("document.querySelector('input[type=password]')!==null");
+      await assert.rejects(
+        evaluate("return window.glintexDesktop.printers.listJobs()"),
+      );
+      await assert.rejects(evaluate("return window.glintexDesktop.scale.driverSetup()"));
+      if (process.platform === 'win32') assert.equal((await evaluate('return window.glintexDesktop.updates.check()')).state, 'signin');
+      await evaluate(
+        `const inputs=document.querySelectorAll('form input');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;for(const [i,input] of Array.from(inputs).entries()){setter.call(input,i?'fixture-password':'fixture-operator');input.dispatchEvent(new Event('input',{bubbles:true}));}return true;`,
+      );
+      await waitFor(
+        "document.querySelector('form button[type=submit]') && !document.querySelector('form button[type=submit]').disabled",
+      );
+      await evaluate(
+        "document.querySelector('form button[type=submit]').click();return true;",
+      );
+    }
     await waitFor("document.body.innerText.includes('Workstation setup')");
-    assert.equal(await fetchStatus("/api/auth/me"), 200);
+    assert.equal(await fetchStatus("/api/auth/me"), 200, "existing session must survive the authenticated upgrade");
+    if (process.platform === 'win32' && phase !== 'restored') {
+      await waitFor("!['signin','checking'].includes((await window.glintexDesktop.updates.status()).state)");
+      assert.equal((await evaluate('return window.glintexDesktop.updates.status()')).state, phase === 'update' ? 'available' : 'current');
+    }
     const cookies = await session.cookies.get({ name: "glintex_fixture" });
     assert.equal(cookies[0].httpOnly, true);
     assert.equal(cookies[0].sameSite, "lax");
@@ -124,10 +150,43 @@ async function runSelfTest({
       "return window.glintexDesktop.scale.enumerate()",
     );
     assert.ok(Array.isArray(ports));
+    if (process.env.GLINTEX_TEST_PREPARE_DRIVER === "1" && phase === "first") {
+      const prepared = await evaluate("return window.glintexDesktop.scale.driverSetup()");
+      assert.equal(prepared.success, true, prepared.output);
+      assert.equal(prepared.installed, false); assert.equal(prepared.elevationRequested, false);
+      const { DriverSetup } = require("./driver/setup.cjs");
+      const offline = new DriverSetup({ kitDirectory: path.join(process.resourcesPath, "scale-driver"), userData: app.getPath("userData"), fetch: () => { throw Error("Offline verification must not download"); } });
+      assert.equal((await offline.prepare({ verifyOnly: true })).success, true);
+      const target = path.join(prepared.packageDirectory, "plser.inf"), original = await fs.readFile(target);
+      let rejected;
+      try { await fs.writeFile(target, "deliberate verification tamper"); rejected = await offline.prepare({ verifyOnly: true }); }
+      finally { await fs.writeFile(target, original); }
+      assert.equal(rejected.success, false); assert.match(rejected.output, /Checksum mismatch/);
+      await fs.mkdir(reportDirectory, { recursive: true });
+      await fs.writeFile(path.join(reportDirectory, "driver-preparation.json"), JSON.stringify({ passed: true, realMicrosoftPackageVerified: true, packagedPaths: true, offlineVerified: true, tamperRejected: true, installed: false, elevationRequested: false, driverVersion: prepared.driverVersion, hardwareSupport: controller.scaleDriver.supported }, null, 2));
+    }
     await assert.rejects(
       evaluate("return window.glintexDesktop.scale.capture({timeoutMs:100})"),
     );
     await session.cookies.flushStore();
+    if (phase === "update") {
+      const check = await evaluate("return window.glintexDesktop.updates.check()");
+      assert.equal(check.state, "available"); assert.equal(check.release.version, process.env.GLINTEX_TEST_UPDATE_VERSION);
+      await evaluate("return window.glintexDesktop.updates.later()");
+      assert.equal((await evaluate("return window.glintexDesktop.updates.status()")).prompt, false);
+      const ready = await evaluate("return window.glintexDesktop.updates.download()"); assert.equal(ready.state, "ready");
+      await evaluate("return window.glintexDesktop.updates.arm()");
+      await evaluate("return window.glintexDesktop.updates.disarm()");
+      assert.equal((await evaluate("return window.glintexDesktop.updates.status()")).state, "ready");
+      await evaluate("return window.glintexDesktop.updates.arm()");
+      assert.equal((await evaluate("return window.glintexDesktop.updates.status()")).state, "armed");
+      await evaluate("window.fixturePendingSave=fetch('/api/fixture/hold',{method:'POST'}).then(r=>r.json());return true");
+      await new Promise(resolve => setTimeout(resolve, 100));
+      window.close();
+      await waitFor("window.glintexDesktop.updates.status().then(s=>s.closeBlocked===true).catch(()=>false)");
+      assert.equal(window.isDestroyed(), false, "pending API save must prevent installer close");
+      await evaluate("return window.fixturePendingSave");
+    }
   } else {
     await waitFor("document.body.innerText.includes('Workstation setup')");
     assert.equal(await fetchStatus("/api/auth/me"), 200);
@@ -141,6 +200,7 @@ async function runSelfTest({
     await window.reload();
     await waitFor("document.querySelector('input[type=password]')!==null");
   }
+  await session.cookies.flushStore();
   await fs.mkdir(reportDirectory, { recursive: true });
   await new Promise((resolve) => setTimeout(resolve, 400));
   const image = await window.webContents.capturePage();
@@ -152,6 +212,8 @@ async function runSelfTest({
     passed: true,
     phase,
     version: app.getVersion(),
+    sourceCommit: require('../build-info.json').sourceCommit,
+    restoredSession: phase === "restored",
     packaged: app.isPackaged,
     platform: process.platform,
     arch: process.arch,
@@ -161,10 +223,13 @@ async function runSelfTest({
       "no-renderer-node",
       "native-serial-load",
       "login-or-restored-session",
+      ...(process.platform === 'win32' && ['first','update'].includes(phase) ? ['automatic-discovery-after-signin'] : []),
       "httponly-samesite-cookie",
       "hardware-auth-gate",
       "same-origin-challan-frame-no-bridge",
-      phase === "first" ? "setup-panel" : "expiry-logout-foreign-redirect",
+      ["first", "update", "restored"].includes(phase) ? "setup-panel" : "expiry-logout-foreign-redirect",
+      ...(phase === "restored" ? ["restored-session-after-authenticated-upgrade"] : []),
+      ...(phase === "update" ? ["authenticated-release-discovery", "private-installer-download-and-sha256", "later-no-install", "explicit-arm-cancel-arm", "main-process-mid-save-close-block", "fixture-only-close-confirmation-and-silent-install"] : []),
     ],
     at: new Date().toISOString(),
   };

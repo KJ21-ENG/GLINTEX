@@ -80,7 +80,7 @@ test('Holo and Coning receive writes return their authoritative updated totals',
   assert.match(holo, /issueBalance,/);
   assert.match(holo, /pieceTotal,/);
 
-  assert.match(coning, /const pieceTotal = await prisma\.receiveFromConingMachinePieceTotal\.upsert/);
+  assert.match(coning, /const pieceTotal = await tx\.receiveFromConingMachinePieceTotal\.upsert/);
   assert.match(coning, /let issueBalance = null/);
   assert.match(coning, /computeIssueBalancesBatch\(prisma, 'coning', \[issue\]\)/);
   assert.match(coning, /Failed to enrich Coning receive response balance/);
@@ -96,7 +96,7 @@ test('Coning wastage marks against net issued weight, never the raw refs total',
   );
   // Net issued (original minus active take-backs) is the only correct base: yarn taken
   // back to Holo stock is already accounted for and must not be wastified again.
-  assert.match(route, /computeIssueBalancesBatch\(prisma, 'coning', \[issue\]\)/);
+  assert.match(route, /computeIssueBalancesBatch\(tx, 'coning', \[issue\]\)/);
   assert.match(route, /const netIssuedWeight = Number\(balance\?\.netIssuedWeight \|\| 0\)/);
   assert.match(route, /Math\.max\(0, netIssuedWeight - received - existingWastage\)/);
   assert.doesNotMatch(route, /issuedWeight - received - existingWastage/);

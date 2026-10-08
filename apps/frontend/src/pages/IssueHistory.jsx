@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ConingSupplyHistory } from '../components/issue/ConingSupplyHistory';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
 import { formatKg, formatDateDDMMYYYY, extractUserWastageNote } from '../utils';
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, Badge, ActionMenu, Button, Input, Select } from '../components/ui';
@@ -755,7 +756,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             }));
           }
         }
-        await api.updateIssueToMachine(editingIssue.id, process, payload);
+        await api.updateIssueToMachine(editingIssue.id, process, editingIssue.coningBatchEnabled ? { note: payload.note } : payload);
       }
       if (process === 'cutter') {
         await refreshProcessData(process);
@@ -2508,6 +2509,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
               {process === 'coning' && (
                 <>
+                  <ConingSupplyHistory issue={editingIssue} />
+                  {editingIssue.coningBatchEnabled && <p className="text-xs text-muted-foreground">Delivery history is retained. Add further material from Issue to Coning. Existing batch specifications are locked.</p>}
+                  <fieldset disabled={Boolean(editingIssue.coningBatchEnabled)} className="space-y-4 disabled:opacity-70">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-muted-foreground uppercase">Date</label>
@@ -2600,14 +2604,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         disabled={editingIssue.hasReceives}
                       />
                     </div>
-                    <div className="space-y-1 md:col-span-3">
-                      <label className="text-xs font-medium text-muted-foreground uppercase">Note</label>
-                      <Input
-                        value={issueDraft.note}
-                        onChange={(e) => updateIssueDraftField('note', e.target.value)}
-                        placeholder="Optional"
-                      />
-                    </div>
+
                   </div>
 
                   <div className="space-y-2">
@@ -2682,6 +2679,15 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       )}
                     </div>
                   </div>
+                  </fieldset>
+                    <div className="space-y-1 md:col-span-3">
+                      <label className="text-xs font-medium text-muted-foreground uppercase">Note</label>
+                      <Input
+                        value={issueDraft.note}
+                        onChange={(e) => updateIssueDraftField('note', e.target.value)}
+                        placeholder="Optional"
+                      />
+                    </div>
                 </>
               )}
 

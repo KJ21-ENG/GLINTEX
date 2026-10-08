@@ -197,6 +197,9 @@ export async function getReceiveCrateStats(pieceId) {
   return await request(`/api/receive_from_cutter_machine/piece/${encodeURIComponent(pieceId)}/crate_stats`);
 }
 export async function createIssueToHoloMachine(payload) { return await request('/api/issue_to_holo_machine', { method: 'POST', body: payload }); }
+export async function getConingBatchCandidates(payload) { return await request('/api/issue_to_coning_machine/batch_candidates', { method: 'POST', body: payload }); }
+export async function finishConingBatch(id) { return await request(`/api/issue_to_coning_machine/${encodeURIComponent(id)}/finish_batch`, { method: 'POST' }); }
+export async function reopenConingBatch(id) { return await request(`/api/issue_to_coning_machine/${encodeURIComponent(id)}/reopen_batch`, { method: 'POST' }); }
 export async function createIssueToConingMachine(payload) { return await request('/api/issue_to_coning_machine', { method: 'POST', body: payload }); }
 export async function createOpeningInbound(payload) { return await request('/api/opening_stock/inbound', { method: 'POST', body: payload }); }
 export async function createOpeningCutterReceive(payload) { return await request('/api/opening_stock/cutter_receive', { method: 'POST', body: payload }); }

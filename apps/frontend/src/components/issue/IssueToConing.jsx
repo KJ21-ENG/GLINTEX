@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
-import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
+import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Checkbox, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
@@ -33,6 +33,13 @@ export function IssueToConing() {
     useUnsavedGuard('issue-to-coning', crates.length > 0);
     const [scanDialogOpen, setScanDialogOpen] = useState(false);
     const [scanFeedback, setScanFeedback] = useState(null);
+    const [batchCandidates, setBatchCandidates] = useState([]);
+    const [batchMode, setBatchMode] = useState('auto');
+    const [selectedBatchId, setSelectedBatchId] = useState('');
+    const [batchLoading, setBatchLoading] = useState(false);
+    const [batchError, setBatchError] = useState('');
+    const [batchEligible, setBatchEligible] = useState(false);
+    const [stickerCopies, setStickerCopies] = useState(1);
 
     useEffect(() => {
         if (!scanFeedback) return;
@@ -58,6 +65,46 @@ export function IssueToConing() {
         if (crates.length === 0) return { lotNo: '', itemId: null, cut: '', yarnId: null };
         return { lotNo: crates[0].lotNo, itemId: crates[0].itemId, cut: crates[0].cut, yarnId: crates[0].yarnId };
     }, [crates]);
+
+    const batchSpecification = JSON.stringify({ date: form.date, machineId: form.machineId,
+        operatorId: form.operatorId, shift: form.shift, coneTypeId: form.coneTypeId, wrapperId: form.wrapperId,
+        requiredPerConeNetWeight: Number(form.targetWeight), itemId: meta.itemId, cut: meta.cut, yarnId: meta.yarnId });
+    const batchSourceIds = JSON.stringify(crates.map((crate) => crate.rowId).sort());
+
+    useEffect(() => {
+        setBatchMode('auto');
+        setSelectedBatchId('');
+    }, [batchSpecification]);
+
+    useEffect(() => {
+        let cancelled = false;
+        setBatchCandidates([]);
+        setBatchError('');
+        if (JSON.parse(batchSourceIds).length === 0) {
+            setBatchLoading(false);
+            setBatchEligible(false);
+            return;
+        }
+        setBatchLoading(true);
+        const timer = setTimeout(async () => {
+            try {
+                const result = await api.getConingBatchCandidates({ ...JSON.parse(batchSpecification), rowIds: JSON.parse(batchSourceIds) });
+                if (cancelled) return;
+                const candidates = result.candidates || [];
+                setBatchCandidates(candidates);
+                setBatchEligible(result.eligible);
+                setSelectedBatchId((previous) => candidates.some((candidate) => candidate.id === previous)
+                    ? previous : (candidates.length === 1 ? candidates[0].id : ''));
+            } catch (error) {
+                if (!cancelled) setBatchError(error.message || 'Unable to check existing batches');
+            } finally {
+                if (!cancelled) setBatchLoading(false);
+            }
+        }, 200);
+        return () => { cancelled = true; clearTimeout(timer); };
+    }, [batchSpecification, batchSourceIds]);
+
+    const selectedBatch = batchCandidates.find((candidate) => candidate.id === selectedBatchId);
 
     // --- Handlers ---
 
@@ -239,12 +286,12 @@ export function IssueToConing() {
                 {
                     lotNo: issue.lotNo,
                     barcode: issue.barcode,
-                    totalRolls: snapshot.totalRolls,
-                    rollCount: snapshot.totalRolls,
-                    totalWeight: snapshot.totalWeight,
+                    totalRolls: issue.rollsIssued,
+                    rollCount: issue.rollsIssued,
+                    totalWeight: (issue.receivedRowRefs || []).reduce((sum, ref) => sum + Number(ref.issueWeight || 0), 0),
                     grossWeight: null,
                     tareWeight: null,
-                    netWeight: snapshot.totalWeight,
+                    netWeight: (issue.receivedRowRefs || []).reduce((sum, ref) => sum + Number(ref.issueWeight || 0), 0),
                     expectedCones: issue.expectedCones,
                     perConeTargetG: snapshot.targetWeight,
                     machineName: snapshot.machineName,
@@ -258,7 +305,7 @@ export function IssueToConing() {
                     wrapperName: snapshot.wrapperName,
                     date: snapshot.date,
                 },
-                { template },
+                { template, copies: snapshot.stickerCopies },
             );
         } catch (error) {
             console.error('Coning issue was saved but its label could not be printed', error);
@@ -269,6 +316,8 @@ export function IssueToConing() {
     const handleSubmit = wrapSubmit(async () => {
         if (crates.length === 0) return;
         if (!form.targetWeight) { alert('Enter target cone weight'); return; }
+        if (batchLoading || batchError) { alert(batchError || 'Wait for the batch check to finish'); return; }
+        if (batchMode !== 'new' && batchCandidates.length > 1 && !selectedBatchId) { alert('Select an existing batch or uncheck Add to existing batch'); return; }
 
         const distinctNames = (field) => Array.from(new Set(crates.map((crate) => String(crate[field] || '').trim()).filter(Boolean))).join(', ');
         const labelSnapshot = {
@@ -285,6 +334,7 @@ export function IssueToConing() {
             targetWeight: form.targetWeight,
             shift: form.shift || '',
             date: form.date,
+            stickerCopies,
         };
         setSubmitting(true);
         try {
@@ -296,6 +346,8 @@ export function IssueToConing() {
                 note: form.note,
                 requiredPerConeNetWeight: Number(form.targetWeight),
                 expectedCones: coningMeta.expectedCones,
+                batchMode: batchMode === 'new' ? 'new' : (selectedBatchId ? 'existing' : 'auto'),
+                batchId: batchMode === 'new' ? null : selectedBatchId,
                 crates: crates.map(c => ({
                     rowId: c.rowId,
                     barcode: c.barcode,
@@ -311,10 +363,17 @@ export function IssueToConing() {
                 INVENTORY_INVALIDATION_KEYS.issueHistory('coning'),
             ], { source: 'createIssueToConingMachine' });
             setCrates([]);
-            alert('Issued to Coning successfully');
+            alert(created.addedToBatch
+                ? `Material added to batch ${created.issueToConingMachine.barcode}. Use this same barcode on the supervisor's stickers.`
+                : `Issued to Coning successfully. Batch barcode: ${created.issueToConingMachine.barcode}`);
             void offerPostCommitPrint(created, labelSnapshot);
         } catch (e) {
             alert(e.message);
+            // Reload choices if another receiver finished the selected batch.
+            if (e.status === 409) {
+                const result = await api.getConingBatchCandidates({ ...JSON.parse(batchSpecification), rowIds: JSON.parse(batchSourceIds) }).catch(() => null);
+                if (result) { setBatchCandidates(result.candidates || []); setSelectedBatchId(''); }
+            }
         } finally {
             setSubmitting(false);
         }
@@ -477,11 +536,44 @@ export function IssueToConing() {
                             </TableBody>
                         </Table>
                     </div>
+                    {crates.length > 0 && (
+                        <div className="mt-4 rounded-md border bg-muted/30 p-4 space-y-3">
+                            <div className="font-medium">Receiving batch</div>
+                            {batchLoading ? <p className="text-sm text-muted-foreground">Checking open batches…</p>
+                                : batchError ? <p role="alert" className="text-sm text-destructive">{batchError}</p>
+                                : batchCandidates.length > 0 ? (
+                                    <>
+                                        <label className="flex items-center gap-2 cursor-pointer">
+                                            <Checkbox checked={batchMode !== 'new'} onCheckedChange={(checked) => setBatchMode(checked ? 'auto' : 'new')} disabled={submitting} />
+                                            <span>Add to existing batch{batchCandidates.length === 1 ? ` ${batchCandidates[0].barcode}` : ''}</span>
+                                        </label>
+                                        {batchMode !== 'new' && batchCandidates.length > 1 && (
+                                            <Select value={selectedBatchId} onChange={(event) => setSelectedBatchId(event.target.value)}
+                                                options={batchCandidates.map((candidate) => ({ id: candidate.id, name: `${candidate.barcode} · ${formatKg(candidate.issuedWeight)} kg issued · ${formatKg(candidate.pendingWeight)} kg pending` }))}
+                                                placeholder="Select a matching batch" labelKey="name" valueKey="id" />
+                                        )}
+                                        {batchMode !== 'new' && selectedBatch && (
+                                            <div className="text-sm space-y-1">
+                                                <p>{selectedBatch.operatorName} · {selectedBatch.machineName} · {selectedBatch.shift}</p>
+                                                <p>Previously issued: {formatKg(selectedBatch.issuedWeight)} kg · Adding: {formatKg(coningMeta.totalNet)} kg · Combined: {formatKg(selectedBatch.issuedWeight + coningMeta.totalNet)} kg</p>
+                                                <p>Supervisor stickers will use <strong>{selectedBatch.barcode}</strong>.</p>
+                                            </div>
+                                        )}
+                                        {batchMode === 'new' && <p className="text-sm text-muted-foreground">A separate batch and receiving barcode will be created. Keep its goods separate.</p>}
+                                    </>
+                                ) : <p className="text-sm text-muted-foreground">{batchEligible ? 'No matching open batch. A new receiving barcode will be created.' : 'A separate batch will be created. Select worker, machine, shift, cone type and target weight to enable automatic matching.'}</p>}
+                            <div className="flex items-center gap-3">
+                                <Label htmlFor="coning-sticker-copies">Supervisor sticker copies</Label>
+                                <Input id="coning-sticker-copies" type="number" min="1" max="100" value={stickerCopies}
+                                    onChange={(event) => setStickerCopies(Math.min(100, Math.max(1, Number(event.target.value) || 1)))} className="w-20" />
+                            </div>
+                        </div>
+                    )}
                     <div className="mt-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
                         <div className="text-sm font-medium">
                             Total Rolls: {coningMeta.totalRolls} | Total Net: {formatKg(coningMeta.totalNet)}
                         </div>
-                        <Button onClick={handleSubmit} disabled={submitting || crates.length === 0} className="w-full sm:w-auto">
+                        <Button onClick={handleSubmit} disabled={submitting || crates.length === 0 || batchLoading || Boolean(batchError) || (batchMode !== 'new' && batchCandidates.length > 1 && !selectedBatchId)} className="w-full sm:w-auto">
                             {submitting ? 'Issuing...' : 'Confirm Issue'}
                         </Button>
                     </div>

@@ -34,6 +34,7 @@ import { normalizeSide } from '../services/contractorPayments/calc.js';
 import { assertProductionRowsEditable, assertIssueEditable, lockSettlementLinesExclusive, lockItemNamesExclusive } from '../services/contractorPayments/service.js';
 import { perfLog, isPerfLogEnabled } from '../lib/perfLog.js';
 import { computeIssueBalancesBatch } from '../services/issueBalances.js';
+import { commitConingSupply, coningBatchKey, findConingBatchCandidates, lockConingBatch, resolveConingBatchMaterial } from '../services/coningBatches.js';
 import { createCutterReceiveBatch, CutterReceiveError } from '../services/cutterReceive.js';
 import { applyTelegramCronSchedule, runPrimarySequence, runReminderSequence } from '../utils/telegramScheduler.js';
 
@@ -1409,6 +1410,7 @@ async function ensureHoloIssueSequence(tx, actorUserId) {
 async function ensureConingIssueSequence(tx, actorUserId) {
   const rows = await tx.$queryRaw`
     SELECT GREATEST(
+      COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "ConingIssueSupply" WHERE barcode ~ '^ICO-[0-9]+'), 0),
       COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "IssueToConingMachine" WHERE barcode ~ '^ICO-[0-9]+'), 0),
       COALESCE((SELECT MAX(CAST(split_part(barcode, '-', 2) AS INT)) FROM "ReceiveFromConingMachineRow" WHERE barcode ~ '^RCO-[0-9]+'), 0)
     ) AS max_series
@@ -3161,8 +3163,13 @@ async function buildConingIssueLookupPayload(issue) {
   const receivesTruncated = receivesPlusOne.length > ISSUE_LOOKUP_RECEIVE_LIMIT;
   const receives = receivesPlusOne.slice(0, ISSUE_LOOKUP_RECEIVE_LIMIT);
 
+  const supplies = issue.coningBatchEnabled ? await prisma.coningIssueSupply.findMany({
+    where: { issueId: issue.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  }) : [];
+  const lotNos = [...new Set(refs.map((ref) => ref.lotNo).filter(Boolean))];
   return {
     ...issue,
+    supplies,
     itemName,
     machineName: issue.machine?.name || '',
     operatorName: issue.operator?.name || '',
@@ -3178,8 +3185,8 @@ async function buildConingIssueLookupPayload(issue) {
     boxId: firstRef.boxId || null,
     boxName: firstIssueBox?.name || '',
     boxWeight: Number(firstIssueBox?.weight || 0),
-    lotLabel: issue.lotNo || '',
-    lotNos: issue.lotNo ? [issue.lotNo] : [],
+    lotLabel: lotNos.length > 1 ? `Mixed (${lotNos.join(', ')})` : (issue.lotNo || ''),
+    lotNos: lotNos.length ? lotNos : (issue.lotNo ? [issue.lotNo] : []),
     pieceIds,
     pieces,
     sources,
@@ -3781,7 +3788,7 @@ router.get('/api/issue_to_coning_machine/lookup', requireAnyReadPermission(['iss
   try {
     const barcode = normalizeBarcodeInput(req.query.barcode);
     if (!barcode) return res.status(400).json({ error: 'Missing barcode' });
-    const issue = await prisma.issueToConingMachine.findFirst({
+    let issue = await prisma.issueToConingMachine.findFirst({
       where: { barcode, isDeleted: false },
       include: {
         machine: { select: { id: true, name: true } },
@@ -3791,6 +3798,10 @@ router.get('/api/issue_to_coning_machine/lookup', requireAnyReadPermission(['iss
         twist: { select: { id: true, name: true } },
       },
     });
+    if (!issue) {
+      const supply = await prisma.coningIssueSupply.findUnique({ where: { barcode }, include: { issue: { include: { machine: true, operator: true, cut: true, yarn: true, twist: true } } } });
+      if (supply?.issue && !supply.issue.isDeleted) issue = supply.issue;
+    }
     if (!issue) return res.status(404).json({ error: 'Issue barcode not found' });
     res.json(await buildConingIssueLookupPayload(issue));
   } catch (err) {
@@ -3972,6 +3983,7 @@ async function createIssueTakeBackForStage(req, res, stage) {
     }
 
     const txResult = await prisma.$transaction(async (tx) => {
+      if (stage === 'coning') await lockConingBatch(tx, issueId);
       const issue = await loadIssueForTakeBack(tx, stage, issueId);
       if (!issue) {
         throw new Error('Issue not found');
@@ -4132,6 +4144,7 @@ async function reverseIssueTakeBack(req, res) {
       if (original.isReverse) throw new Error('Reverse records cannot be reversed');
       if (original.isReversed) throw new Error('Take-back is already reversed');
 
+      if (stage === 'coning') await lockConingBatch(tx, original.issueId);
       const issue = await loadIssueForTakeBack(tx, stage, original.issueId);
       if (!issue) throw new Error('Issue not found');
 
@@ -10266,6 +10279,55 @@ router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('
   }
 });
 
+router.post('/api/issue_to_coning_machine/batch_candidates', requirePermission('issue.coning', PERM_READ), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const ids = Array.isArray(body.rowIds) ? body.rowIds.filter((id) => typeof id === 'string') : [];
+    if (ids.length > 200) return res.status(400).json({ error: 'Too many source crates' });
+    const material = await resolveConingBatchMaterial(prisma, ids);
+    const single = (values) => values.length === 1 ? values[0] : null;
+    const key = material.complete ? coningBatchKey({ ...body, itemId: single(material.itemIds), cutId: single(material.cutIds), yarnId: single(material.yarnIds) }) : null;
+    const candidates = await findConingBatchCandidates(prisma, key, material.ancestorIssueIds);
+    res.json({ candidates, eligible: Boolean(key) });
+  } catch (err) {
+    res.status(500).json({ error: 'Unable to load open coning batches' });
+  }
+});
+
+router.post('/api/issue_to_coning_machine/:id/finish_batch', requirePermission('receive.coning', PERM_WRITE), async (req, res) => {
+  try {
+    const issue = await prisma.$transaction(async (tx) => {
+      const current = await lockConingBatch(tx, req.params.id);
+      if (!current?.coningBatchEnabled) throw Object.assign(new Error('Coning batch not found'), { statusCode: 404 });
+      const balance = (await computeIssueBalancesBatch(tx, 'coning', [current])).get(current.id);
+      if (Number(balance?.pendingWeight || 0) > 0.001) throw Object.assign(new Error('Receive, take back, or mark the remaining material as wastage before finishing the batch'), { statusCode: 409 });
+      return tx.issueToConingMachine.update({ where: { id: current.id }, data: { coningBatchOpen: false, coningBatchClosedAt: new Date(), ...actorUpdateFields(req.user?.id) } });
+    });
+    await logCrudWithActor(req, { entityType: 'issue_to_coning_machine', entityId: issue.id, action: 'finish_batch' });
+    res.json({ ok: true, issue });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.post('/api/issue_to_coning_machine/:id/reopen_batch', requirePermission('receive.coning', PERM_WRITE), async (req, res) => {
+  try {
+    const issue = await prisma.$transaction(async (tx) => {
+      const current = await lockConingBatch(tx, req.params.id);
+      if (!current?.coningBatchEnabled) throw Object.assign(new Error('Coning batch not found'), { statusCode: 404 });
+      const balance = (await computeIssueBalancesBatch(tx, 'coning', [current])).get(current.id);
+      if (Number(balance?.pendingWeight || 0) <= 0.001 || Number(balance?.wastageWeight || 0) > 0) {
+        throw Object.assign(new Error('Reopen only when a correction has restored pending material. Reverse marked wastage first.'), { statusCode: 409 });
+      }
+      return tx.issueToConingMachine.update({ where: { id: current.id }, data: { coningBatchOpen: true, coningBatchClosedAt: null, ...actorUpdateFields(req.user?.id) } });
+    });
+    await logCrudWithActor(req, { entityType: 'issue_to_coning_machine', entityId: issue.id, action: 'reopen_batch' });
+    res.json({ ok: true, issue });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PERM_WRITE), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
@@ -10590,49 +10652,33 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
       });
     }
 
-    const totalRolls = preparedCrates.reduce((sum, c) => sum + (Number(c.issueRolls) || 0), 0);
-    const totalIssueWeightKg = preparedCrates.reduce((sum, c) => sum + (Number(c.issueWeight) || 0), 0);
-    const expectedCones = requiredPerConeNetWeight > 0
-      ? Math.floor((totalIssueWeightKg * 1000) / requiredPerConeNetWeight)
-      : 0;
-
-    const created = await timedTransaction('issue_to_coning_machine.create', preparedCrates.length, async (tx) => {
-      await ensureConingIssueSequence(tx, actorUserId);
-      // Get next Coning issue series number
-      const coningSeq = await tx.coningIssueSequence.upsert({
-        where: { id: 'coning_issue_seq' },
-        update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
-        create: { id: 'coning_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
-      });
-      const seriesNumber = coningSeq.nextValue - 1; // Use value before increment
-
-      return tx.issueToConingMachine.create({
-        data: {
-          date,
-          itemId,
-          lotNo,
-          cutId: resolvedCutId,
-          yarnId: resolvedYarnId,
-          twistId: resolvedTwistId,
-          machineId: machineId || null,
-          operatorId: operatorId || null,
-          barcode: makeConingIssueBarcode({ series: seriesNumber }),
-          note: note || null,
-          shift: shift || null,
-          rollsIssued: Number(totalRolls || 0),
-          requiredPerConeNetWeight,
-          expectedCones,
-          receivedRowRefs: preparedCrates,
-          ...actorCreateFields(actorUserId),
+    const result = await timedTransaction('issue_to_coning_machine.create', preparedCrates.length, async (tx) => {
+      return commitConingSupply(tx, {
+        issueData: { date, itemId, lotNo, cutId: resolvedCutId, yarnId: resolvedYarnId, twistId: resolvedTwistId,
+          machineId: machineId || null, operatorId: operatorId || null, note: note || null, shift: shift || null,
+          requiredPerConeNetWeight },
+        crates: preparedCrates, mode: req.body.batchMode || 'new', selectedBatchId: req.body.batchId,
+        actorUserId, loadIssuedToConing: buildHoloIssuedToConingMap,
+        allocateBarcode: async (client) => {
+          await ensureConingIssueSequence(client, actorUserId);
+          const sequence = await client.coningIssueSequence.upsert({
+            where: { id: 'coning_issue_seq' }, update: { nextValue: { increment: 1 }, ...actorUpdateFields(actorUserId) },
+            create: { id: 'coning_issue_seq', nextValue: 2, ...actorCreateFields(actorUserId) },
+          });
+          return makeConingIssueBarcode({ series: sequence.nextValue - 1 });
         },
       });
     });
+    const created = result.issue;
 
     await logCrudWithActor(req, {
       entityType: 'issue_to_coning_machine',
       entityId: created.id,
-      action: 'create',
+      action: result.addedToBatch ? 'add_supply' : 'create',
       payload: {
+        supplyBarcode: result.supply.barcode,
+        suppliedWeight: result.supply.issuedWeight,
+        sourceCrates: result.supply.receivedRowRefs,
         date: created.date,
         lotNo: created.lotNo,
         itemId: created.itemId,
@@ -10640,7 +10686,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         operatorId: created.operatorId,
       },
     });
-    res.json({ ok: true, issueToConingMachine: created });
+    res.json({ ok: true, issueToConingMachine: created, supply: result.supply, addedToBatch: result.addedToBatch });
 
     // Notify issue_to_coning_machine created
     try {
@@ -10654,7 +10700,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
         itemName,
         lotNo: created.lotNo,
         date: created.date,
-        rollsIssued: created.rollsIssued,
+        rollsIssued: result.supply.rollsIssued,
         requiredPerConeNetWeight: created.requiredPerConeNetWeight,
         expectedCones: created.expectedCones,
         machineName: machineRec ? machineRec.name : '',
@@ -10669,7 +10715,7 @@ router.post('/api/issue_to_coning_machine', requirePermission('issue.coning', PE
     } catch (e) { console.error('notify issue_to_coning_machine error', e); }
   } catch (err) {
     console.error('Failed to issue to coning machine', err);
-    res.status(500).json({ error: err.message || 'Failed to issue to coning' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Failed to issue to coning' });
   }
 });
 
@@ -10690,78 +10736,84 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
       createdBy,
     } = req.body || {};
     const pieceId = typeof rawPieceId === 'string' ? rawPieceId.trim() : rawPieceId;
-    if (!issueId || !pieceId || typeof coneCount !== 'number' || !Number.isFinite(providedGross)) {
+    if (!issueId || pieceId !== issueId || !Number.isInteger(coneCount) || coneCount <= 0 || !Number.isFinite(providedGross)) {
       return res.status(400).json({ error: 'Missing required cone or gross weight data' });
     }
-    const issue = await prisma.issueToConingMachine.findFirst({
-      where: { id: issueId, isDeleted: false },
-    });
-    if (!issue) return res.status(404).json({ error: 'Issue not found' });
+    const { issue, createdRow, pieceTotal } = await prisma.$transaction(async (tx) => {
+      const issue = await lockConingBatch(tx, issueId);
+      if (!issue) throw Object.assign(new Error('Issue not found'), { statusCode: 404 });
+      if (issue.coningBatchEnabled && !issue.coningBatchOpen) throw Object.assign(new Error('This coning batch is finished. Start a new batch for additional production.'), { statusCode: 409 });
 
-    let boxWeight = null;
-    if (boxId) {
-      const box = await prisma.box.findUnique({ where: { id: boxId }, select: { weight: true } });
-      boxWeight = box?.weight ?? null;
-    }
-    const coneTypeId = Array.isArray(issue.receivedRowRefs) && issue.receivedRowRefs.length
-      ? issue.receivedRowRefs[0].coneTypeId
-      : null;
-    let coneWeightPerPiece = null;
-    if (coneTypeId) {
-      const coneType = await prisma.coneType.findUnique({ where: { id: coneTypeId }, select: { weight: true } });
-      coneWeightPerPiece = coneType?.weight ?? null;
-    }
-    const tareWeight = (boxWeight || 0) + (coneWeightPerPiece || 0) * coneCount;
-    const grossWeight = Number(providedGross);
-    const netWeight = grossWeight - tareWeight;
-    if (!Number.isFinite(netWeight) || netWeight < 0) {
-      return res.status(400).json({ error: 'Gross weight must be greater than tare weight' });
-    }
+      let boxWeight = null;
+      if (boxId) {
+        const box = await tx.box.findUnique({ where: { id: boxId }, select: { weight: true } });
+        boxWeight = box?.weight ?? null;
+      }
+      const coneTypeId = Array.isArray(issue.receivedRowRefs) && issue.receivedRowRefs.length
+        ? issue.receivedRowRefs[0].coneTypeId
+        : null;
+      let coneWeightPerPiece = null;
+      if (coneTypeId) {
+        const coneType = await tx.coneType.findUnique({ where: { id: coneTypeId }, select: { weight: true } });
+        coneWeightPerPiece = coneType?.weight ?? null;
+      }
+      const tareWeight = (boxWeight || 0) + (coneWeightPerPiece || 0) * coneCount;
+      const grossWeight = Number(providedGross);
+      const netWeight = grossWeight - tareWeight;
+      if (!Number.isFinite(netWeight) || netWeight < 0) {
+        throw Object.assign(new Error('Gross weight must be greater than tare weight'), { statusCode: 400 });
+      }
 
-    const existingCount = await prisma.receiveFromConingMachineRow.count({ where: { issueId } });
-    const crateIndex = existingCount + 1;
-    const issueSeriesNumber = parseConingSeries(issue.barcode);
-    if (!issueSeriesNumber) {
-      return res.status(400).json({ error: 'Invalid issue barcode format. Cannot derive Coning receive series.' });
-    }
-    const barcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex });
+      const existingCount = await tx.receiveFromConingMachineRow.count({ where: { issueId } });
+      const crateIndex = existingCount + 1;
+      const issueSeriesNumber = parseConingSeries(issue.barcode);
+      if (!issueSeriesNumber) {
+        throw Object.assign(new Error('Invalid issue barcode format. Cannot derive Coning receive series.'), { statusCode: 400 });
+      }
+      const barcode = makeConingReceiveBarcode({ series: issueSeriesNumber, crateIndex });
 
-    const sourceRowRefs = await computeConingReceiveSourceRowRefs(prisma, issue, netWeight);
-    const createdRow = await prisma.receiveFromConingMachineRow.create({
-      data: {
-        issueId,
-        coneCount,
-        barcode,
-        coneWeight: Number(netWeight),
-        netWeight: Number(netWeight),
-        tareWeight: Number(tareWeight),
-        grossWeight: Number(grossWeight),
-        sourceRowRefs,
-        boxId: boxId || null,
-        machineNo: machineNo || null,
-        operatorId: operatorId || issue.operatorId || null,
-        helperId: helperId || null,
-        notes: notes || null,
-        date: date || issue.date,
-        createdBy: createdBy || 'manual',
-        ...actorCreateFields(actorUserId),
-      },
+      const sourceRowRefs = await computeConingReceiveSourceRowRefs(tx, issue, netWeight);
+      const createdRow = await tx.receiveFromConingMachineRow.create({
+        data: {
+          issueId,
+          coneCount,
+          barcode,
+          coneWeight: Number(netWeight),
+          netWeight: Number(netWeight),
+          tareWeight: Number(tareWeight),
+          grossWeight: Number(grossWeight),
+          sourceRowRefs,
+          boxId: boxId || null,
+          machineNo: machineNo || null,
+          operatorId: operatorId || issue.operatorId || null,
+          helperId: helperId || null,
+          notes: notes || null,
+          date: date || issue.date,
+          createdBy: createdBy || 'manual',
+          ...actorCreateFields(actorUserId),
+        },
+      });
+      const pieceTotal = await tx.receiveFromConingMachinePieceTotal.upsert({
+        where: { pieceId },
+        update: {
+          totalCones: { increment: coneCount },
+          totalNetWeight: { increment: netWeight || 0 },
+          ...actorUpdateFields(actorUserId),
+        },
+        create: {
+          pieceId,
+          totalCones: coneCount,
+          totalNetWeight: netWeight || 0,
+          wastageNetWeight: 0,
+          ...actorCreateFields(actorUserId),
+        },
+      });
+      return { issue, createdRow, pieceTotal };
     });
-    const pieceTotal = await prisma.receiveFromConingMachinePieceTotal.upsert({
-      where: { pieceId },
-      update: {
-        totalCones: { increment: coneCount },
-        totalNetWeight: { increment: netWeight || 0 },
-        ...actorUpdateFields(actorUserId),
-      },
-      create: {
-        pieceId,
-        totalCones: coneCount,
-        totalNetWeight: netWeight || 0,
-        wastageNetWeight: 0,
-        ...actorCreateFields(actorUserId),
-      },
-    });
+    const grossWeight = Number(createdRow.grossWeight);
+    const tareWeight = Number(createdRow.tareWeight);
+    const netWeight = Number(createdRow.netWeight);
+    const barcode = createdRow.barcode;
     let issueBalance = null;
     try {
       const issueBalances = await computeIssueBalancesBatch(prisma, 'coning', [issue]);
@@ -10812,7 +10864,7 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
     } catch (e) { console.error('notify receive_from_coning_machine manual error', e); }
   } catch (err) {
     console.error('Failed to receive from coning machine', err);
-    res.status(500).json({ error: err.message || 'Failed to record coning receive' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Failed to record coning receive' });
   }
 });
 
@@ -10826,39 +10878,38 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
       return res.status(400).json({ error: 'Missing issueId' });
     }
 
-    // 1. Fetch coning issue
-    const issue = await prisma.issueToConingMachine.findUnique({ where: { id: issueId } });
-    if (!issue) return res.status(404).json({ error: 'Coning issue not found' });
-    if (issue.isDeleted) return res.status(400).json({ error: 'Issue has been deleted' });
+    const { issue, currentTotal, netIssuedWeight, remaining, updated, event } = await prisma.$transaction(async (tx) => {
+      // 1. Fetch coning issue
+      const issue = await lockConingBatch(tx, issueId);
+      if (!issue) throw Object.assign(new Error('Coning issue not found'), { statusCode: 404 });
+      if (issue.coningBatchEnabled && !issue.coningBatchOpen) throw Object.assign(new Error('This coning batch is already finished'), { statusCode: 409 });
 
-    // 2. Net issued weight = original allocation (receivedRowRefs) MINUS active take-backs.
-    //    Yarn taken back to Holo stock is already accounted for; wastifying it double-counts
-    //    the same weight and closes the issue with an inflated wastage figure.
-    //    Read it from the same balance service the Receive screen renders
-    //    (issueBalances.finalizeBalance) so the marked amount can never drift from the
-    //    pending weight the operator sees on screen.
-    const balances = await computeIssueBalancesBatch(prisma, 'coning', [issue]);
-    const balance = balances.get(issueId) || null;
-    const netIssuedWeight = Number(balance?.netIssuedWeight || 0);
-    if (netIssuedWeight <= 0) {
-      return res.status(400).json({ error: 'Unable to determine issued weight for this issue' });
-    }
+      // 2. Net issued weight = original allocation (receivedRowRefs) MINUS active take-backs.
+      //    Yarn taken back to Holo stock is already accounted for; wastifying it double-counts
+      //    the same weight and closes the issue with an inflated wastage figure.
+      //    Read it from the same balance service the Receive screen renders
+      //    (issueBalances.finalizeBalance) so the marked amount can never drift from the
+      //    pending weight the operator sees on screen.
+      const balances = await computeIssueBalancesBatch(tx, 'coning', [issue]);
+      const balance = balances.get(issueId) || null;
+      const netIssuedWeight = Number(balance?.netIssuedWeight || 0);
+      if (netIssuedWeight <= 0) {
+        throw Object.assign(new Error('Unable to determine issued weight for this issue'), { statusCode: 400 });
+      }
 
-    // 3. Fetch current received and wastage totals
-    const currentTotal = await prisma.receiveFromConingMachinePieceTotal.findUnique({
-      where: { pieceId: issueId }
-    });
-    const received = currentTotal ? Number(currentTotal.totalNetWeight || 0) : 0;
-    const existingWastage = currentTotal ? Number(currentTotal.wastageNetWeight || 0) : 0;
+      // 3. Fetch current received and wastage totals
+      const currentTotal = await tx.receiveFromConingMachinePieceTotal.findUnique({
+        where: { pieceId: issueId }
+      });
+      const received = currentTotal ? Number(currentTotal.totalNetWeight || 0) : 0;
+      const existingWastage = currentTotal ? Number(currentTotal.wastageNetWeight || 0) : 0;
 
-    // 4. Calculate remaining pending weight against the net issued weight
-    const remaining = roundTo3Decimals(Math.max(0, netIssuedWeight - received - existingWastage));
-    if (remaining <= 0) {
-      return res.status(400).json({ error: 'No remaining pending weight to mark as wastage' });
-    }
+      // 4. Calculate remaining pending weight against the net issued weight
+      const remaining = roundTo3Decimals(Math.max(0, netIssuedWeight - received - existingWastage));
+      if (remaining <= 0) {
+        throw Object.assign(new Error('No remaining pending weight to mark as wastage'), { statusCode: 400 });
+      }
 
-    // 5. Upsert wastage + record event inside transaction
-    const { updated, event } = await prisma.$transaction(async (tx) => {
       await tx.receiveFromConingMachinePieceTotal.upsert({
         where: { pieceId: issueId },
         update: {
@@ -10878,7 +10929,12 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
         where: { pieceId: issueId },
         data: { lastWastageEventId: eventRow.id },
       });
-      return { updated: after, event: eventRow };
+      if (issue.coningBatchEnabled) {
+        await tx.issueToConingMachine.update({ where: { id: issueId }, data: {
+          coningBatchOpen: false, coningBatchClosedAt: new Date(), ...actorUpdateFields(actorUserId),
+        } });
+      }
+      return { issue, currentTotal, netIssuedWeight, remaining, updated: after, event: eventRow };
     });
 
     // 6. Send WhatsApp notification
@@ -10913,7 +10969,7 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
     res.json({ ok: true, issueId, marked: remaining, note, updated, eventId: event.id });
   } catch (err) {
     console.error('Failed to mark coning wastage', err);
-    res.status(500).json({ error: err.message || 'Failed to mark coning wastage' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Failed to mark coning wastage' });
   }
 });
 
@@ -10953,6 +11009,7 @@ router.post('/api/receive_from_coning_machine/revert_wastage', requirePermission
     let revertEvent;
     try {
       ({ updated, revertEvent } = await prisma.$transaction(async (tx) => {
+        const batch = await lockConingBatch(tx, issueId);
         const guard = await tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId: issueId } });
         if (!guard || guard.lastWastageEventId !== markEvent.id) {
           if (markEvent.synthetic && (!guard?.lastWastageEventId)) {
@@ -10978,6 +11035,7 @@ router.post('/api/receive_from_coning_machine/revert_wastage', requirePermission
           note,
           reversedEventId: markEvent.id,
         });
+        if (batch?.coningBatchEnabled) await tx.issueToConingMachine.update({ where: { id: issueId }, data: { coningBatchOpen: true, coningBatchClosedAt: null, ...actorUpdateFields(req.user?.id) } });
         return { updated: after, revertEvent: ev };
       }));
     } catch (err) {
@@ -11107,6 +11165,7 @@ router.put('/api/receive_from_coning_machine/rows/:id', requireEditPermission('r
       // Rows already paid in a contractor settlement cannot be edited here;
       // the lock also serializes against an in-flight Mark Paid.
       await assertProductionRowsEditable(tx, 'coning', [id]);
+      await lockConingBatch(tx, pieceId);
       const totals = await tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId } });
       if (!totals) {
         throw new Error('Receive totals not found for this issue');
@@ -11214,6 +11273,7 @@ router.delete('/api/receive_from_coning_machine/rows/:id', requireDeletePermissi
       // Rows already paid in a contractor settlement cannot be deleted here;
       // the lock also serializes against an in-flight Mark Paid.
       await assertProductionRowsEditable(tx, 'coning', [id]);
+      await lockConingBatch(tx, pieceId);
       const totals = await tx.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId } });
       if (!totals) {
         throw new Error('Receive totals not found for this issue');
@@ -11286,6 +11346,10 @@ router.post('/api/import', requireRole('admin'), async (req, res) => {
           new Error('Import is blocked: contractor settlements reference existing production rows. Delete draft settlements and resolve paid settlements before running a destructive import.'),
           { statusCode: 409 },
         );
+      }
+
+      if (await tx.coningIssueSupply.count() > 0) {
+        throw Object.assign(new Error('Import is blocked: shared coning batches retain delivery history. Use a full database backup restore instead of the legacy JSON import.'), { statusCode: 409 });
       }
 
       // Clear existing tables (simple approach for import)
@@ -13509,6 +13573,17 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
     });
     if (!issueRecord) {
       return res.status(404).json({ error: 'Issue to Coning machine record not found' });
+    }
+
+    if (issueRecord.coningBatchEnabled) {
+      const specificationChanged = [
+        ['date', date], ['machineId', machineId], ['operatorId', operatorId], ['shift', shift],
+        ['requiredPerConeNetWeight', reqPerConeWt],
+      ].some(([field, value]) => value !== undefined && String(value || '') !== String(issueRecord[field] || ''));
+      if (specificationChanged || crates !== undefined || receivedRowRefs !== undefined
+        || coneTypeId !== undefined || wrapperId !== undefined || boxId !== undefined) {
+        return res.status(409).json({ error: 'Batch deliveries are retained in supply history. Add material from Issue to Coning, or create a separate batch for different specifications.' });
+      }
     }
 
     const receiveCount = await prisma.receiveFromConingMachineRow.count({

@@ -401,6 +401,11 @@ model IssueToConingMachine {
   requiredPerConeNetWeight Float                         @default(0)
   expectedCones            Float                         @default(0)
   receivedRowRefs          Json                          @default("[]")
+  coningBatchEnabled       Boolean                       @default(false)
+  coningBatchOpen          Boolean                       @default(false)
+  coningBatchKey           String?
+  coningBatchClosedAt      DateTime?
+  supplies                 ConingIssueSupply[]
   isDeleted                Boolean                       @default(false)
   deletedAt                DateTime?
   deletedByUserId          String?
@@ -415,7 +420,25 @@ model IssueToConingMachine {
   cut                      Cut?                          @relation(fields: [cutId], references: [id])
   receiveRows              ReceiveFromConingMachineRow[] @relation("IssueConingRelation")
 
+  @@index([coningBatchKey, coningBatchOpen, isDeleted])
   @@index([isDeleted, createdAt, id])
+}
+
+// Immutable delivery events under one stable receiving ICO barcode.
+model ConingIssueSupply {
+  id              String               @id @default(cuid())
+  issueId         String
+  issue           IssueToConingMachine @relation(fields: [issueId], references: [id])
+  barcode         String               @unique
+  date            String
+  rollsIssued     Int
+  issuedWeight    Float
+  receivedRowRefs Json                 @default("[]")
+  specification   Json                 @default("{}")
+  createdAt       DateTime             @default(now())
+  createdByUserId  String?
+
+  @@index([issueId, createdAt, id])
 }
 
 model ReceiveFromConingMachineRow {

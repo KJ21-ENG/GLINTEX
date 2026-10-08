@@ -11,6 +11,7 @@ import { LABEL_STAGE_KEYS, loadTemplate, printStageTemplatesBatch } from '../../
 import { buildConingTraceContext, resolveConingTrace } from '../../utils/coningTrace';
 import { WastageNoteDialog } from '../stock/WastageNoteDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
+import { ConingSupplyHistory } from '../issue/ConingSupplyHistory';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
 import {
     ResizableIssueSummary,
@@ -197,7 +198,8 @@ export function ConingReceiveForm() {
     }, [issueMetrics, cart]);
 
     // Receiving is blocked if wastage is in cart or already marked
-    const receivingBlocked = wastageStatus.hasWastageInCart || wastageStatus.isWastageClosed;
+    const batchFinished = issue?.coningBatchEnabled && !issue.coningBatchOpen;
+    const receivingBlocked = wastageStatus.hasWastageInCart || wastageStatus.isWastageClosed || batchFinished;
 
     // --- Handlers ---
     async function handleScan() {
@@ -549,6 +551,7 @@ export function ConingReceiveForm() {
                         ...prev,
                         issueBalance: nextBalance,
                         pieceTotal: nextTotal,
+                        ...(wastageTotals && prev.coningBatchEnabled ? { coningBatchOpen: false } : {}),
                         receives: [
                             ...enrichedRows,
                             ...existingLocalRows.filter((row) => !enrichedRows.some((created) => created.id === row?.id)),
@@ -605,6 +608,18 @@ export function ConingReceiveForm() {
             setSubmitting(false);
         }
     });
+
+    async function finishBatch(reopen = false) {
+        if (!issue || submitting || cart.length > 0) return;
+        if (!window.confirm(reopen ? `Reopen batch ${issue.barcode} to account for its remaining material?` : `Finish batch ${issue.barcode}? Further supplies will start a new batch.`)) return;
+        setSubmitting(true);
+        try {
+            await (reopen ? api.reopenConingBatch(issue.id) : api.finishConingBatch(issue.id));
+            setIssue((previous) => ({ ...previous, coningBatchOpen: reopen }));
+            emitInvalidation([INVENTORY_INVALIDATION_KEYS.issueHistory('coning'), INVENTORY_INVALIDATION_KEYS.issueOnMachine('coning')], { source: 'finishConingBatch' });
+        } catch (error) { alert(error.message); }
+        finally { setSubmitting(false); }
+    }
 
     return (
         <div className="space-y-6">
@@ -763,6 +778,22 @@ export function ConingReceiveForm() {
                                 </div>
                             </ReceiveSummaryGroup>
                         </ResizableIssueSummary>
+
+                        {issue.coningBatchEnabled && (
+                            <div className="rounded-md border bg-muted/30 p-3 flex flex-wrap items-center justify-between gap-3">
+                                <div className="text-sm">
+                                    <strong>Receiving batch {issue.barcode}</strong>
+                                    <p className="text-muted-foreground">{batchFinished ? 'Batch finished. Additional material needs a new batch.' : 'Open for additional matching supplies in this shift.'}</p>
+                                </div>
+                                {batchFinished && !wastageStatus.hasWastageInDb && wastageStatus.pendingWeight > 0.001 && cart.length === 0 && (
+                                    <Button onClick={() => finishBatch(true)} disabled={submitting}>Reopen for Remaining Material</Button>
+                                )}
+                                {!batchFinished && wastageStatus.pendingWeight <= 0.001 && cart.length === 0 && (
+                                    <Button onClick={() => finishBatch()} disabled={submitting}>Finish Batch</Button>
+                                )}
+                            </div>
+                        )}
+                        <ConingSupplyHistory issue={issue} />
 
                         {/* Wastage closed alert */}
                         {wastageStatus.isWastageClosed && (

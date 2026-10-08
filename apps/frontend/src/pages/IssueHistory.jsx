@@ -2524,6 +2524,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-muted-foreground uppercase">Machine</label>
                       <Select
+                        disabled={Boolean(editingIssue.coningBatchEnabled)}
                         value={issueDraft.machineId}
                         onChange={(e) => updateIssueDraftField('machineId', e.target.value)}
                         options={(db.machines || []).filter(m => m.processType === 'all' || m.processType === 'coning').map(m => ({ id: m.id, name: m.name }))}
@@ -2536,6 +2537,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-muted-foreground uppercase">Operator</label>
                       <Select
+                        disabled={Boolean(editingIssue.coningBatchEnabled)}
                         value={issueDraft.operatorId}
                         onChange={(e) => updateIssueDraftField('operatorId', e.target.value)}
                         options={(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => ({ id: o.id, name: o.name }))}
@@ -2548,6 +2550,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-muted-foreground uppercase">Shift</label>
                       <Select
+                        disabled={Boolean(editingIssue.coningBatchEnabled)}
                         value={issueDraft.shift}
                         onChange={(e) => updateIssueDraftField('shift', e.target.value)}
                         options={[{ value: 'Day', label: 'Day' }, { value: 'Night', label: 'Night' }]}
@@ -2566,7 +2569,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         valueKey="id"
                         placeholder="Select Cone Type"
                         clearable
-                        disabled={editingIssue.hasReceives}
+                        disabled={Boolean(editingIssue.coningBatchEnabled) || editingIssue.hasReceives}
                       />
                     </div>
                     <div className="space-y-1">
@@ -2579,7 +2582,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         valueKey="id"
                         placeholder="Select Wrapper"
                         clearable
-                        disabled={editingIssue.hasReceives}
+                        disabled={Boolean(editingIssue.coningBatchEnabled) || editingIssue.hasReceives}
                       />
                     </div>
                     <div className="space-y-1">
@@ -2592,7 +2595,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         valueKey="id"
                         placeholder="Select Box"
                         clearable
-                        disabled={editingIssue.hasReceives}
+                        disabled={Boolean(editingIssue.coningBatchEnabled) || editingIssue.hasReceives}
                       />
                     </div>
                     <div className="space-y-1">

@@ -180,6 +180,9 @@ export async function updateIssueToHoloMachine(id, payload) {
 export async function updateIssueToConingMachine(id, payload) {
   return await request(`/api/issue_to_coning_machine/${id}`, { method: 'PUT', body: payload });
 }
+export async function correctConingDelivery(issueId, supplyId, payload) {
+  return await request(`/api/issue_to_coning_machine/${encodeURIComponent(issueId)}/supplies/${encodeURIComponent(supplyId)}/corrections`, { method: 'POST', body: payload });
+}
 export async function updateIssueToMachine(id, process = 'cutter', payload) {
   if (process === 'holo') return await updateIssueToHoloMachine(id, payload);
   if (process === 'coning') return await updateIssueToConingMachine(id, payload);

@@ -52,8 +52,24 @@ batch.
   combined. Shared batches start with issues created after this release.
 - The receiving batch owns stock, receive, take-back, wastage and payment totals.
   Supply records are history, not additional stock or payment rows.
-- Quantities and specifications of a shared batch cannot be rewritten through
-  ordinary issue editing. Notes retain the existing edit permissions.
+- Date, machine, operator, shift and notes retain ordinary edit permissions and
+  paid-settlement safeguards. Corrections update automatic matching, retain the
+  first ICO receiving barcode and append before/after snapshots to history.
+- Before receiving starts, choose a specific delivery in the issue editor to
+  correct its source crates, rolls or weight. Enter a reason. Original deliveries
+  remain immutable; current allocations come from their latest correction.
+  Source stock and combined batch totals change in one transaction. Corrections
+  are blocked by active take-backs, wastage or a closed batch.
+- Quantity corrections remain locked after receiving starts, including when a
+  receive was later deleted. The server checks this under the batch lock at save
+  time, so an editor opened earlier cannot change quantities after a receive.
+  A stale batch revision also requires reloading before saving.
+- Cone type, wrapper, box and target cone weight remain fixed for shared batches;
+  different specifications require a separate batch.
+- Allocation or date/machine/operator/shift corrections require replacing
+  supervisor stickers printed before the correction. History shows the original
+  and corrected quantities, reason, timestamp and changed details. Reprinting
+  loads fresh batch details and keeps the original receiving ICO.
 - Existing paid-issue protections still apply to additions and edits. If a batch
   is locked by payment, create a separate batch under the existing payment rules.
 - Transactions lock source crates and the receiving batch. Concurrent supplies
@@ -76,3 +92,7 @@ TEST_DATABASE_URL=postgresql://user@localhost/glintex_coning_batches_test \
 It covers mixed twists/lots, supply aliases, partial receives and source reuse,
 opt-out and ambiguous matches, finishing and wastage reversal, take-backs,
 concurrent supplies/receives, re-coning and legacy/edit/permission safeguards.
+Correction coverage includes metadata edits after receiving, future matching,
+repeated per-delivery corrections, crate replacement, source stock credit and
+dispatch limits, take-back/wastage reversals, paid guards and both lock orderings
+of a simultaneously saving correction and receive.

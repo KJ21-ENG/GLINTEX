@@ -259,5 +259,337 @@ if (!url) {
     assert.equal(await prisma.coningIssueSupply.count(), supplyCount);
   });
 
+  const lookup = async (issue) => {
+    const result = await api('get', `${createPath}/lookup?barcode=${issue.barcode}`);
+    assert.equal(result.status, 200, result.text);
+    return result.body;
+  };
+  const correct = (issue, supply, crates, changes = {}) => api('post', `${createPath}/${issue.id}/supplies/${supply.id}/corrections`, {
+    expectedRevision: issue.coningBatchRevision, crates, reason: 'Correct recorded allocation', ...changes,
+  });
+  const availability = async (row) => {
+    const result = await api('get', `${createPath}/source-row/lookup?barcode=${row.barcode}`);
+    assert.ok([200, 409].includes(result.status), result.text);
+    assert.ok(result.body.availability);
+    return result.body.availability;
+  };
+
+  test('batch metadata corrections restore prior edits after receiving and update future matching with the stable ICO', async () => {
+    const f = await scenario();
+    const first = await f.issue(await f.source());
+    const issue = first.issueToConingMachine;
+    const received = await f.receive(issue.id, 10);
+    assert.equal(received.status, 200, received.text);
+    const receiveBefore = await prisma.receiveFromConingMachineRow.findUnique({ where: { id: received.body.row.id } });
+    const supplyBefore = await prisma.coningIssueSupply.findUnique({ where: { id: first.supply.id } });
+    const machine = await prisma.machine.create({ data: { name: `Correct machine ${unique}`, processType: 'coning' } });
+    const operator = await prisma.operator.create({ data: { name: `Correct worker ${unique}`, processType: 'coning' } });
+    const changes = { date: '2026-10-09', shift: 'Night', machineId: machine.id, operatorId: operator.id };
+    const saved = await api('put', `${createPath}/${issue.id}`, { ...changes, expectedRevision: issue.coningBatchRevision });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(saved.body.issueToConingMachine.barcode, issue.barcode);
+    assert.notEqual(saved.body.issueToConingMachine.coningBatchKey, issue.coningBatchKey);
+    assert.equal(saved.body.requiresStickerReprint, true);
+    assert.equal(saved.body.correction.createdByUserId, user.id);
+    assert.equal(saved.body.correction.before.operatorId, issue.operatorId);
+    assert.equal(saved.body.correction.after.operatorId, operator.id);
+    assert.deepEqual(await prisma.coningIssueSupply.findUnique({ where: { id: first.supply.id } }), supplyBefore);
+    assert.deepEqual(await prisma.receiveFromConingMachineRow.findUnique({ where: { id: receiveBefore.id } }), receiveBefore);
+    const next = await f.source();
+    assert.equal((await f.candidates(next)).candidates.length, 0);
+    assert.equal((await f.candidates(next, changes)).candidates[0].id, issue.id);
+    assert.equal((await f.issue(next, changes)).issueToConingMachine.id, issue.id);
+  });
+
+  test('repeated corrections replace only the selected delivery, retaining original history and releasing source stock once', async () => {
+    const f = await scenario();
+    const row = await f.source(100);
+    row.rollCount = 10;
+    await prisma.receiveFromHoloMachineRow.update({ where: { id: row.id }, data: { rollCount: 10 } });
+    const first = await f.issue(row, { crates: [f.crate(row, 60, 6)] });
+    const second = await f.issue(row, { crates: [f.crate(row, 20, 2)] });
+    const original = await prisma.coningIssueSupply.findUnique({ where: { id: first.supply.id } });
+    const secondOriginal = await prisma.coningIssueSupply.findUnique({ where: { id: second.supply.id } });
+    const changed = await correct(second.issueToConingMachine, first.supply, [f.crate(row, 30, 3)]);
+    assert.equal(changed.status, 200, changed.text);
+    assert.equal(changed.body.issueToConingMachine.rollsIssued, 5);
+    assert.equal(changed.body.issueToConingMachine.expectedCones, 100);
+    assert.equal((await availability(row)).availableRolls, 5);
+    assert.equal((await availability(row)).availableWeight, 50);
+    const repeated = await correct(changed.body.issueToConingMachine, first.supply, [f.crate(row, 20, 2)]);
+    assert.equal(repeated.status, 200, repeated.text);
+    assert.equal(repeated.body.correction.before.issuedWeight, 30);
+    assert.equal(repeated.body.correction.after.issuedWeight, 20);
+    const detail = await lookup(first.issueToConingMachine);
+    assert.equal(detail.issueBalance.originalWeight, 40);
+    assert.equal(detail.supplies[0].issuedWeight, 60);
+    assert.equal(detail.supplies[0].current.issuedWeight, 20);
+    assert.equal(detail.supplies[0].corrections.length, 2);
+    assert.equal(detail.supplies[1].current.issuedWeight, 20);
+    assert.equal((await availability(row)).availableWeight, 60);
+    assert.deepEqual(await prisma.coningIssueSupply.findUnique({ where: { id: first.supply.id } }), original);
+    assert.deepEqual(await prisma.coningIssueSupply.findUnique({ where: { id: second.supply.id } }), secondOriginal);
+    const topup = await f.issue(row, { crates: [f.crate(row, 60, 6)] });
+    assert.equal(topup.issueToConingMachine.id, first.issueToConingMachine.id);
+    assert.equal((await availability(row)).availableRolls, 0);
+    assert.equal((await availability(row)).availableWeight, 0);
+    assert.equal((await lookup(first.issueToConingMachine)).issueBalance.originalWeight, 100);
+  });
+
+  test('replacing a delivery crate updates both source balances and matching lineage atomically', async () => {
+    const f = await scenario();
+    const oldRow = await f.source();
+    const first = await f.issue(oldRow);
+    const cut = await prisma.cut.create({ data: { name: `Replacement cut ${unique}` } });
+    const newRow = await f.source(30, f.twistB.id, 'replacement', { cutId: cut.id });
+    const saved = await correct(first.issueToConingMachine, first.supply, [f.crate(newRow)]);
+    assert.equal(saved.status, 200, saved.text);
+    const issue = saved.body.issueToConingMachine;
+    assert.equal(issue.cutId, cut.id);
+    assert.equal(issue.barcode, first.issueToConingMachine.barcode);
+    assert.equal((await availability(oldRow)).availableWeight, 40);
+    assert.equal((await availability(newRow)).availableWeight, 0);
+    const detail = await lookup(issue);
+    assert.equal(detail.supplies[0].receivedRowRefs[0].rowId, oldRow.id);
+    assert.equal(detail.supplies[0].current.receivedRowRefs[0].rowId, newRow.id);
+    assert.equal(detail.issueBalance.originalWeight, 30);
+    assert.equal((await f.candidates(await f.source())).candidates.length, 0);
+    const matching = await f.source(40, f.twistA.id, 'next', { cutId: cut.id });
+    assert.equal((await f.candidates(matching)).candidates[0].id, issue.id);
+    await prisma.receiveFromHoloMachineRow.update({ where: { id: oldRow.id }, data: { dispatchedCount: 1, dispatchedWeight: 30 } });
+    const rejected = await correct(issue, first.supply, [f.crate(oldRow, 20, 1)]);
+    assert.equal(rejected.status, 409, rejected.text);
+    assert.equal((await lookup(issue)).issueBalance.originalWeight, 30);
+    assert.equal(await prisma.coningIssueCorrection.count({ where: { issueId: issue.id } }), 1);
+  });
+
+  test('a correction cannot mix incompatible deliveries and invalid corrections leave stock and history untouched', async () => {
+    const f = await scenario();
+    const first = await f.issue(await f.source());
+    const second = await f.issue(await f.source());
+    const issue = second.issueToConingMachine;
+    const cut = await prisma.cut.create({ data: { name: `Incompatible ${unique}` } });
+    const wrong = await f.source(40, f.twistA.id, 'wrong', { cutId: cut.id });
+    for (const crates of [[f.crate(wrong)], [], [f.crate(wrong, -5, 1)], [f.crate(wrong, 5, 0.5)]]) {
+      const rejected = await correct(issue, first.supply, crates);
+      assert.equal(rejected.status, 400, rejected.text);
+    }
+    const missingReason = await correct(issue, first.supply, [f.crate(wrong)], { reason: '' });
+    assert.equal(missingReason.status, 400);
+    assert.equal((await lookup(issue)).issueBalance.originalWeight, 80);
+    assert.equal((await availability(wrong)).availableWeight, 40);
+    assert.equal(await prisma.coningIssueCorrection.count({ where: { issueId: issue.id } }), 0);
+  });
+
+  test('a receive saved while the editor is open rejects quantities at save time, even after receive deletion', async () => {
+    const f = await scenario();
+    const row = await f.source();
+    const first = await f.issue(row);
+    const opened = await lookup(first.issueToConingMachine);
+    assert.equal(opened.canCorrectDeliveries, true);
+    const received = await f.receive(opened.id, 10);
+    assert.equal(received.status, 200);
+    const rejected = await correct(opened, first.supply, [f.crate(row, 20, 1)]);
+    assert.equal(rejected.status, 409, rejected.text);
+    assert.match(rejected.body.error, /Receiving has started/);
+    assert.equal((await lookup(opened)).issueBalance.originalWeight, 40);
+    assert.equal((await lookup(opened)).canCorrectDeliveries, false);
+    assert.equal(await prisma.coningIssueCorrection.count({ where: { issueId: opened.id } }), 0);
+    assert.equal((await api('delete', `/api/receive_from_coning_machine/rows/${received.body.row.id}`)).status, 200);
+    assert.equal((await correct(opened, first.supply, [f.crate(row, 20, 1)])).status, 409);
+  });
+
+  test('active take-backs and wastage prohibit delivery corrections; reversal restores eligibility', async () => {
+    const f = await scenario();
+    const row = await f.source();
+    const first = await f.issue(row);
+    const issue = first.issueToConingMachine;
+    const returned = await api('post', `${createPath}/${issue.id}/take_back`, { date: f.base.date, reason: 'Return', lines: [{ sourceId: row.id, count: 1, weight: 10 }] });
+    assert.equal(returned.status, 200, returned.text);
+    const rejected = await correct(issue, first.supply, [f.crate(row, 20, 1)]);
+    assert.equal(rejected.status, 409, rejected.text);
+    assert.match(rejected.body.error, /take-backs/);
+    const takenBack = await prisma.issueTakeBack.findFirst({ where: { issueId: issue.id, isReverse: false } });
+    assert.equal((await api('post', `/api/issue_take_backs/${takenBack.id}/reverse`, { reason: 'Incorrect return' })).status, 200);
+    const wastage = await api('post', '/api/receive_from_coning_machine/mark_wastage', { issueId: issue.id });
+    assert.equal(wastage.status, 200, wastage.text);
+    const wasteRejected = await correct(issue, first.supply, [f.crate(row, 20, 1)]);
+    assert.equal(wasteRejected.status, 409, wasteRejected.text);
+    assert.match(wasteRejected.body.error, /wastage/);
+    const reversed = await api('post', '/api/receive_from_coning_machine/revert_wastage', { issueId: issue.id, reason: 'Material found' });
+    assert.equal(reversed.status, 200, reversed.text);
+    assert.equal((await correct(issue, first.supply, [f.crate(row, 20, 1)])).status, 200);
+  });
+
+  test('concurrent corrections reject stale revisions instead of overwriting a delivery twice', async () => {
+    const f = await scenario();
+    const row = await f.source();
+    const first = await f.issue(row);
+    const responses = await Promise.all([20, 30].map((kg) => correct(first.issueToConingMachine, first.supply, [f.crate(row, kg, 1)])));
+    assert.equal(responses.filter((result) => result.status === 200).length, 1, responses.map((r) => r.text).join('\n'));
+    assert.equal(responses.filter((result) => result.status === 409).length, 1);
+    assert.equal(await prisma.coningIssueCorrection.count({ where: { issueId: first.issueToConingMachine.id } }), 1);
+    const winner = responses.find((result) => result.status === 200).body;
+    assert.equal((await lookup(first.issueToConingMachine)).issueBalance.originalWeight, winner.correction.after.issuedWeight);
+    const staleMeta = await api('put', `${createPath}/${first.issueToConingMachine.id}`, { shift: 'Night', expectedRevision: 0 });
+    assert.equal(staleMeta.status, 409);
+  });
+
+  test('a correction and a new issue competing for released stock cannot oversubscribe its source', async () => {
+    const f = await scenario();
+    const row = await f.source();
+    const first = await f.issue(row, { crates: [f.crate(row, 20, 1)] });
+    const responses = await Promise.all([
+      correct(first.issueToConingMachine, first.supply, [f.crate(row, 40, 2)]),
+      api('post', createPath, { ...f.base, batchMode: 'new', crates: [f.crate(row, 20, 1)] }),
+    ]);
+    assert.equal(responses.filter((result) => result.status === 200).length, 1, responses.map((r) => r.text).join('\n'));
+    assert.ok(responses.every((result) => [200, 400, 409].includes(result.status)));
+    const balance = await availability(row);
+    assert.equal(balance.issuedToConingRolls, 2);
+    assert.equal(balance.issuedToConingWeight, 40);
+    assert.equal(balance.availableRolls, 0);
+    assert.equal(balance.availableWeight, 0);
+  });
+
+  test('cleared matching fields disable future joining and unchanged saves create no correction', async () => {
+    const f = await scenario();
+    const first = await f.issue(await f.source());
+    const issue = first.issueToConingMachine;
+    const unchanged = await api('put', `${createPath}/${issue.id}`, { shift: 'Day', expectedRevision: issue.coningBatchRevision });
+    assert.equal(unchanged.status, 200);
+    assert.equal(unchanged.body.correction, null);
+    const cleared = await api('put', `${createPath}/${issue.id}`, { operatorId: null, expectedRevision: issue.coningBatchRevision });
+    assert.equal(cleared.status, 200, cleared.text);
+    assert.equal(cleared.body.issueToConingMachine.coningBatchKey, null);
+    assert.equal(cleared.body.issueToConingMachine.barcode, issue.barcode);
+    assert.equal((await f.candidates(await f.source())).candidates.length, 0);
+  });
+
+  async function waitForBlocked(pid, minimum = 1) {
+    for (let attempt = 0; attempt < 150; attempt++) {
+      const [{ count }] = await prisma.$queryRaw`WITH RECURSIVE blocked AS (
+        SELECT pid FROM pg_stat_activity WHERE ${pid} = ANY(pg_blocking_pids(pid))
+        UNION
+        SELECT a.pid FROM pg_stat_activity a JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))
+      ) SELECT COUNT(*)::int AS count FROM blocked`;
+      if (count >= minimum) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail('Expected API request to block on the fixture row lock');
+  }
+
+  test('a simultaneously saving receive wins the batch lock and blocks the waiting quantity correction', async () => {
+    const f = await scenario();
+    const row = await f.source();
+    const first = await f.issue(row);
+    const issue = first.issueToConingMachine;
+    let release, ready;
+    const held = new Promise((resolve) => { ready = resolve; });
+    const hold = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "IssueToConingMachine" WHERE id = ${issue.id} FOR UPDATE`;
+      const [{ pid }] = await tx.$queryRaw`SELECT pg_backend_pid() AS pid`;
+      ready(pid);
+      await new Promise((resolve) => { release = resolve; });
+    });
+    const pid = await held;
+    let receiving, correcting;
+    try {
+      receiving = f.receive(issue.id, 10).then((result) => result);
+      await waitForBlocked(pid);
+      correcting = correct(issue, first.supply, [f.crate(row, 20, 1)]).then((result) => result);
+      await waitForBlocked(pid, 2);
+    } finally { release(); await hold; }
+    const received = await receiving;
+    const rejected = await correcting;
+    assert.equal(received.status, 200, received.text);
+    assert.equal(rejected.status, 409, rejected.text);
+    assert.match(rejected.body.error, /Receiving has started/);
+    const detail = await lookup(issue);
+    assert.equal(detail.issueBalance.originalWeight, 40);
+    assert.equal(detail.issueBalance.pendingWeight, 30);
+    assert.equal(detail.corrections.length, 0);
+  });
+
+  test('a correction that wins the lock commits its allocation before simultaneous receiving consumes it', async () => {
+    const f = await scenario();
+    const row = await f.source();
+    const first = await f.issue(row);
+    const issue = first.issueToConingMachine;
+    let release, ready;
+    const held = new Promise((resolve) => { ready = resolve; });
+    const hold = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "ReceiveFromHoloMachineRow" WHERE id = ${row.id} FOR UPDATE`;
+      const [{ pid }] = await tx.$queryRaw`SELECT pg_backend_pid() AS pid`;
+      ready(pid);
+      await new Promise((resolve) => { release = resolve; });
+    });
+    const pid = await held;
+    let receiving, correcting;
+    try {
+      correcting = correct(issue, first.supply, [f.crate(row, 20, 1)]).then((result) => result);
+      await waitForBlocked(pid);
+      receiving = f.receive(issue.id, 10).then((result) => result);
+    } finally { release(); await hold; }
+    const saved = await correcting;
+    const received = await receiving;
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(received.status, 200, received.text);
+    const detail = await lookup(issue);
+    assert.equal(detail.issueBalance.originalWeight, 20);
+    assert.equal(detail.issueBalance.pendingWeight, 10);
+    assert.equal(detail.corrections.length, 1);
+    assert.equal(received.body.row.sourceRowRefs[0].weight, 10);
+  });
+
+  test('paid issues retain their edit protection and note-only corrections do not demand reprinting', async () => {
+    const f = await scenario();
+    const first = await f.issue(await f.source());
+    const issue = first.issueToConingMachine;
+    const note = await api('put', `${createPath}/${issue.id}`, { note: 'Supervisor note', expectedRevision: issue.coningBatchRevision });
+    assert.equal(note.status, 200, note.text);
+    assert.equal(note.body.requiresStickerReprint, false);
+    const received = await f.receive(issue.id, 10);
+    assert.equal(received.status, 200);
+    const contractor = await prisma.contractor.create({ data: { name: `Paid guard ${unique}` } });
+    await prisma.contractorSettlement.create({ data: { contractorId: contractor.id, process: 'coning', periodFrom: f.base.date,
+      periodTo: f.base.date, status: 'paid', lines: { create: { process: 'coning', sourceRowId: received.body.row.id, netKg: 10, ratePerKg: 1, amount: 10 } } } });
+    const rejected = await api('put', `${createPath}/${issue.id}`, { shift: 'Night', expectedRevision: note.body.issueToConingMachine.coningBatchRevision });
+    assert.equal(rejected.status, 409, rejected.text);
+    assert.match(rejected.body.error, /PAID/);
+    assert.equal((await lookup(issue)).shift, 'Day');
+    assert.equal((await request(app).post(`${createPath}/${issue.id}/supplies/${first.supply.id}/corrections`).send({})).status, 401);
+  });
+
+  test('payment protection rechecks a receive committed and paid between the row scan and acquiring the issue lock', async () => {
+    const f = await scenario();
+    const first = await f.issue(await f.source());
+    const issue = first.issueToConingMachine;
+    const { correctConingIssue } = await import('../../services/coningCorrections.js');
+    let inserted = false;
+    await assert.rejects(prisma.$transaction(async (tx) => {
+      const receiving = new Proxy(tx.receiveFromConingMachineRow, { get(model, field) {
+        if (field !== 'findMany') return model[field];
+        return async (query) => {
+          const originalRows = await model.findMany(query);
+          if (!inserted) {
+            inserted = true;
+            assert.equal(originalRows.length, 0);
+            const received = await f.receive(issue.id, 10);
+            assert.equal(received.status, 200, received.text);
+            const contractor = await prisma.contractor.create({ data: { name: `Payment race ${unique}` } });
+            await prisma.contractorSettlement.create({ data: { contractorId: contractor.id, process: 'coning', periodFrom: f.base.date,
+              periodTo: f.base.date, status: 'paid', lines: { create: { process: 'coning', sourceRowId: received.body.row.id, netKg: 10, ratePerKg: 1, amount: 10 } } } });
+          }
+          return originalRows;
+        };
+      } });
+      const client = new Proxy(tx, { get(target, field) { return field === 'receiveFromConingMachineRow' ? receiving : target[field]; } });
+      return correctConingIssue(client, { issueId: issue.id, patch: { shift: 'Night' }, expectedRevision: issue.coningBatchRevision, actorUserId: user.id });
+    }), (error) => error.statusCode === 409 && /PAID/.test(error.message));
+    assert.equal((await lookup(issue)).shift, 'Day');
+    assert.equal((await lookup(issue)).corrections.length, 0);
+  });
+
   test.after(async () => { await prisma.$disconnect(); });
 }

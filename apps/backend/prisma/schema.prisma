@@ -405,7 +405,9 @@ model IssueToConingMachine {
   coningBatchOpen          Boolean                       @default(false)
   coningBatchKey           String?
   coningBatchClosedAt      DateTime?
+  coningBatchRevision      Int                           @default(0)
   supplies                 ConingIssueSupply[]
+  corrections              ConingIssueCorrection[]
   isDeleted                Boolean                       @default(false)
   deletedAt                DateTime?
   deletedByUserId          String?
@@ -437,8 +439,28 @@ model ConingIssueSupply {
   specification   Json                 @default("{}")
   createdAt       DateTime             @default(now())
   createdByUserId  String?
+  corrections     ConingIssueCorrection[]
 
   @@index([issueId, createdAt, id])
+}
+
+// Append-only corrections. A delivery's original snapshot is never overwritten.
+model ConingIssueCorrection {
+  id                     String                 @id @default(cuid())
+  issueId                String
+  issue                  IssueToConingMachine   @relation(fields: [issueId], references: [id])
+  supplyId               String?
+  supply                 ConingIssueSupply?     @relation(fields: [supplyId], references: [id])
+  revision               Int
+  before                 Json
+  after                  Json
+  reason                 String?
+  requiresStickerReprint Boolean                @default(true)
+  createdAt              DateTime               @default(now())
+  createdByUserId         String?
+
+  @@unique([issueId, revision])
+  @@index([supplyId, revision])
 }
 
 model ReceiveFromConingMachineRow {

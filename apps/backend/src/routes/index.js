@@ -35,6 +35,7 @@ import { assertProductionRowsEditable, assertIssueEditable, lockSettlementLinesE
 import { perfLog, isPerfLogEnabled } from '../lib/perfLog.js';
 import { computeIssueBalancesBatch } from '../services/issueBalances.js';
 import { commitConingSupply, coningBatchKey, findConingBatchCandidates, lockConingBatch, resolveConingBatchMaterial } from '../services/coningBatches.js';
+import { correctConingIssue, coningDeliveryCorrectionLock, effectiveConingSupply } from '../services/coningCorrections.js';
 import { createCutterReceiveBatch, CutterReceiveError } from '../services/cutterReceive.js';
 import { applyTelegramCronSchedule, runPrimarySequence, runReminderSequence } from '../utils/telegramScheduler.js';
 
@@ -3165,11 +3166,19 @@ async function buildConingIssueLookupPayload(issue) {
 
   const supplies = issue.coningBatchEnabled ? await prisma.coningIssueSupply.findMany({
     where: { issueId: issue.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: { corrections: { orderBy: { revision: 'asc' } } },
   }) : [];
+  const corrections = issue.coningBatchEnabled ? await prisma.coningIssueCorrection.findMany({
+    where: { issueId: issue.id }, orderBy: { revision: 'asc' },
+  }) : [];
+  const deliveryCorrectionLockReason = issue.coningBatchEnabled ? await coningDeliveryCorrectionLock(prisma, issue) : null;
   const lotNos = [...new Set(refs.map((ref) => ref.lotNo).filter(Boolean))];
   return {
     ...issue,
-    supplies,
+    supplies: supplies.map(effectiveConingSupply),
+    corrections,
+    canCorrectDeliveries: issue.coningBatchEnabled && !deliveryCorrectionLockReason,
+    deliveryCorrectionLockReason,
     itemName,
     machineName: issue.machine?.name || '',
     operatorName: issue.operator?.name || '',
@@ -13550,6 +13559,27 @@ router.put('/api/issue_to_holo_machine/:id', requireEditPermission('issue.holo')
   }
 });
 
+router.post('/api/issue_to_coning_machine/:id/supplies/:supplyId/corrections', requireEditPermission('issue.coning'), async (req, res) => {
+  try {
+    const { date, machineId, operatorId, shift, note, crates, reason, expectedRevision } = req.body || {};
+    const result = await prisma.$transaction((tx) => correctConingIssue(tx, {
+      issueId: req.params.id, supplyId: req.params.supplyId,
+      patch: { date, machineId, operatorId, shift, note }, crates, reason, expectedRevision,
+      actorUserId: req.user?.id, loadIssuedToConing: buildHoloIssuedToConingMap,
+    }));
+    if (result.correction) await logCrudWithActor(req, {
+      entityType: 'issue_to_coning_machine', entityId: req.params.id, action: 'correct_delivery',
+      before: result.correction.before, after: result.correction.after,
+      payload: { correctionId: result.correction.id, supplyId: req.params.supplyId, reason },
+    });
+    res.json({ ok: true, issueToConingMachine: result.issue, correction: result.correction,
+      requiresStickerReprint: result.requiresStickerReprint });
+  } catch (err) {
+    if (!err.statusCode) console.error('Failed to correct coning delivery', err);
+    res.status(err.statusCode || 400).json({ error: err.message || 'Failed to correct delivery' });
+  }
+});
+
 router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coning'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
@@ -13576,14 +13606,21 @@ router.put('/api/issue_to_coning_machine/:id', requireEditPermission('issue.coni
     }
 
     if (issueRecord.coningBatchEnabled) {
-      const specificationChanged = [
-        ['date', date], ['machineId', machineId], ['operatorId', operatorId], ['shift', shift],
-        ['requiredPerConeNetWeight', reqPerConeWt],
-      ].some(([field, value]) => value !== undefined && String(value || '') !== String(issueRecord[field] || ''));
-      if (specificationChanged || crates !== undefined || receivedRowRefs !== undefined
+      if (crates !== undefined || receivedRowRefs !== undefined || reqPerConeWt !== undefined
         || coneTypeId !== undefined || wrapperId !== undefined || boxId !== undefined) {
-        return res.status(409).json({ error: 'Batch deliveries are retained in supply history. Add material from Issue to Coning, or create a separate batch for different specifications.' });
+        return res.status(409).json({ error: 'Select a specific delivery to correct crates or quantities. Batch cone specifications remain fixed.' });
       }
+      const result = await prisma.$transaction((tx) => correctConingIssue(tx, {
+        issueId: id, patch: { date, machineId, operatorId, shift, note },
+        expectedRevision: req.body.expectedRevision, actorUserId,
+      }));
+      if (result.correction) await logCrudWithActor(req, {
+        entityType: 'issue_to_coning_machine', entityId: id, action: 'update',
+        before: result.correction.before, after: result.correction.after,
+        payload: { correctionId: result.correction.id, cratesChanged: false },
+      });
+      return res.json({ ok: true, issueToConingMachine: result.issue, correction: result.correction,
+        requiresStickerReprint: result.requiresStickerReprint });
     }
 
     const receiveCount = await prisma.receiveFromConingMachineRow.count({

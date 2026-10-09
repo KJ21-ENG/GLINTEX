@@ -23,6 +23,7 @@ export async function resolveConingBatchMaterial(client, rowIds, visited = new S
   ]);
   const cuts = new Set();
   const yarns = new Set();
+  const twists = new Set();
   const items = new Set();
   const ancestors = new Set();
   let complete = holo.length + coning.length === ids.length;
@@ -30,6 +31,7 @@ export async function resolveConingBatchMaterial(client, rowIds, visited = new S
     const issue = row.issue;
     items.add(issue.itemId);
     if (issue.yarnId) yarns.add(issue.yarnId); else complete = false;
+    if (issue.twistId) twists.add(issue.twistId);
     const cutterIds = refsOf(issue.receivedRowRefs).map((ref) => ref.rowId).filter(Boolean);
     const cutterRows = cutterIds.length ? await client.receiveFromCutterMachineRow.findMany({ where: { id: { in: cutterIds }, isDeleted: false }, select: { cutId: true, cut: true } }) : [];
     if (cutterIds.length) {
@@ -53,14 +55,16 @@ export async function resolveConingBatchMaterial(client, rowIds, visited = new S
       const material = await resolveConingBatchMaterial(client, upstream, visited);
       material.cutIds.forEach((id) => cuts.add(id));
       material.yarnIds.forEach((id) => yarns.add(id));
+      material.twistIds.forEach((id) => twists.add(id));
       material.ancestorIssueIds.forEach((id) => ancestors.add(id));
       complete = complete && material.complete;
     } else {
       if (row.issue.cutId) cuts.add(row.issue.cutId); else complete = false;
       if (row.issue.yarnId) yarns.add(row.issue.yarnId); else complete = false;
+      if (row.issue.twistId) twists.add(row.issue.twistId);
     }
   }
-  return { complete, itemIds: [...items], cutIds: [...cuts], yarnIds: [...yarns], ancestorIssueIds: [...ancestors] };
+  return { complete, itemIds: [...items], cutIds: [...cuts], yarnIds: [...yarns], twistIds: [...twists], ancestorIssueIds: [...ancestors] };
 }
 
 export function coningBatchKey({ date, shift, operatorId, machineId, itemId, cutId, yarnId, coneTypeId, wrapperId, requiredPerConeNetWeight }) {
@@ -157,6 +161,7 @@ export async function commitConingSupply(client, { issueData, crates, mode = 'ne
     const refs = mergeConingSourceRefs(refsOf(existing.receivedRowRefs), crates);
     const lots = [...new Set(refs.map((ref) => ref.lotNo).filter(Boolean))];
     issue = await client.issueToConingMachine.update({ where: { id: existing.id }, data: {
+      coningBatchRevision: { increment: 1 },
       receivedRowRefs: refs, rollsIssued: existing.rollsIssued + rolls,
       expectedCones: Math.floor(sumWeight(refs) * 1000 / existing.requiredPerConeNetWeight),
       lotNo: lots.length === 1 ? lots[0] : 'MIXED',

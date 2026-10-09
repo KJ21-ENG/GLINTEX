@@ -313,7 +313,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     issueActionBusyRef.current = true;
     setIssueActionLoadingId(row.id);
     try {
-      const detail = await loadExactIssueDetail(row);
+      const detail = await loadExactIssueDetail(row, { force: true });
       if (!isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
       const hydrated = { ...row, ...detail };
       const hasReceives = typeof detail?.hasReceives === 'boolean'
@@ -399,6 +399,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         crates,
         cratesTouched: false,
         metaTouched: false,
+        deliveryId: '',
+        correctionReason: '',
       });
     } catch (err) {
       if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
@@ -429,6 +431,22 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       }
       return next;
     });
+  };
+
+  const selectConingDelivery = (deliveryId) => {
+    const supply = (editingIssue?.supplies || []).find((entry) => entry.id === deliveryId);
+    const refs = supply?.current?.receivedRowRefs || (supply ? supply.receivedRowRefs : parseIssueRefs(editingIssue));
+    const sourceById = new Map(issueSources(editingIssue).map((source) => [source.rowId || source.id, source]));
+    const crates = (refs || []).map((ref) => {
+      const source = sourceById.get(ref.rowId) || {};
+      const count = Number(source.rollCount ?? source.coneCount ?? ref.baseRolls ?? 0);
+      const weight = Number(source.rollWeight ?? source.netWeight ?? ref.baseWeight ?? 0);
+      const meta = resolveConingSourceMeta(source);
+      return { ...ref, lotNo: ref.lotNo || meta.lotNo, itemId: ref.itemId || meta.itemId,
+        cut: meta.cut, unitWeight: count > 0 ? weight / count : 0 };
+    });
+    setIssueDraft((prev) => ({ ...prev, deliveryId, crates, cratesTouched: false, correctionReason: '' }));
+    setIssueScanInput('');
   };
 
   const handleAddPiece = () => {
@@ -597,10 +615,17 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       row = result.row;
       availability = result.availability || null;
     } catch (err) {
-      if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
+      const selected = editingIssue?.coningBatchEnabled
+        ? editingIssue.supplies?.find((supply) => supply.id === issueDraft.deliveryId) : null;
+      const owned = (selected?.current?.receivedRowRefs || selected?.receivedRowRefs || [])
+        .some((ref) => ref.rowId === err.details?.row?.id);
+      if (owned && err.status === 409 && err.details?.availability) {
+        row = err.details.row;
+        availability = err.details.availability;
+      } else if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
         alert(err.message || 'Barcode not found in receive rows');
+        return;
       }
-      return;
     } finally {
       if (isCurrentIssueEditorRequest(requestGeneration, requestStage)) {
         setIssueScanLoading(false);
@@ -636,8 +661,10 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       }
     }
 
-    const baseRolls = availability?.availableRolls ?? row.availableRolls ?? row.rollCount ?? row.coneCount ?? 0;
-    const baseWeight = availability?.availableWeight ?? row.availableWeight ?? row.rollWeight ?? row.coneWeight ?? 0;
+    const delivery = editingIssue?.supplies?.find((supply) => supply.id === issueDraft.deliveryId);
+    const credited = (delivery?.current?.receivedRowRefs || delivery?.receivedRowRefs || []).find((ref) => ref.rowId === row.id);
+    const baseRolls = Number(availability?.availableRolls ?? row.availableRolls ?? row.rollCount ?? row.coneCount ?? 0) + Number(credited?.issueRolls || 0);
+    const baseWeight = Number(availability?.availableWeight ?? row.availableWeight ?? row.rollWeight ?? row.coneWeight ?? 0) + Number(credited?.issueWeight || 0);
     const unitWeight = baseRolls > 0 ? baseWeight / baseRolls : 0;
 
     setIssueDraft((prev) => prev && ({
@@ -692,6 +719,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       return;
     }
     setSavingIssue(true);
+    let requiresStickerReprint = false;
     try {
       if (process === 'cutter') {
         const payload = {
@@ -735,7 +763,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           operatorId: issueDraft.operatorId || null,
           shift: issueDraft.shift || null,
         };
-        if (!editingIssue.hasReceives) {
+        if (!editingIssue.coningBatchEnabled && !editingIssue.hasReceives) {
           if (issueDraft.requiredPerConeNetWeight !== '') {
             payload.requiredPerConeNetWeight = Number(issueDraft.requiredPerConeNetWeight || 0);
           }
@@ -756,21 +784,41 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
             }));
           }
         }
-        await api.updateIssueToMachine(editingIssue.id, process, editingIssue.coningBatchEnabled ? { note: payload.note } : payload);
+        let saved;
+        if (editingIssue.coningBatchEnabled) {
+          payload.expectedRevision = editingIssue.coningBatchRevision;
+          if (issueDraft.cratesTouched) {
+            if (!issueDraft.deliveryId) throw new Error('Select the delivery to correct');
+            if (!issueDraft.correctionReason.trim()) throw new Error('Enter a reason for the delivery correction');
+            saved = await api.correctConingDelivery(editingIssue.id, issueDraft.deliveryId, {
+              ...payload, reason: issueDraft.correctionReason,
+              crates: issueDraft.crates.map((crate) => ({ rowId: crate.rowId,
+                issueRolls: Number(crate.issueRolls), issueWeight: Number(crate.issueWeight) })),
+            });
+          } else saved = await api.updateIssueToMachine(editingIssue.id, process, payload);
+        } else saved = await api.updateIssueToMachine(editingIssue.id, process, payload);
+        requiresStickerReprint = Boolean(saved?.requiresStickerReprint);
       }
       if (process === 'cutter') {
         await refreshProcessData(process);
       } else {
         issueDetailCacheRef.current.delete(getIssueDetailCacheKey(editingIssue));
       }
+      if (process === 'coning') await Promise.allSettled([refreshProcessData('holo'), refreshProcessData('coning')]);
       emitInvalidation([
         INVENTORY_INVALIDATION_KEYS.issueOnMachine(process),
         INVENTORY_INVALIDATION_KEYS.issueHistory(process),
       ], { source: 'updateIssueToMachine', issueId: editingIssue.id });
       closeIssueEditor();
-      alert('Issue record updated.');
+      alert(requiresStickerReprint
+        ? `Correction saved. Reprint supervisor stickers for ${editingIssue.barcode} and replace copies printed before this correction. The receiving barcode is unchanged.`
+        : 'Issue record updated.');
     } catch (err) {
-      alert(err.message || 'Failed to update issue record');
+      if (err.status === 409 && editingIssue.coningBatchEnabled) {
+        issueDetailCacheRef.current.delete(getIssueDetailCacheKey(editingIssue));
+        await openIssueEditor(editingIssue);
+        alert(`${err.message} Your changes were not saved. The editor has reloaded the latest batch details.`);
+      } else alert(err.message || 'Failed to update issue record');
     } finally {
       setSavingIssue(false);
     }
@@ -789,7 +837,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     }
     try {
       let stageKey, data;
-      const exactRow = process === 'cutter' ? row : { ...row, ...(await loadExactIssueDetail(row)) };
+      const exactRow = process === 'cutter' ? row : { ...row, ...(await loadExactIssueDetail(row, { force: true })) };
       if (process !== 'cutter' && !isCurrentIssueEditorRequest(requestGeneration, requestStage)) return;
       const lotLabel = lotLabelFor(exactRow);
 
@@ -1566,6 +1614,14 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       lotNo,
     };
   }, [issueDraft, process, itemNameById]);
+
+  const coningQuantityLocked = Boolean(editingIssue?.hasReceives
+    || (editingIssue?.coningBatchEnabled && (!issueDraft?.deliveryId || !editingIssue.canCorrectDeliveries)));
+  const coningStickerDetailsChanged = Boolean(editingIssue?.coningBatchEnabled && issueDraft && (
+    issueDraft.cratesTouched || ['date', 'machineId', 'operatorId', 'shift'].some((field) => (
+      String(issueDraft[field] || '') !== String(editingIssue[field] || '')
+    ))
+  ));
 
   const coningEditTotals = useMemo(() => {
     if (!issueDraft || process !== 'coning') return null;
@@ -2510,8 +2566,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
               {process === 'coning' && (
                 <>
                   <ConingSupplyHistory issue={editingIssue} />
-                  {editingIssue.coningBatchEnabled && <p className="text-xs text-muted-foreground">Delivery history is retained. Add further material from Issue to Coning. Existing batch specifications are locked.</p>}
-                  <fieldset disabled={Boolean(editingIssue.coningBatchEnabled)} className="space-y-4 disabled:opacity-70">
+                  {coningStickerDetailsChanged && <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">These corrections require reprinting supervisor stickers and replacing earlier copies. The receiving barcode stays {editingIssue.barcode}.</p>}
+                  {editingIssue.coningBatchEnabled && <p className="text-xs text-muted-foreground">Delivery history is retained. Add further material from Issue to Coning. Date, machine, operator and shift can be corrected. Select a delivery below to correct its crates and quantities before receiving starts.</p>}
+                  <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-muted-foreground uppercase">Date</label>
@@ -2524,7 +2581,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-muted-foreground uppercase">Machine</label>
                       <Select
-                        disabled={Boolean(editingIssue.coningBatchEnabled)}
                         value={issueDraft.machineId}
                         onChange={(e) => updateIssueDraftField('machineId', e.target.value)}
                         options={(db.machines || []).filter(m => m.processType === 'all' || m.processType === 'coning').map(m => ({ id: m.id, name: m.name }))}
@@ -2537,7 +2593,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-muted-foreground uppercase">Operator</label>
                       <Select
-                        disabled={Boolean(editingIssue.coningBatchEnabled)}
                         value={issueDraft.operatorId}
                         onChange={(e) => updateIssueDraftField('operatorId', e.target.value)}
                         options={(db.operators || []).filter(o => o.processType === 'all' || o.processType === 'coning').map(o => ({ id: o.id, name: o.name }))}
@@ -2550,7 +2605,6 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-muted-foreground uppercase">Shift</label>
                       <Select
-                        disabled={Boolean(editingIssue.coningBatchEnabled)}
                         value={issueDraft.shift}
                         onChange={(e) => updateIssueDraftField('shift', e.target.value)}
                         options={[{ value: 'Day', label: 'Day' }, { value: 'Night', label: 'Night' }]}
@@ -2604,13 +2658,30 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         type="number"
                         value={issueDraft.requiredPerConeNetWeight}
                         onChange={(e) => updateIssueDraftField('requiredPerConeNetWeight', e.target.value)}
-                        disabled={editingIssue.hasReceives}
+                        disabled={Boolean(editingIssue.coningBatchEnabled) || editingIssue.hasReceives}
                       />
                     </div>
 
                   </div>
 
                   <div className="space-y-2">
+                    {editingIssue.coningBatchEnabled && (
+                      <div className="rounded-md border p-3 space-y-2">
+                        <label className="text-xs font-medium uppercase">Delivery to correct</label>
+                        <Select value={issueDraft.deliveryId} onChange={(e) => selectConingDelivery(e.target.value)}
+                          options={[{ id: '', name: 'Combined batch — view only' }, ...(editingIssue.supplies || []).map((supply) => ({
+                            id: supply.id, name: `${supply.barcode} · ${supply.current?.rollsIssued ?? supply.rollsIssued} rolls · ${formatKg(supply.current?.issuedWeight ?? supply.issuedWeight)} kg`,
+                          }))]} labelKey="name" valueKey="id" clearable
+                          disabled={!editingIssue.canCorrectDeliveries || issueDraft.cratesTouched} placeholder="Combined batch — view only" />
+                        <p className="text-xs text-muted-foreground">The original delivery is retained. Saving records a correction and updates source stock and the combined batch together.</p>
+                        {editingIssue.deliveryCorrectionLockReason && <p className="text-xs text-amber-700">{editingIssue.deliveryCorrectionLockReason}</p>}
+                        {issueDraft.cratesTouched && <Button variant="ghost" size="sm" onClick={() => selectConingDelivery(issueDraft.deliveryId)}>Discard delivery changes</Button>}
+                        {issueDraft.deliveryId && <div className="space-y-1">
+                          <label className="text-xs font-medium uppercase">Correction reason</label>
+                          <Input value={issueDraft.correctionReason} onChange={(e) => updateIssueDraftField('correctionReason', e.target.value)} placeholder="Explain the crate or quantity correction" />
+                        </div>}
+                      </div>
+                    )}
                     {editingIssue.sourcesTruncated ? (
                       <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                         This issue has more than 200 source rows. Source allocation editing is disabled, but issue details can still be updated safely.
@@ -2623,12 +2694,12 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                           value={issueScanInput}
                           onChange={(e) => setIssueScanInput(e.target.value)}
                           placeholder="Scan Holo/Coning Receive Barcode"
-                          disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated || issueScanLoading}
+                          disabled={coningQuantityLocked || editingIssue.sourcesTruncated || issueScanLoading}
                         />
                       </div>
                       <Button
                         onClick={handleAddConingCrate}
-                        disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated || issueScanLoading}
+                        disabled={coningQuantityLocked || editingIssue.sourcesTruncated || issueScanLoading}
                         className="h-9"
                       >
                         <Plus className="w-4 h-4 mr-1" />
@@ -2636,7 +2707,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       </Button>
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      Lot: {coningEditTotals?.lotNo || lotLabelFor(editingIssue)} • Rolls: {coningEditTotals?.totalRolls || 0} • Weight: {formatKg(coningEditTotals?.totalWeight || 0)} • Expected Cones: {coningEditTotals?.expectedCones || 0}
+                      {issueDraft.deliveryId ? 'Selected delivery' : 'Combined batch'} · Lot: {coningEditTotals?.lotNo || lotLabelFor(editingIssue)} • Rolls: {coningEditTotals?.totalRolls || 0} • Weight: {formatKg(coningEditTotals?.totalWeight || 0)} • Expected Cones: {coningEditTotals?.expectedCones || 0}
                     </div>
                     <div className="border rounded-md p-2 max-h-60 overflow-auto space-y-2">
                       {(issueDraft.crates || []).length === 0 ? (
@@ -2654,7 +2725,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                                   type="number"
                                   value={crate.issueRolls}
                                   onChange={(e) => updateConingCrate(crate.rowId, 'issueRolls', e.target.value)}
-                                  disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated}
+                                  disabled={coningQuantityLocked || editingIssue.sourcesTruncated}
                                 />
                               </div>
                               <div className="space-y-1">
@@ -2663,7 +2734,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                                   type="number"
                                   value={crate.issueWeight}
                                   onChange={(e) => updateConingCrate(crate.rowId, 'issueWeight', e.target.value)}
-                                  disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated}
+                                  disabled={coningQuantityLocked || editingIssue.sourcesTruncated}
                                 />
                               </div>
                               <div className="flex items-end">
@@ -2671,7 +2742,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => handleRemoveConingCrate(crate.rowId)}
-                                  disabled={editingIssue.hasReceives || editingIssue.sourcesTruncated}
+                                  disabled={coningQuantityLocked || editingIssue.sourcesTruncated}
                                 >
                                   Remove
                                 </Button>
@@ -2682,7 +2753,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                       )}
                     </div>
                   </div>
-                  </fieldset>
+                  </div>
                     <div className="space-y-1 md:col-span-3">
                       <label className="text-xs font-medium text-muted-foreground uppercase">Note</label>
                       <Input

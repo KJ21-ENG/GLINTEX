@@ -946,16 +946,21 @@ export async function assertIssueEditable(tx, process, issueId) {
   const rowIds = rows.map((r) => r.id);
   await lockProductionRows(tx, process, rowIds);
   await lockRowsForUpdate(tx, ISSUE_TABLES[process], [issueId]);
-  await assertRowsNotPaidClaimed(tx, process, rowIds, MSG);
-  if (!rowIds.length) return;
+  // A receive can commit between the first scan and acquiring the issue lock.
+  // Payment also locks this issue (including its upstream lineage), so after
+  // acquiring it we can check the fresh row set without reversing row-lock order.
+  const currentRows = await rowModel.findMany({ where: { issueId }, select: { id: true } });
+  const currentRowIds = currentRows.map((row) => row.id);
+  await assertRowsNotPaidClaimed(tx, process, currentRowIds, MSG);
+  if (!currentRowIds.length) return;
   if (process === 'holo' || process === 'coning') {
     // Coning issues referencing these rows — and their re-coning descendants,
     // recursively — trace their Cut through this issue.
-    await assertConingDescendantsNotPaid(tx, rowIds, MSG);
+    await assertConingDescendantsNotPaid(tx, currentRowIds, MSG);
   } else {
     // Cutter rows feed cut-less holo issues, whose rows feed coning cuts
     // (then re-coning descendants, recursively).
-    const holoIssueIds = await holoIssueIdsReferencingRows(tx, rowIds);
+    const holoIssueIds = await holoIssueIdsReferencingRows(tx, currentRowIds);
     if (holoIssueIds.length) {
       const holoRows = await tx.receiveFromHoloMachineRow.findMany({
         where: { issueId: { in: holoIssueIds } }, select: { id: true },

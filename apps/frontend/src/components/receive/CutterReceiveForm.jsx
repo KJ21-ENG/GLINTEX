@@ -1,5 +1,6 @@
 import { refreshAfterCommit } from '../../utils/postCommitPrint';
 import { transactionWeightProvenance } from '../../utils/weightProvenance';
+import { buildCutterReceiveEntries } from '../../utils/cutterReceivePayload';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/InventoryContext';
@@ -550,23 +551,7 @@ export function CutterReceiveForm() {
         if (cart.length === 0) return;
         setSaving(true);
         try {
-            const entries = cart.map(entry => ({
-                issueId: entry.issueId,
-                pieceId: entry.pieceId,
-                lotNo: entry.lotNo,
-                bobbinId: entry.bobbinId,
-                boxId: entry.boxId,
-                bobbinQuantity: Number(entry.bobbinQty),
-                grossWeight: Number(entry.grossWeight),
-                weightProvenance: transactionWeightProvenance(entry.grossWeight, entry.weightProvenance),
-                receiveDate: entry.receiveDate,
-                operatorId: entry.operatorId,
-                cutId: entry.cutId,
-                helperId: entry.helperId,
-                shift: entry.shift,
-                isWastage: entry.isWastage,
-                wastageNote: entry.isWastage ? (entry.wastageNote || null) : undefined,
-            }));
+            const entries = buildCutterReceiveEntries(cart);
 
             const res = await api.createCutterReceiveChallan({ entries });
             // Avoid full bootstrap refresh; cutter receives are covered by the cutter process module.

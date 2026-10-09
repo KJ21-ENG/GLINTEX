@@ -21,6 +21,8 @@ if (!databaseUrl) {
   const request = (await import('supertest')).default;
   const { hashSessionToken } = await import('../../utils/auth.js');
   const { createCutterReceiveBatch } = await import('../../services/cutterReceive.js');
+  const { computeIssueBalancesBatch } = await import('../../services/issueBalances.js');
+  const { buildCutterReceiveEntries } = await import('../../../../frontend/src/utils/cutterReceivePayload.js');
   after(() => prisma.$disconnect());
   const route = '/api/receive_from_cutter_machine/bulk';
 
@@ -60,6 +62,12 @@ if (!databaseUrl) {
     return { user, auth: `Bearer ${token}`, piece, issue, operatorA, operatorB, helper, cut, entry };
   }
   const save = (f, entries) => request(app).post(route).set('Authorization', f.auth).send({ entries });
+  const cartCrate = (entry) => ({ ...entry, bobbinQty: String(entry.bobbinQuantity), grossWeight: String(entry.grossWeight) });
+  const cartWastage = (f) => ({
+    ...f.entry(), bobbinId: '', boxId: '', bobbinQty: '', grossWeight: '',
+    isWastage: true, wastageNote: 'QA close finished piece', netWeight: 999,
+  });
+  const saveCart = (f, cart) => save(f, buildCutterReceiveEntries(cart));
   async function assertEmpty(f) {
     assert.equal(await prisma.receiveFromCutterMachineRow.count({ where: { pieceId: f.piece.id } }), 0);
     assert.equal(await prisma.receiveFromCutterMachineChallan.count({ where: { pieceId: f.piece.id } }), 0);
@@ -185,6 +193,80 @@ if (!databaseUrl) {
     assert.equal(result.body.challans.reduce((sum, challan) => sum + challan.wastageNetWeight, 0), 30);
     assert.equal(await prisma.wastageEvent.count({ where: { pieceId: f.piece.id, eventType: 'mark' } }), 1);
     await save(f, [f.entry()]).expect(400);
+  });
+
+  test('wastage-only Save All closes the reported remaining balance without changing earlier receives', async () => {
+    const f = await fixture(275.1);
+    await saveCart(f, [cartCrate(f.entry(f.operatorA.id, 268.659))]).expect(200);
+    const before = await prisma.receiveFromCutterMachineRow.findMany({ where: { pieceId: f.piece.id } });
+    const result = await saveCart(f, [cartWastage(f)]).expect(200);
+    assert.equal(result.body.rowsCreated, 0);
+    assert.equal(result.body.wastageMarked, 6.441);
+    assert.equal(result.body.challan.totalNetWeight, 0);
+    assert.equal(result.body.challan.wastageNetWeight, 6.441);
+    assert.deepEqual(await prisma.receiveFromCutterMachineRow.findMany({ where: { pieceId: f.piece.id } }), before);
+    const totals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: f.piece.id } });
+    assert.equal(totals.totalNetWeight, 268.659);
+    assert.equal(totals.wastageNetWeight, 6.441);
+    assert.equal(totals.totalBob, 20);
+    const events = await prisma.wastageEvent.findMany({ where: { pieceId: f.piece.id } });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].weight, 6.441);
+    assert.equal(events[0].note, 'QA close finished piece');
+    assert.equal(events[0].challanId, result.body.challan.id);
+    const balance = (await computeIssueBalancesBatch(prisma, 'cutter', [f.issue])).get(f.issue.id);
+    assert.equal(balance.pendingWeight, 0);
+    assert.equal(balance.wastageWeight, 6.441);
+    await saveCart(f, [cartWastage(f)]).expect(400);
+    await saveCart(f, [cartCrate(f.entry())]).expect(400);
+    assert.equal(await prisma.wastageEvent.count({ where: { pieceId: f.piece.id } }), 1);
+  });
+
+  test('mixed Save All validates measured crates and calculates wastage after all worker groups', async () => {
+    const f = await fixture(50);
+    const a = cartCrate(f.entry());
+    const b = { ...cartCrate(f.entry(f.operatorB.id)), weightProvenance: { source: 'scale', weightKg: 11.2, captureId: 'qa-capture' } };
+    const close = { ...cartWastage(f), operatorId: f.operatorB.id };
+    const result = await saveCart(f, [a, b, close]).expect(200);
+    assert.equal(result.body.rowsCreated, 2);
+    assert.equal(result.body.challans.length, 2);
+    assert.equal(result.body.wastageMarked, 30);
+    const totals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: f.piece.id } });
+    assert.equal(totals.totalNetWeight, 20);
+    assert.equal(totals.totalBob, 40);
+    assert.equal(totals.wastageNetWeight, 30);
+    assert.equal(result.body.challans.reduce((sum, c) => sum + c.totalNetWeight + c.wastageNetWeight, 0), 50);
+    assert.equal(await prisma.wastageEvent.count({ where: { pieceId: f.piece.id } }), 1);
+  });
+
+  test('invalid measured weights still reject mixed saves before any crate or wastage writes', async () => {
+    const f = await fixture(50);
+    const zero = { ...cartCrate(f.entry(f.operatorB.id)), grossWeight: '0' };
+    const result = await saveCart(f, [cartCrate(f.entry()), zero, cartWastage(f)]).expect(400);
+    assert.equal(result.body.error, 'Invalid captured weight');
+    await assertEmpty(f);
+    assert.equal(await prisma.wastageEvent.count({ where: { pieceId: f.piece.id } }), 0);
+    const mismatched = buildCutterReceiveEntries([cartCrate(f.entry()), cartWastage(f)]);
+    mismatched[0].weightProvenance.weightKg = 12;
+    await save(f, mismatched).expect(400);
+    // Omitting capture metadata cannot bypass the actual measured-weight validation.
+    await save(f, [{ ...f.entry(), grossWeight: 0 }, { ...cartWastage(f), grossWeight: 0 }]).expect(400);
+    await assertEmpty(f);
+  });
+
+  test('concurrent receiving and wastage closure conserve the piece balance and mark wastage only once', async () => {
+    const f = await fixture(20);
+    const results = await Promise.all([
+      saveCart(f, [cartCrate(f.entry(f.operatorA.id, 6))]),
+      saveCart(f, [cartWastage(f)]),
+    ]);
+    assert.equal(results[1].status, 200, results[1].text);
+    assert.ok([200, 400].includes(results[0].status), results[0].text);
+    const totals = await prisma.receiveFromCutterMachinePieceTotal.findUnique({ where: { pieceId: f.piece.id } });
+    assert.equal(totals.totalNetWeight + totals.wastageNetWeight, 20);
+    assert.equal(totals.totalNetWeight, results[0].status === 200 ? 6 : 0);
+    assert.equal(await prisma.wastageEvent.count({ where: { pieceId: f.piece.id } }), 1);
+    await saveCart(f, [cartWastage(f)]).expect(400);
   });
 
   test('selected issue lineage is preserved when a piece has two open issues', async () => {

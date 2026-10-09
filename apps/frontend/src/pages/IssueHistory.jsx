@@ -382,6 +382,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           lotNo,
           itemId,
           cut,
+          coneTypeId: ref.coneTypeId || '',
+          wrapperId: ref.wrapperId || '',
+          boxId: ref.boxId || '',
         };
       });
       const firstRef = orderedRefs[0] || {};
@@ -399,7 +402,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         crates,
         cratesTouched: false,
         metaTouched: false,
-        deliveryId: '',
+        deliveryId: hydrated.canCorrectDeliveries && hydrated.supplies?.length === 1 ? hydrated.supplies[0].id : '',
+        boxTouched: false,
         correctionReason: '',
       });
     } catch (err) {
@@ -429,6 +433,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       if (process === 'coning' && ['coneTypeId', 'wrapperId', 'boxId'].includes(field)) {
         next.metaTouched = true;
       }
+      if (process === 'coning' && field === 'boxId') next.boxTouched = true;
       return next;
     });
   };
@@ -445,7 +450,9 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       return { ...ref, lotNo: ref.lotNo || meta.lotNo, itemId: ref.itemId || meta.itemId,
         cut: meta.cut, unitWeight: count > 0 ? weight / count : 0 };
     });
-    setIssueDraft((prev) => ({ ...prev, deliveryId, crates, cratesTouched: false, correctionReason: '' }));
+    setIssueDraft((prev) => ({ ...prev, deliveryId, crates, cratesTouched: false, boxTouched: false,
+      boxId: refs?.[0]?.boxId || '',
+    }));
     setIssueScanInput('');
   };
 
@@ -787,13 +794,23 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
         let saved;
         if (editingIssue.coningBatchEnabled) {
           payload.expectedRevision = editingIssue.coningBatchRevision;
-          if (issueDraft.cratesTouched) {
+          const specificationsChanged = coningSpecificationsChanged;
+          if (specificationsChanged) {
+            payload.coneTypeId = issueDraft.coneTypeId || null;
+            payload.wrapperId = issueDraft.wrapperId || null;
+            payload.requiredPerConeNetWeight = Number(issueDraft.requiredPerConeNetWeight);
+          }
+          if (specificationsChanged || issueDraft.cratesTouched || issueDraft.boxTouched) {
+            if (!issueDraft.correctionReason.trim()) throw new Error('Enter a reason for the correction');
+            payload.reason = issueDraft.correctionReason;
+          }
+          if (issueDraft.cratesTouched || issueDraft.boxTouched) {
             if (!issueDraft.deliveryId) throw new Error('Select the delivery to correct');
-            if (!issueDraft.correctionReason.trim()) throw new Error('Enter a reason for the delivery correction');
+            if (issueDraft.boxTouched) payload.boxId = issueDraft.boxId || null;
             saved = await api.correctConingDelivery(editingIssue.id, issueDraft.deliveryId, {
-              ...payload, reason: issueDraft.correctionReason,
-              crates: issueDraft.crates.map((crate) => ({ rowId: crate.rowId,
-                issueRolls: Number(crate.issueRolls), issueWeight: Number(crate.issueWeight) })),
+              ...payload,
+              ...(issueDraft.cratesTouched ? { crates: issueDraft.crates.map((crate) => ({ rowId: crate.rowId,
+                issueRolls: Number(crate.issueRolls), issueWeight: Number(crate.issueWeight) })) } : {}),
             });
           } else saved = await api.updateIssueToMachine(editingIssue.id, process, payload);
         } else saved = await api.updateIssueToMachine(editingIssue.id, process, payload);
@@ -1617,8 +1634,13 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
 
   const coningQuantityLocked = Boolean(editingIssue?.hasReceives
     || (editingIssue?.coningBatchEnabled && (!issueDraft?.deliveryId || !editingIssue.canCorrectDeliveries)));
+  const coningSpecificationsLocked = editingIssue?.coningBatchEnabled ? !editingIssue.canCorrectSpecifications : editingIssue?.hasReceives;
+  const coningSpecificationsChanged = Boolean(editingIssue?.coningBatchEnabled && issueDraft && (
+    ['coneTypeId', 'wrapperId'].some((field) => String(issueDraft[field] || '') !== String(editingIssue[field] || ''))
+    || Number(issueDraft.requiredPerConeNetWeight) !== Number(editingIssue.requiredPerConeNetWeight)
+  ));
   const coningStickerDetailsChanged = Boolean(editingIssue?.coningBatchEnabled && issueDraft && (
-    issueDraft.cratesTouched || ['date', 'machineId', 'operatorId', 'shift'].some((field) => (
+    issueDraft.cratesTouched || issueDraft.boxTouched || coningSpecificationsChanged || ['date', 'machineId', 'operatorId', 'shift'].some((field) => (
       String(issueDraft[field] || '') !== String(editingIssue[field] || '')
     ))
   ));
@@ -1629,16 +1651,20 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
     const totalWeight = (issueDraft.crates || []).reduce((sum, c) => sum + Number(c.issueWeight || 0), 0);
     const target = Number(issueDraft.requiredPerConeNetWeight || 0);
     const expectedCones = target > 0 ? Math.floor((totalWeight * 1000) / target) : 0;
+    const selected = editingIssue?.supplies?.find((supply) => supply.id === issueDraft.deliveryId);
+    const originalBatchWeight = parseIssueRefs(editingIssue).reduce((sum, ref) => sum + Number(ref.issueWeight || 0), 0);
+    const batchWeight = selected ? originalBatchWeight - Number(selected.current?.issuedWeight ?? selected.issuedWeight) + totalWeight : totalWeight;
     const itemId = issueDraft.crates?.[0]?.itemId || '';
     const lotNo = formatMixedLotLabel((issueDraft.crates || []).map(c => c.lotNo));
     return {
       totalRolls,
       totalWeight,
       expectedCones,
+      batchExpectedCones: target > 0 ? Math.floor(batchWeight * 1000 / target) : 0,
       itemName: itemNameById.get(itemId) || '',
       lotNo,
     };
-  }, [issueDraft, process, itemNameById]);
+  }, [issueDraft, process, itemNameById, editingIssue]);
 
   return (
     <div className="space-y-4">
@@ -2567,7 +2593,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                 <>
                   <ConingSupplyHistory issue={editingIssue} />
                   {coningStickerDetailsChanged && <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">These corrections require reprinting supervisor stickers and replacing earlier copies. The receiving barcode stays {editingIssue.barcode}.</p>}
-                  {editingIssue.coningBatchEnabled && <p className="text-xs text-muted-foreground">Delivery history is retained. Add further material from Issue to Coning. Date, machine, operator and shift can be corrected. Select a delivery below to correct its crates and quantities before receiving starts.</p>}
+                  {editingIssue.coningBatchEnabled && <p className="text-xs text-muted-foreground">Delivery history is retained. Date, machine, operator and shift can be corrected. Before receiving starts, cone type, wrapper and target weight can be corrected for the whole batch. Select a delivery to correct its box, crates or quantities.</p>}
                   <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-1">
@@ -2623,7 +2649,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         valueKey="id"
                         placeholder="Select Cone Type"
                         clearable
-                        disabled={Boolean(editingIssue.coningBatchEnabled) || editingIssue.hasReceives}
+                        disabled={coningSpecificationsLocked}
                       />
                     </div>
                     <div className="space-y-1">
@@ -2636,11 +2662,11 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         valueKey="id"
                         placeholder="Select Wrapper"
                         clearable
-                        disabled={Boolean(editingIssue.coningBatchEnabled) || editingIssue.hasReceives}
+                        disabled={coningSpecificationsLocked}
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground uppercase">Box</label>
+                      <label className="text-xs font-medium text-muted-foreground uppercase">Box{editingIssue.coningBatchEnabled ? ' · Selected delivery' : ''}</label>
                       <Select
                         value={issueDraft.boxId}
                         onChange={(e) => updateIssueDraftField('boxId', e.target.value)}
@@ -2649,7 +2675,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         valueKey="id"
                         placeholder="Select Box"
                         clearable
-                        disabled={Boolean(editingIssue.coningBatchEnabled) || editingIssue.hasReceives}
+                        disabled={editingIssue.coningBatchEnabled ? coningQuantityLocked : editingIssue.hasReceives}
                       />
                     </div>
                     <div className="space-y-1">
@@ -2658,27 +2684,29 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
                         type="number"
                         value={issueDraft.requiredPerConeNetWeight}
                         onChange={(e) => updateIssueDraftField('requiredPerConeNetWeight', e.target.value)}
-                        disabled={Boolean(editingIssue.coningBatchEnabled) || editingIssue.hasReceives}
+                        disabled={coningSpecificationsLocked}
                       />
                     </div>
 
                   </div>
+
+                  {editingIssue.coningBatchEnabled && <p className="text-xs text-muted-foreground">Cone type, wrapper and target weight apply to every delivery in this batch. Combined expected cones: {coningEditTotals?.batchExpectedCones || 0}. Box changes apply to the selected delivery.</p>}
 
                   <div className="space-y-2">
                     {editingIssue.coningBatchEnabled && (
                       <div className="rounded-md border p-3 space-y-2">
                         <label className="text-xs font-medium uppercase">Delivery to correct</label>
                         <Select value={issueDraft.deliveryId} onChange={(e) => selectConingDelivery(e.target.value)}
-                          options={[{ id: '', name: 'Combined batch — view only' }, ...(editingIssue.supplies || []).map((supply) => ({
+                          options={[{ id: '', name: 'Combined batch — quantities read only' }, ...(editingIssue.supplies || []).map((supply) => ({
                             id: supply.id, name: `${supply.barcode} · ${supply.current?.rollsIssued ?? supply.rollsIssued} rolls · ${formatKg(supply.current?.issuedWeight ?? supply.issuedWeight)} kg`,
                           }))]} labelKey="name" valueKey="id" clearable
-                          disabled={!editingIssue.canCorrectDeliveries || issueDraft.cratesTouched} placeholder="Combined batch — view only" />
+                          disabled={!editingIssue.canCorrectDeliveries || issueDraft.cratesTouched || issueDraft.boxTouched} placeholder="Combined batch — quantities read only" />
                         <p className="text-xs text-muted-foreground">The original delivery is retained. Saving records a correction and updates source stock and the combined batch together.</p>
                         {editingIssue.deliveryCorrectionLockReason && <p className="text-xs text-amber-700">{editingIssue.deliveryCorrectionLockReason}</p>}
-                        {issueDraft.cratesTouched && <Button variant="ghost" size="sm" onClick={() => selectConingDelivery(issueDraft.deliveryId)}>Discard delivery changes</Button>}
-                        {issueDraft.deliveryId && <div className="space-y-1">
+                        {(issueDraft.cratesTouched || issueDraft.boxTouched) && <Button variant="ghost" size="sm" onClick={() => selectConingDelivery(issueDraft.deliveryId)}>Discard delivery changes</Button>}
+                        {(issueDraft.deliveryId || coningSpecificationsChanged) && <div className="space-y-1">
                           <label className="text-xs font-medium uppercase">Correction reason</label>
-                          <Input value={issueDraft.correctionReason} onChange={(e) => updateIssueDraftField('correctionReason', e.target.value)} placeholder="Explain the crate or quantity correction" />
+                          <Input value={issueDraft.correctionReason} onChange={(e) => updateIssueDraftField('correctionReason', e.target.value)} placeholder="Explain the specification, box or quantity correction" />
                         </div>}
                       </div>
                     )}

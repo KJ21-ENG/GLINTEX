@@ -5,33 +5,45 @@ const EPSILON = 1e-6;
 const roundKg = (value) => Number(Number(value).toFixed(3));
 const refsOf = (value) => Array.isArray(value) ? value : [];
 const metaFields = ['date', 'machineId', 'operatorId', 'shift', 'note'];
+const specificationFields = ['coneTypeId', 'wrapperId', 'requiredPerConeNetWeight'];
 const metadata = (issue) => Object.fromEntries(metaFields.map((field) => [field, issue[field] ?? null]));
 async function metadataNames(client, value) {
-  const [machine, operator] = await Promise.all([
-    value.machineId ? client.machine.findUnique({ where: { id: value.machineId }, select: { name: true } }) : null,
-    value.operatorId ? client.operator.findUnique({ where: { id: value.operatorId }, select: { name: true } }) : null,
-  ]);
-  return { machineName: machine?.name || '', operatorName: operator?.name || '' };
+  const names = await Promise.all(['machine', 'operator', 'coneType', 'wrapper', 'box'].map(async (model) => {
+    const record = value[`${model}Id`] ? await client[model].findUnique({ where: { id: value[`${model}Id`] }, select: { name: true } }) : null;
+    return [`${model}Name`, record?.name || ''];
+  }));
+  return Object.fromEntries(names);
 }
 
-export function effectiveConingSupply(supply) {
-  const latest = [...(supply.corrections || [])].sort((a, b) => b.revision - a.revision)[0];
-  return { ...supply, current: latest?.after || {
+export function effectiveConingSupply(supply, batchCorrections = supply.corrections || []) {
+  let current = {
     receivedRowRefs: supply.receivedRowRefs, rollsIssued: supply.rollsIssued, issuedWeight: supply.issuedWeight,
-  } };
+  };
+  for (const correction of [...batchCorrections].sort((a, b) => a.revision - b.revision)) {
+    if (correction.supplyId === supply.id) current = { ...current, ...correction.after };
+    const specification = correction.after?.batchSpecification;
+    if (specification) {
+      current = { ...current, ...specification, receivedRowRefs: refsOf(current.receivedRowRefs).map((ref) => ({
+        ...ref,
+        ...(specification.coneTypeId !== undefined ? { coneTypeId: specification.coneTypeId } : {}),
+        ...(specification.wrapperId !== undefined ? { wrapperId: specification.wrapperId } : {}),
+      })) };
+    }
+  }
+  return { ...supply, current };
 }
 
 export async function coningDeliveryCorrectionLock(client, issue) {
   // Receiving has started even if an earlier receive was subsequently deleted.
   if (await client.receiveFromConingMachineRow.count({ where: { issueId: issue.id } })) {
-    return 'Receiving has started for this batch. Delivery crates and quantities are locked.';
+    return 'Receiving has started for this batch. Cone specifications, delivery boxes, crates and quantities are locked.';
   }
   if (await client.issueTakeBack.count({ where: { stage: 'coning', issueId: issue.id, isReverse: false, isReversed: false } })) {
-    return 'Delivery quantities cannot be corrected while active take-backs exist.';
+    return 'Specifications and delivery quantities cannot be corrected while active take-backs exist.';
   }
   const total = await client.receiveFromConingMachinePieceTotal.findUnique({ where: { pieceId: issue.id } });
-  if (Number(total?.wastageNetWeight || 0) > EPSILON) return 'Reverse the batch wastage before correcting delivery quantities.';
-  if (!issue.coningBatchOpen) return 'Reopen this batch before correcting a delivery.';
+  if (Number(total?.wastageNetWeight || 0) > EPSILON) return 'Reverse the batch wastage before correcting specifications or delivery quantities.';
+  if (!issue.coningBatchOpen) return 'Reopen this batch before correcting specifications or a delivery.';
   return null;
 }
 
@@ -49,6 +61,29 @@ async function validateMetadata(client, patch) {
     if (!data[field]) continue;
     const master = await client[model].findUnique({ where: { id: data[field] } });
     if (!master || !['all', 'coning'].includes(master.processType)) throw new ConingBatchError(`Select a valid coning ${model}`, 400);
+  }
+  return data;
+}
+
+async function validateSpecifications(client, patch) {
+  const data = {};
+  for (const [field, model] of [['coneTypeId', 'coneType'], ['wrapperId', 'wrapper'], ['boxId', 'box']]) {
+    if (patch[field] === undefined) continue;
+    const id = typeof patch[field] === 'string' ? patch[field].trim() : null;
+    if (!id && field === 'coneTypeId') throw new ConingBatchError('Select a valid cone type', 400);
+    if (patch[field] != null && typeof patch[field] !== 'string') throw new ConingBatchError(`Select a valid ${model}`, 400);
+    const master = id ? await client[model].findUnique({ where: { id } }) : null;
+    if (id && (!master || (model === 'box' && !['all', 'coning'].includes(master.processType)))) {
+      throw new ConingBatchError(`Select a valid coning ${model}`, 400);
+    }
+    data[field] = id || null;
+  }
+  if (patch.requiredPerConeNetWeight !== undefined) {
+    const weight = Number(patch.requiredPerConeNetWeight);
+    if (!['number', 'string'].includes(typeof patch.requiredPerConeNetWeight) || !Number.isFinite(weight) || weight <= 0) {
+      throw new ConingBatchError('Enter a positive target cone weight in grams', 400);
+    }
+    data.requiredPerConeNetWeight = weight;
   }
   return data;
 }
@@ -119,23 +154,44 @@ export async function correctConingIssue(client, { issueId, patch = {}, supplyId
     throw new ConingBatchError('This batch changed while the editor was open. Reload it before saving.');
   }
   const data = await validateMetadata(client, patch);
+  const specifications = await validateSpecifications(client, patch);
+  if ('boxId' in specifications && !supplyId) throw new ConingBatchError('Select a delivery to correct its box', 400);
+  const beforeSpecification = {
+    coneTypeId: refsOf(issue.receivedRowRefs)[0]?.coneTypeId || null,
+    wrapperId: refsOf(issue.receivedRowRefs)[0]?.wrapperId || null,
+    requiredPerConeNetWeight: issue.requiredPerConeNetWeight,
+  };
+  const batchSpecification = Object.fromEntries(specificationFields.filter((field) => field in specifications).map((field) => [field, specifications[field]]));
+  const nextSpecification = { ...beforeSpecification, ...batchSpecification };
+  const specificationChanged = specificationFields.some((field) => beforeSpecification[field] !== nextSpecification[field])
+    || refsOf(issue.receivedRowRefs).some((ref) => ['coneTypeId', 'wrapperId'].some((field) => field in batchSpecification && (ref[field] || null) !== batchSpecification[field]));
+  if (specificationChanged) {
+    const lockReason = await coningDeliveryCorrectionLock(client, issue);
+    if (lockReason) throw new ConingBatchError(lockReason);
+    if (!String(reason || '').trim()) throw new ConingBatchError('Enter a reason for the specification correction', 400);
+    if ('requiredPerConeNetWeight' in batchSpecification) data.requiredPerConeNetWeight = batchSpecification.requiredPerConeNetWeight;
+  }
   const beforeMeta = metadata(issue);
   const nextMeta = { ...beforeMeta, ...data };
-  let before = { ...beforeMeta, ...(await metadataNames(client, beforeMeta)) };
-  let after = { ...nextMeta, ...(await metadataNames(client, nextMeta)) };
+  let before = { ...beforeMeta, ...beforeSpecification, expectedCones: issue.expectedCones };
+  let after = { ...nextMeta, ...nextSpecification };
+  let combined = refsOf(issue.receivedRowRefs);
   let deliveryChanged = false;
   if (supplyId) {
     const lockReason = await coningDeliveryCorrectionLock(client, issue);
     if (lockReason) throw new ConingBatchError(lockReason);
     if (!String(reason || '').trim()) throw new ConingBatchError('Enter a reason for the delivery correction', 400);
-    const supplies = await client.coningIssueSupply.findMany({ where: { issueId }, include: { corrections: true }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+    const supplies = await client.coningIssueSupply.findMany({ where: { issueId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+    const corrections = await client.coningIssueCorrection.findMany({ where: { issueId }, orderBy: { revision: 'asc' } });
     const selected = supplies.find((supply) => supply.id === supplyId);
     if (!selected) throw new ConingBatchError('This delivery does not belong to the selected batch', 404);
-    const current = effectiveConingSupply(selected).current;
-    const { crates, sources } = await prepareCrates(client, input, issue, refsOf(current.receivedRowRefs));
-    const issued = await loadIssuedToConing(client, [...sources.keys()]);
+    const current = effectiveConingSupply(selected, corrections).current;
+    const { crates, sources } = input !== undefined
+      ? await prepareCrates(client, input, issue, refsOf(current.receivedRowRefs))
+      : { crates: refsOf(current.receivedRowRefs).map((ref) => ({ ...ref })), sources: new Map() };
+    const issued = input !== undefined ? await loadIssuedToConing(client, [...sources.keys()]) : new Map();
     const originalById = new Map(mergeConingSourceRefs([], refsOf(current.receivedRowRefs)).map((ref) => [ref.rowId, ref]));
-    for (const ref of crates) {
+    for (const ref of input !== undefined ? crates : []) {
       const prior = issued.get(ref.rowId) || {};
       const replaced = originalById.get(ref.rowId) || {};
       const count = ref.baseRolls - ref.dispatchedCount - Number(prior.issuedRolls || 0) + Number(replaced.issueRolls || 0);
@@ -144,8 +200,10 @@ export async function correctConingIssue(client, { issueId, patch = {}, supplyId
         throw new ConingBatchError('A source crate no longer has enough available rolls or weight. Reload it before correcting.');
       }
     }
-    let combined = [];
-    for (const supply of supplies) combined = mergeConingSourceRefs(combined, supply.id === supplyId ? crates : refsOf(effectiveConingSupply(supply).current.receivedRowRefs));
+    if ('boxId' in specifications) crates.forEach((ref) => { ref.boxId = specifications.boxId; });
+    combined = [];
+    for (const supply of supplies) combined = mergeConingSourceRefs(combined, supply.id === supplyId ? crates : refsOf(effectiveConingSupply(supply, corrections).current.receivedRowRefs));
+    if (specificationChanged) combined = applyBatchSpecification(combined, batchSpecification);
     const { material, key } = await batchIdentity(client, { ...issue, ...data }, combined);
     if (material.itemIds.length !== 1 || material.cutIds.length > 1 || material.yarnIds.length > 1) {
       throw new ConingBatchError('All deliveries in the batch must retain a single item, cut and yarn', 400);
@@ -160,25 +218,36 @@ export async function correctConingIssue(client, { issueId, patch = {}, supplyId
       twistId: material.twistIds.length === 1 ? material.twistIds[0] : null,
       lotNo: lots.length === 1 ? lots[0] : 'MIXED', receivedRowRefs: combined,
       rollsIssued: combined.reduce((sum, ref) => sum + ref.issueRolls, 0),
-      expectedCones: Math.floor(combinedWeight * 1000 / issue.requiredPerConeNetWeight), coningBatchKey: key,
+      expectedCones: Math.floor(combinedWeight * 1000 / nextSpecification.requiredPerConeNetWeight), coningBatchKey: key,
     });
     const snapshot = {
-      receivedRowRefs: crates, rollsIssued: crates.reduce((sum, ref) => sum + ref.issueRolls, 0),
+      receivedRowRefs: specificationChanged ? applyBatchSpecification(crates, batchSpecification) : crates, rollsIssued: crates.reduce((sum, ref) => sum + ref.issueRolls, 0),
       issuedWeight: roundKg(crates.reduce((sum, ref) => sum + ref.issueWeight, 0)),
     };
     // Ignore refreshed source counters when deciding whether allocations changed.
-    const allocations = (refs) => refs.map((ref) => [ref.rowId, Number(ref.issueRolls), Number(ref.issueWeight)]).sort((a, b) => a[0].localeCompare(b[0]));
+    const allocations = (refs) => refs.map((ref) => [ref.rowId, Number(ref.issueRolls), Number(ref.issueWeight), ref.boxId || null]).sort((a, b) => a[0].localeCompare(b[0]));
     deliveryChanged = JSON.stringify(allocations(refsOf(current.receivedRowRefs))) !== JSON.stringify(allocations(crates));
-    before = { ...before, receivedRowRefs: current.receivedRowRefs, rollsIssued: current.rollsIssued, issuedWeight: current.issuedWeight };
-    after = { ...after, ...snapshot };
+    before = { ...before, receivedRowRefs: current.receivedRowRefs, rollsIssued: current.rollsIssued, issuedWeight: current.issuedWeight, boxId: refsOf(current.receivedRowRefs)[0]?.boxId || null };
+    after = { ...after, ...snapshot, boxId: crates[0]?.boxId || null };
   } else {
-    const { key } = await batchIdentity(client, { ...issue, ...data }, refsOf(issue.receivedRowRefs));
+    if (specificationChanged) {
+      combined = applyBatchSpecification(combined, batchSpecification);
+      data.receivedRowRefs = combined;
+      data.expectedCones = Math.floor(combined.reduce((sum, ref) => sum + Number(ref.issueWeight), 0) * 1000 / nextSpecification.requiredPerConeNetWeight);
+      before.receivedRowRefs = issue.receivedRowRefs;
+      after.receivedRowRefs = combined;
+    }
+    const { key } = await batchIdentity(client, { ...issue, ...data }, combined);
     data.coningBatchKey = key;
   }
+  if (specificationChanged) after.batchSpecification = batchSpecification;
+  after.expectedCones = data.expectedCones ?? issue.expectedCones;
+  before = { ...before, ...(await metadataNames(client, before)) };
+  after = { ...after, ...(await metadataNames(client, after)) };
   const changedMeta = metaFields.filter((field) => beforeMeta[field] !== nextMeta[field]);
-  const changed = deliveryChanged || changedMeta.length > 0;
+  const changed = deliveryChanged || specificationChanged || changedMeta.length > 0;
   if (!changed) return { issue, correction: null, requiresStickerReprint: false };
-  const requiresStickerReprint = deliveryChanged || changedMeta.some((field) => field !== 'note');
+  const requiresStickerReprint = deliveryChanged || specificationChanged || changedMeta.some((field) => field !== 'note');
   const revision = issue.coningBatchRevision + 1;
   const updated = await client.issueToConingMachine.update({ where: { id: issueId }, data: {
     ...data, coningBatchRevision: revision, updatedByUserId: actorUserId || null,
@@ -188,4 +257,11 @@ export async function correctConingIssue(client, { issueId, patch = {}, supplyId
     requiresStickerReprint, createdByUserId: actorUserId || null,
   } });
   return { issue: updated, correction, requiresStickerReprint };
+}
+
+function applyBatchSpecification(refs, specification) {
+  return refs.map((ref) => ({ ...ref,
+    ...(specification.coneTypeId !== undefined ? { coneTypeId: specification.coneTypeId } : {}),
+    ...(specification.wrapperId !== undefined ? { wrapperId: specification.wrapperId } : {}),
+  }));
 }

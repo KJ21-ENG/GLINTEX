@@ -64,9 +64,15 @@ batch.
   receive was later deleted. The server checks this under the batch lock at save
   time, so an editor opened earlier cannot change quantities after a receive.
   A stale batch revision also requires reloading before saving.
-- Cone type, wrapper, box and target cone weight remain fixed for shared batches;
-  different specifications require a separate batch.
-- Allocation or date/machine/operator/shift corrections require replacing
+- Before receiving starts, cone type, wrapper and target cone weight can be
+  corrected for the whole batch, including every delivery. Enter a reason.
+  Expected cones and future matching update together. Original delivery
+  specifications remain in history; current delivery projections include the
+  corrected specifications so later quantity corrections retain them.
+  Box corrections apply only to the selected delivery and do not change batch
+  matching. These corrections share the receive, take-back, wastage, closed-batch,
+  revision and paid-settlement safeguards used for delivery quantities.
+- Allocation, specification, box or date/machine/operator/shift corrections require replacing
   supervisor stickers printed before the correction. History shows the original
   and corrected quantities, reason, timestamp and changed details. Reprinting
   loads fresh batch details and keeps the original receiving ICO.

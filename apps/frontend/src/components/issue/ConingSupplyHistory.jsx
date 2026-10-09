@@ -29,12 +29,14 @@ export function ConingSupplyHistory({ issue }) {
         {issue.corrections.some((correction) => correction.requiresStickerReprint) && <p className="text-xs text-amber-700">Corrected details require replacing stickers printed before the correction. The receiving barcode remains {issue.barcode}.</p>}
         {issue.corrections.map((correction) => {
           const supply = (issue.supplies || []).find((entry) => entry.id === correction.supplyId);
-          const fields = ['date', 'machineId', 'operatorId', 'shift', 'note'].filter((field) => correction.before?.[field] !== correction.after?.[field]);
-          const labels = { date: 'Date', machineId: 'Machine', operatorId: 'Operator', shift: 'Shift', note: 'Note' };
-          const value = (snapshot, field) => snapshot[field === 'machineId' ? 'machineName' : field === 'operatorId' ? 'operatorName' : field] || 'Empty';
+          const fields = ['date', 'machineId', 'operatorId', 'shift', 'note', 'coneTypeId', 'wrapperId', 'requiredPerConeNetWeight', 'boxId', 'expectedCones'].filter((field) => correction.before?.[field] !== correction.after?.[field]);
+          const labels = { date: 'Date', machineId: 'Machine', operatorId: 'Operator', shift: 'Shift', note: 'Note', coneTypeId: 'Cone type', wrapperId: 'Wrapper', requiredPerConeNetWeight: 'Target cone (g)', boxId: 'Delivery box', expectedCones: 'Combined expected cones' };
+          const names = { machineId: 'machineName', operatorId: 'operatorName', coneTypeId: 'coneTypeName', wrapperId: 'wrapperName', boxId: 'boxName' };
+          const value = (snapshot, field) => names[field] ? (snapshot[names[field]] || snapshot[field] || 'Empty') : (snapshot[field] ?? 'Empty');
           return <details key={correction.id} className="rounded border p-2 text-xs">
             <summary className="cursor-pointer">{supply ? `Delivery ${supply.barcode}` : 'Batch details'} corrected · {new Date(correction.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</summary>
             {fields.map((field) => <p key={field} className="mt-1">{labels[field]}: {value(correction.before, field)} → {value(correction.after, field)}</p>)}
+            {correction.after?.batchSpecification && <p className="mt-1">Cone specifications were corrected for every delivery in the batch. Original delivery records are retained.</p>}
             {supply && <>
               <p className="mt-2">Before: {correction.before.rollsIssued} rolls / {formatKg(correction.before.issuedWeight)} kg · {(correction.before.receivedRowRefs || []).map((ref) => `${ref.barcode || ref.rowId}: ${ref.issueRolls} rolls / ${formatKg(ref.issueWeight)} kg`).join('; ')}</p>
               <p className="mt-1">After: {correction.after.rollsIssued} rolls / {formatKg(correction.after.issuedWeight)} kg · {(correction.after.receivedRowRefs || []).map((ref) => `${ref.barcode || ref.rowId}: ${ref.issueRolls} rolls / ${formatKg(ref.issueWeight)} kg`).join('; ')}</p>

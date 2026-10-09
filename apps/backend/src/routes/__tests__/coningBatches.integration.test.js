@@ -273,6 +273,170 @@ if (!url) {
     assert.ok(result.body.availability);
     return result.body.availability;
   };
+  const specifications = (issue, changes) => api('put', `${createPath}/${issue.id}`, {
+    expectedRevision: issue.coningBatchRevision, reason: 'Correct recorded cone specifications', ...changes,
+  });
+  async function newPackaging() {
+    const name = `${unique}-${++sequence}`;
+    const cone = await prisma.coneType.create({ data: { name: `Correct cone ${name}`, weight: 0.02 } });
+    const wrapper = await prisma.wrapper.create({ data: { name: `Correct wrapper ${name}` } });
+    const box = await prisma.box.create({ data: { name: `Correct box ${name}`, weight: 0.75, processType: 'coning' } });
+    return { cone, wrapper, box };
+  }
+
+  test('single unreceived batch restores specifications and box corrections with the reported 55 rolls / 16.467 kg', async () => {
+    const f = await scenario();
+    const row = await f.source(16.467);
+    row.rollCount = 55;
+    await prisma.receiveFromHoloMachineRow.update({ where: { id: row.id }, data: { rollCount: 55 } });
+    const first = await f.issue(row);
+    const original = await prisma.coningIssueSupply.findUnique({ where: { id: first.supply.id } });
+    const stock = await availability(row);
+    const { cone, wrapper, box } = await newPackaging();
+    const saved = await correct(first.issueToConingMachine, first.supply, undefined, {
+      coneTypeId: cone.id, wrapperId: wrapper.id, boxId: box.id, requiredPerConeNetWeight: 125,
+    });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(saved.body.issueToConingMachine.expectedCones, 131);
+    assert.equal(saved.body.issueToConingMachine.barcode, first.issueToConingMachine.barcode);
+    assert.equal(saved.body.requiresStickerReprint, true);
+    assert.equal(saved.body.correction.after.coneTypeName, cone.name);
+    assert.equal(saved.body.correction.before.boxName, f.box.name);
+    assert.equal(saved.body.correction.after.boxName, box.name);
+    const detail = await lookup(first.issueToConingMachine);
+    assert.equal(detail.canCorrectSpecifications, true);
+    assert.equal(detail.coneTypeId, cone.id);
+    assert.equal(detail.wrapperId, wrapper.id);
+    assert.equal(detail.supplies[0].current.receivedRowRefs[0].boxId, box.id);
+    assert.equal(detail.supplies[0].current.rollsIssued, 55);
+    assert.equal(detail.issueBalance.originalWeight, 16.467);
+    assert.deepEqual(await availability(row), stock);
+    assert.deepEqual(await prisma.coningIssueSupply.findUnique({ where: { id: first.supply.id } }), original);
+  });
+
+  test('batch-wide specification corrections survive delivery corrections and future top-ups with a stable ICO', async () => {
+    const f = await scenario();
+    const a = await f.source();
+    const b = await f.source(40, f.twistB.id, '161');
+    const first = await f.issue(a);
+    const second = await f.issue(b);
+    const originals = await prisma.coningIssueSupply.findMany({ where: { issueId: first.issueToConingMachine.id }, orderBy: { id: 'asc' } });
+    const { cone, wrapper } = await newPackaging();
+    const fields = { coneTypeId: cone.id, wrapperId: wrapper.id, requiredPerConeNetWeight: 250 };
+    const saved = await specifications(second.issueToConingMachine, fields);
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(saved.body.correction.supplyId, null);
+    assert.equal(saved.body.issueToConingMachine.expectedCones, 320);
+    let detail = await lookup(first.issueToConingMachine);
+    assert.ok(detail.supplies.every((supply) => supply.current.receivedRowRefs.every((ref) => ref.coneTypeId === cone.id && ref.wrapperId === wrapper.id)));
+    const corrected = await correct(saved.body.issueToConingMachine, first.supply, [{ rowId: a.id, issueRolls: 1, issueWeight: 20 }]);
+    assert.equal(corrected.status, 200, corrected.text);
+    assert.equal(corrected.body.issueToConingMachine.expectedCones, 240);
+    detail = await lookup(first.issueToConingMachine);
+    assert.ok(detail.supplies.every((supply) => supply.current.receivedRowRefs.every((ref) => ref.coneTypeId === cone.id && ref.wrapperId === wrapper.id)));
+    assert.equal((await availability(a)).availableWeight, 20);
+    assert.deepEqual(await prisma.coningIssueSupply.findMany({ where: { issueId: first.issueToConingMachine.id }, orderBy: { id: 'asc' } }), originals);
+    const next = await f.source();
+    assert.equal((await f.candidates(next)).candidates.length, 0);
+    assert.equal((await f.candidates(next, fields)).candidates[0].id, first.issueToConingMachine.id);
+    const topup = await f.issue(next, { requiredPerConeNetWeight: 250,
+      crates: [{ ...f.crate(next), coneTypeId: cone.id, wrapperId: wrapper.id }],
+    });
+    assert.equal(topup.issueToConingMachine.barcode, first.issueToConingMachine.barcode);
+    assert.equal(topup.issueToConingMachine.expectedCones, 400);
+    assert.equal((await lookup(first.issueToConingMachine)).supplies.length, 3);
+    // Receiving uses the corrected cone tare, and never rewrites the historical supplies.
+    const received = await api('post', receivePath, { issueId: first.issueToConingMachine.id,
+      pieceId: first.issueToConingMachine.id, coneCount: 10, boxId: f.box.id, grossWeight: 10.7, date: f.base.date });
+    assert.equal(received.status, 200, received.text);
+    assert.equal(received.body.row.netWeight, 10);
+    assert.equal(received.body.row.tareWeight, 0.7);
+  });
+
+  test('box-only corrections affect one delivery without changing allocations, target or matching key', async () => {
+    const f = await scenario();
+    const a = await f.source();
+    const b = await f.source();
+    const first = await f.issue(a);
+    const second = await f.issue(b);
+    const stocks = await Promise.all([availability(a), availability(b)]);
+    const { box } = await newPackaging();
+    const saved = await correct(second.issueToConingMachine, second.supply, undefined, { boxId: box.id });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(saved.body.issueToConingMachine.coningBatchKey, second.issueToConingMachine.coningBatchKey);
+    assert.equal(saved.body.issueToConingMachine.expectedCones, 160);
+    assert.equal(saved.body.correction.after.batchSpecification, undefined);
+    const detail = await lookup(first.issueToConingMachine);
+    assert.equal(detail.supplies[0].current.receivedRowRefs[0].boxId, f.box.id);
+    assert.equal(detail.supplies[1].current.receivedRowRefs[0].boxId, box.id);
+    assert.deepEqual(await Promise.all([availability(a), availability(b)]), stocks);
+    const changed = await specifications(saved.body.issueToConingMachine, { requiredPerConeNetWeight: 250 });
+    assert.equal(changed.status, 200, changed.text);
+    assert.equal((await lookup(first.issueToConingMachine)).supplies[1].current.receivedRowRefs[0].boxId, box.id);
+    const quantity = await correct(changed.body.issueToConingMachine, first.supply, [{ rowId: a.id, issueRolls: 1, issueWeight: 20 }]);
+    assert.equal(quantity.status, 200, quantity.text);
+    assert.equal((await lookup(first.issueToConingMachine)).supplies[1].current.receivedRowRefs[0].boxId, box.id);
+  });
+
+  test('combined specification, quantity and box correction commits one consistent revision', async () => {
+    const f = await scenario();
+    const row = await f.source();
+    const first = await f.issue(row);
+    const { cone, wrapper, box } = await newPackaging();
+    const saved = await correct(first.issueToConingMachine, first.supply, [{ rowId: row.id, issueRolls: 1, issueWeight: 20 }], {
+      coneTypeId: cone.id, wrapperId: wrapper.id, boxId: box.id, requiredPerConeNetWeight: 250,
+    });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(saved.body.issueToConingMachine.expectedCones, 80);
+    assert.equal(saved.body.correction.revision, 1);
+    const detail = await lookup(first.issueToConingMachine);
+    assert.equal(detail.issueBalance.originalWeight, 20);
+    assert.equal(detail.supplies[0].current.receivedRowRefs[0].coneTypeId, cone.id);
+    assert.equal(detail.supplies[0].current.receivedRowRefs[0].boxId, box.id);
+    assert.equal((await availability(row)).availableWeight, 20);
+    assert.equal(await prisma.coningIssueCorrection.count({ where: { issueId: first.issueToConingMachine.id } }), 1);
+  });
+
+  test('missing reasons, invalid specifications and delivery-less box edits never mutate the batch', async () => {
+    const f = await scenario();
+    const first = await f.issue(await f.source());
+    const { cone } = await newPackaging();
+    for (const changes of [{ requiredPerConeNetWeight: 0 }, { requiredPerConeNetWeight: -5 },
+      { requiredPerConeNetWeight: 'invalid' }, { coneTypeId: null }, { coneTypeId: 'missing' }, { wrapperId: 'missing' },
+      { requiredPerConeNetWeight: 250, reason: '' }]) {
+      const result = await specifications(first.issueToConingMachine, changes);
+      assert.equal(result.status, 400, result.text);
+    }
+    const wrongBox = await prisma.box.create({ data: { name: `Cutter box ${unique}`, weight: 1, processType: 'cutter' } });
+    assert.equal((await correct(first.issueToConingMachine, first.supply, undefined, { boxId: wrongBox.id })).status, 400);
+    assert.equal((await specifications(first.issueToConingMachine, { boxId: f.box.id })).status, 409);
+    assert.equal(await prisma.coningIssueCorrection.count({ where: { issueId: first.issueToConingMachine.id } }), 0);
+    const saved = await specifications(first.issueToConingMachine, { coneTypeId: cone.id, wrapperId: null });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal((await lookup(first.issueToConingMachine)).wrapperId, null);
+    const unchanged = await specifications(saved.body.issueToConingMachine, { coneTypeId: cone.id, wrapperId: null });
+    assert.equal(unchanged.status, 200, unchanged.text);
+    assert.equal(unchanged.body.correction, null);
+  });
+
+  test('receives including deleted ones keep all specifications and delivery boxes locked', async () => {
+    const f = await scenario();
+    const first = await f.issue(await f.source());
+    const { cone, wrapper, box } = await newPackaging();
+    const received = await f.receive(first.issueToConingMachine.id, 10);
+    assert.equal(received.status, 200, received.text);
+    for (const deleted of [false, true]) {
+      if (deleted) assert.equal((await api('delete', `/api/receive_from_coning_machine/rows/${received.body.row.id}`)).status, 200);
+      for (const changes of [{ coneTypeId: cone.id }, { wrapperId: wrapper.id }, { requiredPerConeNetWeight: 250 }]) {
+        const rejected = await specifications(first.issueToConingMachine, changes);
+        assert.equal(rejected.status, 409, rejected.text);
+        assert.match(rejected.body.error, /Receiving has started/);
+      }
+      assert.equal((await correct(first.issueToConingMachine, first.supply, undefined, { boxId: box.id })).status, 409);
+      assert.equal((await lookup(first.issueToConingMachine)).canCorrectSpecifications, false);
+    }
+    assert.equal(await prisma.coningIssueCorrection.count({ where: { issueId: first.issueToConingMachine.id } }), 0);
+  });
 
   test('batch metadata corrections restore prior edits after receiving and update future matching with the stable ICO', async () => {
     const f = await scenario();
@@ -409,6 +573,7 @@ if (!url) {
     const rejected = await correct(issue, first.supply, [f.crate(row, 20, 1)]);
     assert.equal(rejected.status, 409, rejected.text);
     assert.match(rejected.body.error, /take-backs/);
+    assert.equal((await specifications(issue, { requiredPerConeNetWeight: 250 })).status, 409);
     const takenBack = await prisma.issueTakeBack.findFirst({ where: { issueId: issue.id, isReverse: false } });
     assert.equal((await api('post', `/api/issue_take_backs/${takenBack.id}/reverse`, { reason: 'Incorrect return' })).status, 200);
     const wastage = await api('post', '/api/receive_from_coning_machine/mark_wastage', { issueId: issue.id });
@@ -416,6 +581,7 @@ if (!url) {
     const wasteRejected = await correct(issue, first.supply, [f.crate(row, 20, 1)]);
     assert.equal(wasteRejected.status, 409, wasteRejected.text);
     assert.match(wasteRejected.body.error, /wastage/);
+    assert.equal((await specifications(issue, { requiredPerConeNetWeight: 250 })).status, 409);
     const reversed = await api('post', '/api/receive_from_coning_machine/revert_wastage', { issueId: issue.id, reason: 'Material found' });
     assert.equal(reversed.status, 200, reversed.text);
     assert.equal((await correct(issue, first.supply, [f.crate(row, 20, 1)])).status, 200);
@@ -478,6 +644,64 @@ if (!url) {
     }
     assert.fail('Expected API request to block on the fixture row lock');
   }
+
+  test('a receive that wins the batch lock blocks an editor specification correction at save time', async () => {
+    const f = await scenario();
+    const first = await f.issue(await f.source());
+    const issue = first.issueToConingMachine;
+    let release, ready;
+    const held = new Promise((resolve) => { ready = resolve; });
+    const hold = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "IssueToConingMachine" WHERE id = ${issue.id} FOR UPDATE`;
+      const [{ pid }] = await tx.$queryRaw`SELECT pg_backend_pid() AS pid`;
+      ready(pid);
+      await new Promise((resolve) => { release = resolve; });
+    });
+    const pid = await held;
+    let receiving, correcting;
+    try {
+      receiving = f.receive(issue.id, 10).then((result) => result);
+      await waitForBlocked(pid);
+      correcting = specifications(issue, { requiredPerConeNetWeight: 250 }).then((result) => result);
+      await waitForBlocked(pid, 2);
+    } finally { release(); await hold; }
+    assert.equal((await receiving).status, 200);
+    const rejected = await correcting;
+    assert.equal(rejected.status, 409, rejected.text);
+    assert.match(rejected.body.error, /Receiving has started/);
+    assert.equal((await lookup(issue)).requiredPerConeNetWeight, 500);
+    assert.equal(await prisma.coningIssueCorrection.count({ where: { issueId: issue.id } }), 0);
+  });
+
+  test('a specification correction that wins the lock makes simultaneous receiving use the corrected cone tare', async () => {
+    const f = await scenario();
+    const first = await f.issue(await f.source());
+    const issue = first.issueToConingMachine;
+    const { cone } = await newPackaging();
+    let release, ready;
+    const held = new Promise((resolve) => { ready = resolve; });
+    const hold = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "IssueToConingMachine" WHERE id = ${issue.id} FOR UPDATE`;
+      const [{ pid }] = await tx.$queryRaw`SELECT pg_backend_pid() AS pid`;
+      ready(pid);
+      await new Promise((resolve) => { release = resolve; });
+    });
+    const pid = await held;
+    let receiving, correcting;
+    try {
+      correcting = specifications(issue, { coneTypeId: cone.id, requiredPerConeNetWeight: 250 }).then((result) => result);
+      await waitForBlocked(pid);
+      receiving = f.receive(issue.id, 10).then((result) => result);
+      await waitForBlocked(pid, 2);
+    } finally { release(); await hold; }
+    const saved = await correcting;
+    const received = await receiving;
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(received.status, 200, received.text);
+    assert.ok(Math.abs(received.body.row.tareWeight - 0.9) < 1e-9);
+    assert.ok(Math.abs(received.body.row.netWeight - 9.8) < 1e-9);
+    assert.equal((await lookup(issue)).expectedCones, 160);
+  });
 
   test('a simultaneously saving receive wins the batch lock and blocks the waiting quantity correction', async () => {
     const f = await scenario();
@@ -557,6 +781,9 @@ if (!url) {
     const rejected = await api('put', `${createPath}/${issue.id}`, { shift: 'Night', expectedRevision: note.body.issueToConingMachine.coningBatchRevision });
     assert.equal(rejected.status, 409, rejected.text);
     assert.match(rejected.body.error, /PAID/);
+    const specRejected = await specifications(note.body.issueToConingMachine, { requiredPerConeNetWeight: 250 });
+    assert.equal(specRejected.status, 409, specRejected.text);
+    assert.match(specRejected.body.error, /PAID/);
     assert.equal((await lookup(issue)).shift, 'Day');
     assert.equal((await request(app).post(`${createPath}/${issue.id}/supplies/${first.supply.id}/corrections`).send({})).status, 401);
   });

@@ -12,12 +12,14 @@ const ADD = [
   { type: 'image', label: 'Image', icon: ImageIcon },
 ];
 
+const humanise = (id) => String(id || '').replace(/[-_]+/g, ' ').replace(/^(text|barcode|qr|line|rect|image) [a-z0-9]+ [a-z0-9]+$/i, '').trim();
 const excerpt = (el) => {
   if (el.name) return el.name;
-  if (el.type === 'text') return el.text || 'Empty text';
-  if (el.type === 'barcode' || el.type === 'qr') return el.value;
-  if (el.type === 'line') return `${el.direction} ${el.lengthMm} mm`;
-  if (el.type === 'rect') return `${el.w} × ${el.h} mm`;
+  if (el.type === 'text') return (el.text || '').replace(/\s+/g, ' ').trim() || 'Empty text';
+  if (el.type === 'barcode') return `Barcode ${el.value}`;
+  if (el.type === 'qr') return `QR ${el.value}`;
+  if (el.type === 'line') return humanise(el.id) || `${el.direction === 'horizontal' ? 'Horizontal' : 'Vertical'} line`;
+  if (el.type === 'rect') return humanise(el.id) || 'Box';
   return el.src ? 'Image' : 'Image (empty)';
 };
 
@@ -55,18 +57,18 @@ export default function LayersPanel({ template, selectedIds, warnings, dispatch,
             <div
               key={el.id}
               role="listitem"
-              className={cn('group mx-2 my-0.5 flex items-center gap-2 rounded-md px-2 py-1.5 text-xs cursor-pointer', selected ? 'bg-indigo-50 text-indigo-900 ring-1 ring-indigo-300' : 'hover:bg-accent', el.hidden && 'opacity-50')}
+              className={cn('group mx-2 my-0.5 flex items-center gap-2 rounded-md px-2 py-1.5 text-xs cursor-pointer', selected ? 'bg-primary/10 text-foreground ring-1 ring-primary/40' : 'hover:bg-accent', el.hidden && 'opacity-50')}
               onClick={(e) => dispatch(e.shiftKey ? { type: 'toggleSelect', id: el.id } : { type: 'select', ids: [el.id] })}
             >
               <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className={cn('flex-1 truncate', el.type === 'text' || el.type === 'barcode' || el.type === 'qr' ? 'font-mono' : '')}>{excerpt(el)}</span>
+              <span className="flex-1 truncate">{excerpt(el)}</span>
               {warned.has(el.id) ? <span className="h-2 w-2 rounded-full bg-amber-500" title="Needs attention" /> : null}
-              <span className="hidden group-hover:flex items-center gap-0.5">
+              <span className={cn('items-center gap-0.5', selected ? 'flex' : 'hidden group-hover:flex')}>
                 <button type="button" className="p-0.5 rounded hover:bg-background" title="Bring forward" disabled={!canEdit} onClick={(e) => { e.stopPropagation(); dispatch({ type: 'reorder', id: el.id, direction: 'up' }); }}><ChevronUp className="h-3.5 w-3.5" /></button>
                 <button type="button" className="p-0.5 rounded hover:bg-background" title="Send backward" disabled={!canEdit} onClick={(e) => { e.stopPropagation(); dispatch({ type: 'reorder', id: el.id, direction: 'down' }); }}><ChevronDown className="h-3.5 w-3.5" /></button>
               </span>
-              <button type="button" className={cn('p-0.5 rounded hover:bg-background', !el.hidden && 'hidden group-hover:block')} title={el.hidden ? 'Show' : 'Hide'} disabled={!canEdit} onClick={(e) => { e.stopPropagation(); dispatch({ type: 'updateElements', ids: [el.id], patch: { hidden: !el.hidden } }); }}>{el.hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button>
-              <button type="button" className={cn('p-0.5 rounded hover:bg-background', !el.locked && 'hidden group-hover:block')} title={el.locked ? 'Unlock' : 'Lock'} disabled={!canEdit} onClick={(e) => { e.stopPropagation(); dispatch({ type: 'updateElements', ids: [el.id], patch: { locked: !el.locked } }); }}>{el.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button>
+              <button type="button" className={cn('p-0.5 rounded hover:bg-background', !el.hidden && !selected && 'hidden group-hover:block')} title={el.hidden ? 'Show' : 'Hide'} disabled={!canEdit} onClick={(e) => { e.stopPropagation(); dispatch({ type: 'updateElements', ids: [el.id], patch: { hidden: !el.hidden } }); }}>{el.hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button>
+              <button type="button" className={cn('p-0.5 rounded hover:bg-background', !el.locked && !selected && 'hidden group-hover:block')} title={el.locked ? 'Unlock' : 'Lock'} disabled={!canEdit} onClick={(e) => { e.stopPropagation(); dispatch({ type: 'updateElements', ids: [el.id], patch: { locked: !el.locked } }); }}>{el.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button>
             </div>
           );
         })}

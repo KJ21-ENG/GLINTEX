@@ -98,3 +98,35 @@ test("invalid decoded artwork fails before Windows print call", async () => {
   assert.equal(r.uncertain, false);
   assert.equal(seen.filter((x) => x[0] === "print").length, 0);
 });
+
+test("version 2 documents are served through the private scheme with a strict CSP header", async () => {
+  const { buildDocument } = require("../src/printing/controller.cjs");
+  const { Window, seen } = fakeWindow();
+  const handlers = {};
+  const session = { fromPartition: (name) => ({ protocol: { handle: (scheme, handler) => { handlers[`${name}:${scheme}`] = handler; } } }) };
+  const html = '<div class="pg" style="width:50mm;height:25mm"><div class="lbw"><div class="lb"><div class="el" data-id="t"><div class="ln">SAVED</div></div></div></div></div>';
+  const artifact = { version: 2, dpi: 203, widthMm: 50, heightMm: 25, css: ".pg{position:relative}", fonts: [{ family: "Inter", weight: 700, style: "normal", dataUrl: "data:font/woff2;base64,AAAA" }], pages: [{ html }], templateSnapshot: { stageKey: "inbound" } };
+  // The fake window fetches its document through the registered handler, as Chromium would.
+  let served = null;
+  let url = null;
+  Window.prototype.loadURL = async function loadURL(target) {
+    url = target;
+    served = await handlers["glintex-print:glintex-print"]({ url: target });
+  };
+  const print = createElectronPrinter({ BrowserWindow: Window, session, partition: "glintex-print" });
+  const run = print(artifact, { printerName: "Fixture", dpi: 203 });
+  const result = await run;
+  assert.equal(result.success, true);
+  assert.match(url, /^glintex-print:\/\/job[a-z0-9]+\/$/);
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get("Content-Security-Policy"), "default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'");
+  const body = await served.text();
+  assert.equal(body, buildDocument(artifact));
+  assert.ok(body.includes("@page{size:50mm 25mm;margin:0}") && body.includes('@font-face{font-family:"Inter"') && body.includes("SAVED"));
+  const printed = seen.find((e) => e[0] === "print")[1];
+  assert.deepEqual(printed.pageSize, { width: 50000, height: 25000 });
+  assert.equal(printed.scaleFactor, 100);
+  // After the job the document is gone from memory.
+  const after = await handlers["glintex-print:glintex-print"]({ url });
+  assert.equal(after.status, 404);
+});

@@ -50,9 +50,9 @@ export const LIMITS = Object.freeze({
   fontMaxPt: 120,
   moduleMinMm: 0.1,
   moduleMaxMm: 2,
-  copiesMax: 50,
+  copiesMax: 100,
   elementsMax: 200,
-  imageBytesMax: 600 * 1024,
+  imageBytesMax: 150 * 1024,
 });
 
 const num = (value, fallback, min = -Infinity, max = Infinity) => {
@@ -105,8 +105,8 @@ export const ELEMENT_DEFAULTS = {
     align: 'left', valign: 'top', overflow: 'wrap-shrink', minFontSizePt: 5, lineHeight: 1.15,
     invert: false, paddingMm: 0.5, uppercase: false, letterSpacingPt: 0,
   },
-  barcode: { value: '{{barcode}}', symbology: 'code128', moduleMm: 0.375, barHeightMm: 10, showText: true, textSizePt: 7, quietZoneMm: 2.5, maxWidthMm: 0 },
-  qr: { value: '{{barcode}}', sizeMm: 15, ecLevel: 'M' },
+  barcode: { value: '@barcode', symbology: 'code128', moduleMm: 0.375, barHeightMm: 10, showText: true, textSizePt: 7, quietZoneMm: 2.5, maxWidthMm: 0 },
+  qr: { value: '@barcode', sizeMm: 15, ecLevel: 'M' },
   line: { lengthMm: 30, thicknessMm: 0.4, direction: 'horizontal' },
   rect: { strokeMm: 0.3, fill: false, radiusMm: 0 },
   image: { src: '', fit: 'contain' },

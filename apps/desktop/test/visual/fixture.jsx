@@ -3,8 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import LabelDesigner from '../../../frontend/src/pages/Settings/LabelDesigner';
 import '@fontsource/inter';
+import '@fontsource/inter/700.css';
 import '@fontsource/roboto-mono';
+import '@fontsource/roboto-mono/700.css';
 import '@fontsource/ibm-plex-sans';
+import '@fontsource/ibm-plex-sans/700.css';
 import { DEFAULT_STAGE_TEMPLATES, buildPrintableArtifact, artifactToDocument } from '../../../frontend/src/utils/labelPrint';
 import { buildSampleData } from '../../../frontend/src/utils/label/sampleData';
 import LabelArtifactPreview from '../../../frontend/src/components/labels/LabelArtifactPreview';
@@ -81,9 +84,11 @@ async function run(){
   const host=document.createElement('div');section.append(host);document.getElementById('labels').append(section);
   createRoot(host).render(<LabelArtifactPreview artifact={a} maxWidthPx={360}/>);
   await new Promise(r=>setTimeout(r,50));
-  await fetch('/results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:stage,version:a.version,dimensions:{widthMm:a.widthMm,heightMm:a.heightMm},pages:a.pages.length,fonts:a.fonts.length,warnings:a.warnings,documentBytes:doc.length})});
+  await document.fonts.load("700 16px 'Inter'");
+  if(!document.fonts.check("700 16px 'Inter'")) throw new Error('Bold Inter face is not loaded in the app: '+[...document.fonts].filter(f=>f.family.includes('Inter')).map(f=>`${f.family} ${f.weight} ${f.status}`).join(', '));
+  await fetch('/results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:stage,version:a.version,dimensions:{widthMm:a.widthMm,heightMm:a.heightMm},pages:a.pages.length,fonts:a.fonts.length,warnings:a.warnings,documentBytes:doc.length,artifact:a})});
   results.push({stage,version:a.version,warnings:a.warnings,pages:a.pages.length,fonts:a.fonts.length});
  }
  const status=document.getElementById('results');status.textContent=JSON.stringify({completed:results.length,results});status.dataset.finished='true';
 }
-run().catch(e=>{document.getElementById('results').textContent='FAILED: '+e.stack;});
+run().catch(e=>{document.getElementById('results').textContent='FAILED: '+(e&&(e.stack||e.message||e.name)||String(e));});

@@ -143,6 +143,39 @@ async function main() {
     if (elements < 5) throw Error("Editor shows too few label elements: " + elements);
     dpiChecks.push({ dpi, elements });
   }
+  // Every artifact the fixture built with the real canvas measurer now goes through the
+  // production printer module: private scheme, CSP header, fonts, printToPDF instead of Windows.
+  const { createElectronPrinter } = require("../src/printing/electron-printer.cjs");
+  const printed = [];
+  let current = null;
+  const printer = createElectronPrinter({
+    BrowserWindow,
+    session,
+    partition: "glintex-print-visual",
+    submit: async (printWin, options, callback) => {
+      try {
+        const widthPx = Math.ceil((options.pageSize.width / 1000 / 25.4) * 96 * 3);
+        const heightPx = Math.ceil((options.pageSize.height / 1000 / 25.4) * 96 * 3);
+        printWin.setContentSize(widthPx + 40, heightPx + 40);
+        printWin.webContents.setZoomFactor(3);
+        await delay(150);
+        await fs.writeFile(path.join(output, `${current}.print.png`), (await printWin.webContents.capturePage({ x: 0, y: 0, width: widthPx, height: heightPx })).toPNG());
+        printWin.webContents.setZoomFactor(1);
+        await fs.writeFile(path.join(output, `${current}.print.pdf`), await printWin.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true, margins: { top: 0, bottom: 0, left: 0, right: 0 } }));
+        callback(true);
+      } catch (error) {
+        callback(false, error.message);
+      }
+    },
+  });
+  for (const r of report.results) {
+    current = r.stage;
+    const artifact = JSON.parse(await fs.readFile(path.join(output, `${r.stage}.artifact.json`), "utf8"));
+    const outcome = await printer(artifact, { printerName: "Visual PDF", dpi: 203 });
+    if (!outcome.success) throw Error(`Printer module failed for ${r.stage}: ${outcome.error}`);
+    printed.push(r.stage);
+  }
+  if (printed.length !== 9) throw Error("Expected nine stages through the printer module");
   await win.webContents.executeJavaScript(
     `document.querySelector('#editor').scrollIntoView({block:'start'})`,
   );
@@ -156,6 +189,7 @@ async function main() {
     JSON.stringify(
       {
         ...report,
+        printedThroughPrinterModule: printed,
         dpiChecks,
         electron: process.versions.electron,
         chromium: process.versions.chrome,

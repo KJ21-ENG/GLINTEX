@@ -202,3 +202,35 @@ test('backend seed data equals the exported factory designs', async () => {
     assert.equal(entry.dimensions.version, 2);
   }
 });
+
+test('every previous-designer factory template converts and prints without overflow', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { templates } = JSON.parse(readFileSync(new URL('./fixtures/legacy-v1-templates.json', import.meta.url), 'utf8'));
+  assert.equal(Object.keys(templates).length, 9);
+  for (const [stage, row] of Object.entries(templates)) {
+    const converted = toV2Template(row);
+    assert.equal(converted.version, 2);
+    assert.ok(converted.elements.some((el) => el.type === 'barcode'), `${stage} keeps its barcode`);
+    for (const variant of ['typical', 'long']) {
+      const artifact = buildPrintableArtifact(converted, [buildSampleData(stage, variant)], { stageKey: stage, dpi: 203 });
+      const overflow = artifact.warnings.filter((w) => /does not fit|Outside/.test(w));
+      assert.deepEqual(overflow, [], `${stage} ${variant}: ${overflow.join('; ')}`);
+    }
+  }
+  const small = toV2Template(templates.cutter_issue_small);
+  const item = small.elements.find((el) => el.id === 't-cis-item');
+  assert.ok(item.w >= 40, `small cutter item box keeps the full width (${item.w} mm)`);
+});
+
+test('letter spacing counts every glyph and barcode boxes cover their text', () => {
+  const spaced = measurer.measure('ABCD', { family: 'Inter', sizePt: 10, bold: false, italic: false, letterSpacingPt: 1 });
+  const plain = measurer.measure('ABCD', { family: 'Inter', sizePt: 10, bold: false, italic: false, letterSpacingPt: 0 });
+  assert.ok(Math.abs((spaced - plain) - 4 * 25.4 / 72) < 1e-9);
+  const tpl = { version: 2, media: { widthMm: 75, heightMm: 125, orientation: 'landscape' }, elements: [createElement('barcode', { id: 'b', x: 2, y: 2, moduleMm: 0.25, quietZoneMm: 1, textSizePt: 12, showText: true })] };
+  const short = layoutLabel(tpl, { barcode: 'A1' }, measurer).elements[0];
+  assert.ok(short.layout.textLine.x >= 0, 'text starts inside the element');
+  assert.ok(short.box.w >= short.layout.textLine.w + 2, 'element is at least as wide as its text');
+  const qr = layoutLabel({ ...tpl, elements: [createElement('qr', { id: 'q', x: 1, y: 1, sizeMm: 15 })] }, { barcode: 'RCO-1' }, measurer, { dpi: 203 }).elements[0];
+  const dot = 25.4 / 203;
+  assert.ok(Math.abs(qr.layout.moduleMm / dot - Math.round(qr.layout.moduleMm / dot)) < 1e-9, 'QR modules are whole dots');
+});

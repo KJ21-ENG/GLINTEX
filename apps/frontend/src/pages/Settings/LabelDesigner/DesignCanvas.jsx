@@ -50,24 +50,24 @@ function Ruler({ orientation, lengthMm, pxPerMm }) {
     const major = mm % labelEvery === 0;
     const pos = mm * pxPerMm;
     ticks.push(
-      <div key={mm} className="absolute bg-slate-400" style={orientation === 'h'
+      <div key={mm} className="absolute bg-muted-foreground/50" style={orientation === 'h'
         ? { left: pos, bottom: 0, width: 1, height: major ? 10 : mm % 5 === 0 ? 6 : 3 }
         : { top: pos, right: 0, height: 1, width: major ? 10 : mm % 5 === 0 ? 6 : 3 }} />,
     );
     if (major) {
       ticks.push(
-        <div key={`l${mm}`} className="absolute text-[9px] leading-none text-slate-500 select-none" style={orientation === 'h'
+        <div key={`l${mm}`} className="absolute text-[9px] leading-none text-muted-foreground select-none" style={orientation === 'h'
           ? { left: pos + 2, top: 2 }
           : { top: pos + 2, left: 2, writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>{mm}</div>,
       );
     }
   }
-  return <div className="absolute overflow-hidden bg-slate-50 border-slate-200" style={orientation === 'h'
+  return <div className="absolute overflow-hidden bg-muted/60 border-border" style={orientation === 'h'
     ? { left: RULER + PAD, top: 0, height: RULER, width: lengthMm * pxPerMm, borderBottomWidth: 1 }
     : { top: RULER + PAD, left: 0, width: RULER, height: lengthMm * pxPerMm, borderRightWidth: 1 }}>{ticks}</div>;
 }
 
-export default function DesignCanvas({ template, layout, markup, css, zoom, selectedIds, warnings, snap, showGrid, dispatch, onZoom, onOpenInspector }) {
+export default function DesignCanvas({ template, layout, markup, css, zoom, selectedIds, warnings, snap, showGrid, loading, stageLabel, dispatch, onZoom, onOpenInspector }) {
   const pxPerMm = PX_PER_MM_AT_100 * zoom;
   const { widthMm: canvasW, heightMm: canvasH } = layout.canvas;
   const hostRef = useRef(null);
@@ -230,26 +230,6 @@ export default function DesignCanvas({ template, layout, markup, css, zoom, sele
     attach();
   };
 
-  const onKeyDown = (event) => {
-    if (!selectedIds.length) return;
-    const tag = event.target.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-    const step = event.shiftKey ? 1 : 0.25;
-    const nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
-    if (nudge) {
-      event.preventDefault();
-      dispatch({ type: 'updateElements', ids: selectedIds.filter((id) => !byId[id]?.locked), patch: (el) => ({ x: round(el.x + nudge[0]), y: round(el.y + nudge[1]) }) });
-    } else if (event.key === 'Delete' || event.key === 'Backspace') {
-      event.preventDefault();
-      dispatch({ type: 'removeElements', ids: selectedIds });
-    } else if (event.key === 'Escape') {
-      dispatch({ type: 'select', ids: [] });
-    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd') {
-      event.preventDefault();
-      dispatch({ type: 'duplicateElements', ids: selectedIds });
-    }
-  };
-
   const onWheel = (event) => {
     if (!(event.ctrlKey || event.metaKey)) return;
     event.preventDefault();
@@ -261,11 +241,12 @@ export default function DesignCanvas({ template, layout, markup, css, zoom, sele
   const surfaceH = canvasH * pxPerMm;
 
   return (
-    <div className="relative flex-1 min-h-0 overflow-auto bg-slate-100/70 focus:outline-none" tabIndex={0} onKeyDown={onKeyDown} onWheel={onWheel} data-testid="design-canvas">
+    <div className="relative flex-1 min-h-0 overflow-auto bg-muted/40" onWheel={onWheel} data-testid="design-canvas">
+      {loading ? <div className="absolute inset-0 z-30 flex items-center justify-center bg-background/60 text-sm text-muted-foreground">Loading {stageLabel}…</div> : null}
       <div className="relative" style={{ width: surfaceW + RULER + PAD * 2, height: surfaceH + RULER + PAD * 2 }}>
         <Ruler orientation="h" lengthMm={canvasW} pxPerMm={pxPerMm} />
         <Ruler orientation="v" lengthMm={canvasH} pxPerMm={pxPerMm} />
-        <div className="absolute bg-slate-50 border-b border-r border-slate-200" style={{ left: 0, top: 0, width: RULER, height: RULER }} />
+        <div className="absolute bg-muted/60 border-b border-r border-border" style={{ left: 0, top: 0, width: RULER, height: RULER }} />
         <div
           ref={surfaceRef}
           className="absolute bg-white shadow-[0_1px_3px_rgba(15,23,42,0.18),0_0_0_1px_rgba(15,23,42,0.08)]"
@@ -293,13 +274,13 @@ export default function DesignCanvas({ template, layout, markup, css, zoom, sele
                 title={el.name || el.text || el.value || el.type}
               >
                 <div className={cn('absolute inset-0 rounded-[2px] border transition-colors',
-                  selected ? 'border-indigo-500' : warning ? (warning.level === 'error' ? 'border-red-500/80 border-dashed' : 'border-amber-500/80 border-dashed') : 'border-transparent group-hover:border-indigo-300',
-                  selected && 'bg-indigo-500/5')} />
-                {warning && <div className={cn('absolute -top-2 -right-2 h-4 w-4 rounded-full text-[10px] leading-4 text-center text-white shadow', warning.level === 'error' ? 'bg-red-500' : 'bg-amber-500')} title={warning.message}>!</div>}
+                  selected ? 'border-primary' : warning ? (warning.level === 'error' ? 'border-destructive/80 border-dashed' : 'border-amber-500/80 border-dashed') : 'border-transparent group-hover:border-primary/40',
+                  selected && 'bg-primary/5')} />
+                {warning && <div className={cn('absolute -top-2 -right-2 h-4 w-4 rounded-full text-[10px] leading-4 text-center text-white shadow', warning.level === 'error' ? 'bg-destructive' : 'bg-amber-500')} title={warning.message}>!</div>}
                 {handles.map((handle) => (
                   <div
                     key={handle}
-                    className="absolute h-2.5 w-2.5 rounded-sm bg-white border border-indigo-500 shadow-sm"
+                    className="absolute h-2.5 w-2.5 rounded-sm bg-background border border-primary shadow-sm"
                     style={{
                       cursor: CURSORS[handle],
                       left: handle.includes('w') ? -5 : handle.includes('e') ? 'calc(100% - 5px)' : 'calc(50% - 5px)',
@@ -311,13 +292,13 @@ export default function DesignCanvas({ template, layout, markup, css, zoom, sele
               </div>
             );
           })}
-          {guides.x !== null && <div className="absolute top-0 bottom-0 w-px bg-indigo-500 pointer-events-none" style={{ left: guides.x * pxPerMm }} />}
-          {guides.y !== null && <div className="absolute left-0 right-0 h-px bg-indigo-500 pointer-events-none" style={{ top: guides.y * pxPerMm }} />}
+          {guides.x !== null && <div className="absolute top-0 bottom-0 w-px bg-primary pointer-events-none" style={{ left: guides.x * pxPerMm }} />}
+          {guides.y !== null && <div className="absolute left-0 right-0 h-px bg-primary pointer-events-none" style={{ top: guides.y * pxPerMm }} />}
           {marquee && (
-            <div className="absolute border border-indigo-400 bg-indigo-400/10 pointer-events-none" style={{ left: Math.min(marquee.start.x, marquee.end.x) * pxPerMm, top: Math.min(marquee.start.y, marquee.end.y) * pxPerMm, width: Math.abs(marquee.end.x - marquee.start.x) * pxPerMm, height: Math.abs(marquee.end.y - marquee.start.y) * pxPerMm }} />
+            <div className="absolute border border-primary bg-primary/10 pointer-events-none" style={{ left: Math.min(marquee.start.x, marquee.end.x) * pxPerMm, top: Math.min(marquee.start.y, marquee.end.y) * pxPerMm, width: Math.abs(marquee.end.x - marquee.start.x) * pxPerMm, height: Math.abs(marquee.end.y - marquee.start.y) * pxPerMm }} />
           )}
-          {template.elements.length === 0 && (
-            <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-400 pointer-events-none select-none">Add text, a barcode or a line from the left panel</div>
+          {template.elements.length === 0 && !loading && (
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground pointer-events-none select-none">Add text, a barcode or a line from the left panel</div>
           )}
         </div>
       </div>

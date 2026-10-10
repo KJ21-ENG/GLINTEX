@@ -82,7 +82,7 @@ async function main() {
           let raw = "";
           for await (const chunk of req) {
             raw += chunk;
-            if (raw.length > 4000000) throw Error("too large");
+            if (raw.length > 24000000) throw Error("too large");
           }
           const r = JSON.parse(raw);
           if (!/^[a-z_]+$/.test(r.name)) throw Error("name");
@@ -93,16 +93,26 @@ async function main() {
             );
             delete r.png;
           }
+          if (r.artifact) {
+            await fs.writeFile(
+              path.join(output, r.name + ".artifact.json"),
+              JSON.stringify(r.artifact),
+            );
+            delete r.artifact;
+          }
           await fs.writeFile(
             path.join(output, r.name + ".json"),
             JSON.stringify(r, null, 2),
           );
           return res.end("ok");
         }
-        const name =
-          req.url === "/" ? "index.html" : decodeURIComponent(req.url.slice(1));
+        // The real app stylesheet references its fonts under /assets/; serve the built bundle's assets too.
+        const assetMatch = req.url.match(/^\/assets\/([A-Za-z0-9_.-]+)$/);
+        const name = assetMatch
+          ? assetMatch[1]
+          : req.url === "/" ? "index.html" : decodeURIComponent(req.url.slice(1));
         if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw Error("path");
-        const data = await fs.readFile(path.join(output, name));
+        const data = await fs.readFile(path.join(assetMatch ? path.join(root, "apps/frontend/dist/assets") : output, name));
         const type =
           {
             ".html": "text/html",

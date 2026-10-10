@@ -17,7 +17,8 @@ export const createCanvasMeasurer = () => {
       if (cached !== undefined) return cached;
       context.font = `${font.italic ? 'italic ' : ''}${font.bold ? '700' : '400'} ${font.sizePt * PX_PER_PT}px ${font.family}`;
       let widthMm = context.measureText(String(text)).width * MM_PER_PX;
-      if (font.letterSpacingPt) widthMm += Math.max(0, String(text).length - 1) * font.letterSpacingPt * PT_TO_MM;
+      // CSS letter-spacing follows every glyph, the last one included.
+      if (font.letterSpacingPt) widthMm += String(text).length * font.letterSpacingPt * PT_TO_MM;
       if (cache.size > 5000) cache.clear();
       cache.set(key, widthMm);
       return widthMm;

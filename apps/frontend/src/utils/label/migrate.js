@@ -25,7 +25,7 @@ const lineEndpoints = (pos, angle, length) => {
   return [{ x, y }, { x, y: y - length }];
 };
 
-export const migrateV1Template = (raw = {}) => {
+export const migrateV1Template = (raw = {}, { stageKey = '' } = {}) => {
   const dims = { width: 48, height: 25, horizontalGap: 2, verticalGap: 2, pageWidth: 104, marginTop: 0, marginLeft: 0, fontSize: 10, columns: 2, offsetX: 0, offsetY: 0, orientation: 'portrait', ...(raw.dimensions || {}) };
   const content = raw.content && typeof raw.content === 'object' ? raw.content : raw;
   const landscape = dims.orientation === 'landscape';
@@ -83,17 +83,19 @@ export const migrateV1Template = (raw = {}) => {
     const axisMax = rotation === 0 || rotation === 180 ? canvasW : canvasH;
     const start = rotation === 0 || rotation === 180 ? origin.x : origin.y;
     const centre = axisMax / 2;
-    const limit = wrapAtCenter && start < centre ? centre : axisMax;
+    // The small stickers wrapped at the full width even with wrapAtCenter (v1 special-cased them).
+    const limit = wrapAtCenter && start < centre && !/_small$/.test(stageKey) ? centre : axisMax;
     // v1 wrapped at the label edge (or the centre line), never at the text's own width.
     const w = Math.max(4, limit - start);
     const lineMm = v1LineMm(sizePt);
     const padding = style.background?.enabled ? n(style.background?.paddingMm, 0.8) : 0;
-    const lines = wrapAtCenter ? 2 : 1;
+    // v1 let rows flow into each other; v2 keeps every row in its box and shrinks instead.
+    const lines = wrapAtCenter ? 2 : 1.25;
     elements.push({
       ...common, type: 'text', x: origin.x - padding, y: origin.y - padding, w: w + padding * 2, h: lineMm * lines + padding * 2, rotation,
       text: value, fontFamily: ['courier-new', 'inter', 'roboto-mono', 'ibm-plex-sans'].includes(style.fontFamily) ? style.fontFamily : 'courier-new',
       fontSizePt: sizePt, bold: style.bold === true, italic: style.italic === true, underline: style.underline === true,
-      align: 'left', valign: 'top', overflow: 'wrap', minFontSizePt: Math.min(5, sizePt), lineHeight: 1.05,
+      align: 'left', valign: 'top', overflow: 'wrap-shrink', minFontSizePt: Math.min(5, sizePt), lineHeight: 1.05,
       invert: style.background?.enabled === true, paddingMm: padding, uppercase: false, letterSpacingPt: 0,
     });
   });
@@ -106,5 +108,5 @@ export const toV2Template = (raw) => {
   if (isV2Template(raw)) return normalizeTemplate(raw);
   // Stored rows keep the whole version 2 template in `content` (dimensions is a summary).
   if (raw.content && isV2Template(raw.content)) return normalizeTemplate(raw.content);
-  return migrateV1Template(raw);
+  return migrateV1Template(raw, { stageKey: typeof raw.stageKey === 'string' ? raw.stageKey.replace(/^v2:/, '') : '' });
 };

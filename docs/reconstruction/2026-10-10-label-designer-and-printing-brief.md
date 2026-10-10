@@ -58,7 +58,7 @@ Template data model; renderer; designer page structure, panels, interactions, co
 | "Keep printing working" vs "retire the Tauri service" | Browser stations fall back to the OS print dialog on the same HTML document; silent printing is desktop-only | One renderer, two transports; nothing depends on localhost:9090 any more |
 | "Exact preview" vs "flexible text" | Text is laid out by a JS engine measuring the same fonts, emitted as explicit lines; the preview DOM and the print DOM are the same HTML | Chromium cannot re-wrap what is already positioned |
 | "Rebuild from scratch" vs 22 untouched call sites | Public API of labelPrint.js kept, implementation replaced | Blast radius stays inside the label module |
-| Desktop release needed vs no Windows build here | Web app ships; desktop stays on 1.1.4 until the owner runs the Windows pipeline; v2 artifacts fail cleanly on 1.1.4 ("Unsupported label artifact"), so the browser fallback is offered meanwhile | Honest about what this machine can build |
+| Desktop release needed vs no Windows build here | Web app ships; desktop 1.1.4 serves its own bundled UI (only `/api` is proxied), keeps the previous renderer and prints the untouched legacy rows until the owner builds the next release; version 2 rows live under `v2:<stage>` so the two never collide | Verified in apps/desktop/src/security.cjs; honest about what this machine can build |
 
 ## Facts and commitments (not presentation)
 

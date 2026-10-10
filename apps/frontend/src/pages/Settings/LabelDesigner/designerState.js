@@ -125,12 +125,12 @@ export function designerReducer(state, action) {
     case 'cancelTransaction':
       return state.transaction ? { ...state, template: state.transaction, transaction: null } : state;
     case 'undo': {
-      if (!state.past.length) return state;
+      if (!state.past.length || state.transaction) return state;
       const previous = state.past[state.past.length - 1];
       return { ...state, template: previous, past: state.past.slice(0, -1), future: [state.template, ...state.future].slice(0, HISTORY_LIMIT), selectedIds: keepSelection(state, previous.elements), transaction: null };
     }
     case 'redo': {
-      if (!state.future.length) return state;
+      if (!state.future.length || state.transaction) return state;
       const [next, ...rest] = state.future;
       return { ...state, template: next, past: [...state.past, state.template].slice(-HISTORY_LIMIT), future: rest, selectedIds: keepSelection(state, next.elements), transaction: null };
     }

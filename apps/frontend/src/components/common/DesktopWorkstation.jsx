@@ -39,7 +39,7 @@ export default function DesktopWorkstation() {
   const [driverResult, setDriverResult] = useState(null);
   const [diagnostics, setDiagnostics] = useState(false);
   const [testArtifact, setTestArtifact] = useState(null);
-  const [media, setMedia] = useState({ width: 48, height: 25, pageWidth: 104, columns: 2, horizontalGap: 2, verticalGap: 2, marginLeft: 0, marginTop: 0, offsetX: 0, offsetY: 0 });
+  const [media, setMedia] = useState({ width: CALIBRATION_TEMPLATE.media.widthMm, height: CALIBRATION_TEMPLATE.media.heightMm, pageWidth: CALIBRATION_TEMPLATE.media.rollWidthMm, columns: 1, horizontalGap: 2, verticalGap: 2, marginLeft: 0, marginTop: 0, offsetX: 0, offsetY: 0 });
 
   async function refreshStatus() {
     const [s, sc, p] = await Promise.allSettled([bridge.server.status(), bridge.scale.status(), bridge.printers.status()]);

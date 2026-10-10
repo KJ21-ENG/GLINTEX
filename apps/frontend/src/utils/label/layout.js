@@ -115,11 +115,15 @@ const layoutBarcode = (el, value, dpi, measurer) => {
   const barsW = encoded.totalModules * moduleMm;
   const textPt = el.showText ? el.textSizePt : 0;
   const textMm = el.showText ? textPt * PT_TO_MM * 1.2 : 0;
-  const w = quiet * 2 + Math.max(barsW, 10);
+  const textFont = { family: fontFamilyCss('inter'), sizePt: textPt, bold: false, italic: false, letterSpacingPt: 0 };
+  const tw = el.showText && value ? measurer.measure(value, textFont) : 0;
+  const w = quiet * 2 + Math.max(barsW, tw, 10);
   const h = el.barHeightMm + textMm;
+  // Bars and text are centred inside the element so neither can start left of its box.
+  const barsLeft = quiet + (Math.max(barsW, tw, 10) - barsW) / 2;
   const overflowing = el.maxWidthMm > 0 && w > el.maxWidthMm + 0.001;
   const bars = [];
-  let cursor = quiet;
+  let cursor = barsLeft;
   encoded.sbs.forEach((modules, index) => {
     const width = modules * moduleMm;
     if (index % 2 === 0) bars.push({ x: cursor, w: width });
@@ -127,18 +131,18 @@ const layoutBarcode = (el, value, dpi, measurer) => {
   });
   let textLine = null;
   if (el.showText && value) {
-    const font = { family: fontFamilyCss('inter'), sizePt: textPt, bold: false, italic: false, letterSpacingPt: 0 };
-    const tw = measurer.measure(value, font);
-    textLine = { text: value, x: quiet + (barsW - tw) / 2, y: el.barHeightMm + textPt * PT_TO_MM * 0.1, w: tw, fontSizePt: textPt, lineHeightMm: textPt * PT_TO_MM * 1.1 };
+    textLine = { text: value, x: (w - tw) / 2, y: el.barHeightMm + textPt * PT_TO_MM * 0.1, w: tw, fontSizePt: textPt, lineHeightMm: textPt * PT_TO_MM * 1.1 };
   }
   return { w, h, moduleMm, narrowed, overflowing, bars, barHeightMm: el.barHeightMm, textLine, error: encoded.ok ? null : encoded.error, value };
 };
 
-const layoutQr = (el, value) => {
+const layoutQr = (el, value, dpi) => {
   const encoded = value ? encodeQr(value, el.ecLevel) : { ok: false, error: 'No QR value', size: 0, pixels: [] };
   const size = encoded.size || 21;
-  const moduleMm = el.sizeMm / size;
-  return { w: el.sizeMm, h: el.sizeMm, moduleMm, modules: size, rows: encoded.ok ? qrRuns(encoded.size, encoded.pixels) : [], error: encoded.ok ? null : encoded.error, value };
+  // Whole printer dots per module; the printed symbol is the nearest size that allows it.
+  const moduleMm = quantizeToDots(el.sizeMm / size, dpi);
+  const sizeMm = moduleMm * size;
+  return { w: sizeMm, h: sizeMm, moduleMm, modules: size, rows: encoded.ok ? qrRuns(encoded.size, encoded.pixels) : [], error: encoded.ok ? null : encoded.error, value };
 };
 
 export const resolveElementText = (el, data) => {
@@ -164,7 +168,7 @@ export const layoutLabel = (templateInput, data = {}, measurer, options = {}) =>
       return { ...el, box: elementBox(el, layout), layout };
     }
     if (el.type === 'qr') {
-      const layout = layoutQr(el, text);
+      const layout = layoutQr(el, text, dpi);
       return { ...el, box: elementBox(el, layout), layout };
     }
     return { ...el, box: elementBox(el) };
@@ -186,7 +190,8 @@ export const createEstimateMeasurer = () => ({
       else em += 0.55;
     }
     if (font.bold) em *= 1.06;
-    const widthMm = em * font.sizePt * PT_TO_MM + Math.max(0, String(text).length - 1) * (font.letterSpacingPt || 0) * PT_TO_MM;
+    // CSS letter-spacing follows every glyph, the last one included.
+    const widthMm = em * font.sizePt * PT_TO_MM + String(text).length * (font.letterSpacingPt || 0) * PT_TO_MM;
     return widthMm;
   },
 });

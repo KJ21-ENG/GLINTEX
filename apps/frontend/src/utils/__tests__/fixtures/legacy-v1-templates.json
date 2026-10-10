@@ -1,0 +1,2375 @@
+{
+ "source": "labelPrint.js DEFAULT_STAGE_TEMPLATES at commit 9f415edc (previous designer, version 1)",
+ "templates": {
+  "inbound": {
+   "stageKey": "inbound",
+   "dimensions": {
+    "width": 75,
+    "height": 125,
+    "columns": 1,
+    "offsetX": 0,
+    "offsetY": 0,
+    "fontSize": 10,
+    "marginTop": 0,
+    "pageWidth": 75,
+    "marginLeft": 0,
+    "orientation": "landscape",
+    "verticalGap": 2,
+    "horizontalGap": 2
+   },
+   "content": {
+    "copies": 1,
+    "texts": [
+     {
+      "id": "t-inb-title",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 0,
+       "y": 123
+      },
+      "style": {
+       "bold": true,
+       "size": 28,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": true,
+        "paddingMm": 1,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "INBOUND"
+     },
+     {
+      "id": "l-inb-vline",
+      "type": "line",
+      "angle": 90,
+      "pos": {
+       "x": 7,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.1
+      },
+      "value": ""
+     },
+     {
+      "id": "t-inb-date",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 14,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 18,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "DATE : @date"
+     },
+     {
+      "id": "t-inb-item",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 22,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 18,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "METALLIC : @itemName"
+     },
+     {
+      "id": "t-inb-roll",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 30,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 18,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "ROLL NO : @seq"
+     },
+     {
+      "id": "t-inb-wt",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 38,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 18,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "WEIGHT : @weight KG"
+     },
+     {
+      "id": "l-inb-hline",
+      "type": "line",
+      "angle": 0,
+      "pos": {
+       "x": 45,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 75,
+       "thicknessMm": 0.5
+      },
+      "value": ""
+     },
+     {
+      "id": "bc-inb",
+      "type": "barcode",
+      "angle": 270,
+      "pos": {
+       "x": 53,
+       "y": 100
+      },
+      "style": {
+       "bold": false,
+       "italic": false,
+       "heightMm": 12,
+       "moduleMm": 0.35,
+       "underline": false,
+       "humanReadable": true
+      },
+      "value": "{{barcode}}"
+     }
+    ]
+   }
+  },
+  "cutter_issue": {
+   "stageKey": "cutter_issue",
+   "dimensions": {
+    "width": 75,
+    "height": 125,
+    "columns": 1,
+    "offsetX": 3,
+    "offsetY": 0,
+    "fontSize": 10,
+    "marginTop": 0,
+    "pageWidth": 75,
+    "marginLeft": 0,
+    "orientation": "landscape",
+    "verticalGap": 2,
+    "horizontalGap": 2
+   },
+   "content": {
+    "copies": 1,
+    "texts": [
+     {
+      "id": "t-ci-title",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 0,
+       "y": 123
+      },
+      "style": {
+       "bold": true,
+       "size": 19,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": true,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "ISSUE TO CUTTER MACHINE"
+     },
+     {
+      "id": "l-ci-vline",
+      "type": "line",
+      "angle": 90,
+      "pos": {
+       "x": 6,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.1
+      },
+      "value": ""
+     },
+     {
+      "id": "t-ci-date",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 10,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 19,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "DATE : @date"
+     },
+     {
+      "id": "t-ci-item",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 17,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 19,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "ITEM : @itemName - @seq"
+     },
+     {
+      "id": "t-ci-cut",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 24,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 19,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "CUT : @cut"
+     },
+     {
+      "id": "t-ci-lot",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 31,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 19,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "LOT : @inboundDate"
+     },
+     {
+      "id": "l-ci-hline",
+      "type": "line",
+      "angle": 0,
+      "pos": {
+       "x": 37,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.5
+      },
+      "value": ""
+     },
+     {
+      "id": "t-ci-machine",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 41,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 19,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "MACHINE : @machineName"
+     },
+     {
+      "id": "t-ci-weight",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 48,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 19,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "WEIGHT : @totalWeight KG"
+     },
+     {
+      "id": "bc-ci",
+      "type": "barcode",
+      "angle": 270,
+      "pos": {
+       "x": 58,
+       "y": 100
+      },
+      "style": {
+       "bold": false,
+       "italic": false,
+       "heightMm": 10,
+       "moduleMm": 0.45,
+       "underline": false,
+       "humanReadable": true
+      },
+      "value": "{{barcode}}"
+     }
+    ]
+   }
+  },
+  "cutter_issue_small": {
+   "stageKey": "cutter_issue_small",
+   "dimensions": {
+    "width": 50,
+    "height": 25,
+    "columns": 2,
+    "offsetX": 1,
+    "offsetY": -1,
+    "fontSize": 10,
+    "marginTop": 0,
+    "pageWidth": 105,
+    "marginLeft": 0,
+    "orientation": "portrait",
+    "verticalGap": 2,
+    "horizontalGap": 2
+   },
+   "content": {
+    "copies": 1,
+    "texts": [
+     {
+      "id": "t-cis-item",
+      "type": "text",
+      "angle": 0,
+      "pos": {
+       "x": 3,
+       "y": 3
+      },
+      "style": {
+       "bold": true,
+       "size": 10,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "@itemName"
+     },
+     {
+      "id": "t-cis-operator",
+      "type": "text",
+      "angle": 0,
+      "pos": {
+       "x": 3,
+       "y": 8
+      },
+      "style": {
+       "bold": false,
+       "size": 10,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "@operatorName"
+     },
+     {
+      "id": "t-cis-empty",
+      "type": "text",
+      "angle": 0,
+      "pos": {
+       "x": 3,
+       "y": 15
+      },
+      "style": {
+       "bold": false,
+       "size": 10,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": ""
+     },
+     {
+      "id": "bc-cis",
+      "type": "barcode",
+      "angle": 0,
+      "pos": {
+       "x": 5,
+       "y": 14
+      },
+      "style": {
+       "bold": false,
+       "italic": false,
+       "heightMm": 7,
+       "moduleMm": 0.25,
+       "underline": false,
+       "humanReadable": true
+      },
+      "value": "{{barcode}}"
+     },
+     {
+      "id": "t-cis-cut",
+      "type": "text",
+      "angle": 0,
+      "pos": {
+       "x": 29,
+       "y": 3
+      },
+      "style": {
+       "bold": true,
+       "size": 10,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "(@cut)"
+     }
+    ]
+   }
+  },
+  "cutter_receive": {
+   "stageKey": "cutter_receive",
+   "dimensions": {
+    "width": 75,
+    "height": 125,
+    "columns": 1,
+    "offsetX": 3,
+    "offsetY": 0,
+    "fontSize": 10,
+    "marginTop": 0,
+    "pageWidth": 75,
+    "marginLeft": 0,
+    "orientation": "landscape",
+    "verticalGap": 2,
+    "horizontalGap": 2
+   },
+   "content": {
+    "copies": 2,
+    "texts": [
+     {
+      "id": "t-cr-title",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 0,
+       "y": 123
+      },
+      "style": {
+       "bold": true,
+       "size": 21,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": true,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "RECEIVE FROM CUTTER"
+     },
+     {
+      "id": "l-cr-vline",
+      "type": "line",
+      "angle": 90,
+      "pos": {
+       "x": 7,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.1
+      },
+      "value": ""
+     },
+     {
+      "id": "t-cr-date",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 10,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "DATE : @date"
+     },
+     {
+      "id": "t-cr-item",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 16,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "ITEM : @itemName"
+     },
+     {
+      "id": "t-cr-cut",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 22,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "CUT : @cut"
+     },
+     {
+      "id": "t-cr-machine",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 28,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "MACHINE : @machineName"
+     },
+     {
+      "id": "t-cr-bob",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 34,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "BOB : @bobbinName  QTY : @bobbinQty"
+     },
+     {
+      "id": "l-cr-hline",
+      "type": "line",
+      "angle": 0,
+      "pos": {
+       "x": 39,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.5
+      },
+      "value": ""
+     },
+     {
+      "id": "t-cr-gross",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 42,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "GROSS : @grossWeight"
+     },
+     {
+      "id": "t-cr-tare",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 48,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "TARE : @tareWeight"
+     },
+     {
+      "id": "t-cr-net",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 54,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "NET : @netWeight KG"
+     },
+     {
+      "id": "t-cr-operator",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 42,
+       "y": 58
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "OPR : @operatorName"
+     },
+     {
+      "id": "bc-cr",
+      "type": "barcode",
+      "angle": 270,
+      "pos": {
+       "x": 61,
+       "y": 100
+      },
+      "style": {
+       "bold": false,
+       "italic": false,
+       "heightMm": 8,
+       "moduleMm": 0.42,
+       "underline": false,
+       "humanReadable": true
+      },
+      "value": "{{barcode}}"
+     }
+    ]
+   }
+  },
+  "holo_issue": {
+   "stageKey": "holo_issue",
+   "dimensions": {
+    "width": 75,
+    "height": 125,
+    "columns": 1,
+    "offsetX": 3,
+    "offsetY": 0,
+    "fontSize": 10,
+    "marginTop": 0,
+    "pageWidth": 75,
+    "marginLeft": 0,
+    "orientation": "landscape",
+    "verticalGap": 2,
+    "horizontalGap": 2
+   },
+   "content": {
+    "copies": 2,
+    "texts": [
+     {
+      "id": "t-hi-title",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 0,
+       "y": 123
+      },
+      "style": {
+       "bold": true,
+       "size": 19,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": true,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "ISSUE TO HOLO MACHINE"
+     },
+     {
+      "id": "l-hi-vline",
+      "type": "line",
+      "angle": 90,
+      "pos": {
+       "x": 7,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.1
+      },
+      "value": ""
+     },
+     {
+      "id": "t-hi-date",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 10,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 16,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "DATE : @date"
+     },
+     {
+      "id": "t-hi-shift",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 10,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "SHIFT : @shift"
+     },
+     {
+      "id": "t-hi-item",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 16,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 16,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "ITEM : @itemName"
+     },
+     {
+      "id": "t-hi-cut",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 22,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 16,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "CUT : @cut"
+     },
+     {
+      "id": "t-hi-yarn",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 28,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 16,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "YARN : @yarnName"
+     },
+     {
+      "id": "t-hi-machine",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 34,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 16,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "M/C : @machineName"
+     },
+     {
+      "id": "t-hi-worker",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 34,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "WORKER : @operatorName"
+     },
+     {
+      "id": "l-hi-hline",
+      "type": "line",
+      "angle": 0,
+      "pos": {
+       "x": 39,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.5
+      },
+      "value": ""
+     },
+     {
+      "id": "t-hi-bob",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 42,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 16,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "BOB : @bobbinType  QTY : @bobbinQty"
+     },
+     {
+      "id": "t-hi-twist",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 48,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 16,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "TWIST : @twistName"
+     },
+     {
+      "id": "t-hi-netwt",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 54,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "NET WT : @netWeight KG"
+     },
+     {
+      "id": "bc-hi",
+      "type": "barcode",
+      "angle": 270,
+      "pos": {
+       "x": 62,
+       "y": 105
+      },
+      "style": {
+       "bold": false,
+       "italic": false,
+       "heightMm": 8,
+       "moduleMm": 0.55,
+       "underline": false,
+       "humanReadable": true
+      },
+      "value": "{{barcode}}"
+     }
+    ]
+   }
+  },
+  "holo_receive": {
+   "stageKey": "holo_receive",
+   "dimensions": {
+    "width": 75,
+    "height": 125,
+    "columns": 1,
+    "offsetX": 3,
+    "offsetY": 0,
+    "fontSize": 10,
+    "marginTop": 0,
+    "pageWidth": 75,
+    "marginLeft": 0,
+    "orientation": "landscape",
+    "verticalGap": 2,
+    "horizontalGap": 2
+   },
+   "content": {
+    "copies": 2,
+    "texts": [
+     {
+      "id": "t-hr-title",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 0,
+       "y": 123
+      },
+      "style": {
+       "bold": true,
+       "size": 21,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": true,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "RECEIVE FROM HOLO"
+     },
+     {
+      "id": "l-hr-vline",
+      "type": "line",
+      "angle": 90,
+      "pos": {
+       "x": 7,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.1
+      },
+      "value": ""
+     },
+     {
+      "id": "t-hr-date",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 10,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "DATE : @date"
+     },
+     {
+      "id": "t-hr-item",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 16,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "ITEM : @itemName"
+     },
+     {
+      "id": "t-hr-cut",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 22,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "CUT : @cut"
+     },
+     {
+      "id": "t-hr-yarn",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 28,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "YARN : @yarnName"
+     },
+     {
+      "id": "t-hr-rolls",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 34,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "ROLLS : @rollType (@rollCount)"
+     },
+     {
+      "id": "t-hr-operator",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 28,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "OPR : @operatorName"
+     },
+     {
+      "id": "t-hr-machine",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 34,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "M/C : @machineName"
+     },
+     {
+      "id": "l-hr-hline",
+      "type": "line",
+      "angle": 0,
+      "pos": {
+       "x": 39,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.5
+      },
+      "value": ""
+     },
+     {
+      "id": "t-hr-gross",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 42,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "GROSS : @grossWeight"
+     },
+     {
+      "id": "t-hr-tare",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 48,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "TARE : @tareWeight"
+     },
+     {
+      "id": "t-hr-net",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 54,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 17,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "NET : @netWeight KG"
+     },
+     {
+      "id": "t-hr-twist",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 42,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "TWIST : @twist"
+     },
+     {
+      "id": "bc-hr",
+      "type": "barcode",
+      "angle": 270,
+      "pos": {
+       "x": 61,
+       "y": 105
+      },
+      "style": {
+       "bold": false,
+       "italic": false,
+       "heightMm": 8,
+       "moduleMm": 0.55,
+       "underline": false,
+       "humanReadable": true
+      },
+      "value": "{{barcode}}"
+     }
+    ]
+   }
+  },
+  "coning_issue": {
+   "stageKey": "coning_issue",
+   "dimensions": {
+    "width": 75,
+    "height": 125,
+    "columns": 1,
+    "offsetX": 3,
+    "offsetY": 0,
+    "fontSize": 10,
+    "marginTop": 0,
+    "pageWidth": 75,
+    "marginLeft": 0,
+    "orientation": "landscape",
+    "verticalGap": 2,
+    "horizontalGap": 2
+   },
+   "content": {
+    "copies": 1,
+    "texts": [
+     {
+      "id": "t-coi-title",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 0,
+       "y": 123
+      },
+      "style": {
+       "bold": true,
+       "size": 16,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": true,
+        "paddingMm": 0.7,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "ISSUE TO CONING MACHINE"
+     },
+     {
+      "id": "l-coi-vline",
+      "type": "line",
+      "angle": 90,
+      "pos": {
+       "x": 6,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.1
+      },
+      "value": ""
+     },
+     {
+      "id": "t-coi-date",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 9,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "DATE : @date"
+     },
+     {
+      "id": "t-coi-worker",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 9,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 12,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "WORKER : @operatorName"
+     },
+     {
+      "id": "t-coi-item",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 14,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "ITEM : @itemName (@cut)"
+     },
+     {
+      "id": "t-coi-yarn",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 20,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "YARN : @yarnName"
+     },
+     {
+      "id": "t-coi-shift",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 20,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 12,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "SHIFT : @shift"
+     },
+     {
+      "id": "t-coi-rolls",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 26,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "ROLLS : @rollType (@rollCount)"
+     },
+     {
+      "id": "t-coi-theli",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 26,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 12,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "THELI : @wrapperName"
+     },
+     {
+      "id": "l-coi-hline",
+      "type": "line",
+      "angle": 0,
+      "pos": {
+       "x": 31,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.5
+      },
+      "value": ""
+     },
+     {
+      "id": "t-coi-cone",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 34,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "CONE : @coneType (@perConeTargetG G)"
+     },
+     {
+      "id": "t-coi-expcone",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 34,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 12,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "EXP : @expectedCones pcs"
+     },
+     {
+      "id": "t-coi-netwt",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 40,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 15,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "NET WT : @netWeight KG"
+     },
+     {
+      "id": "bc-coi",
+      "type": "barcode",
+      "angle": 270,
+      "pos": {
+       "x": 49,
+       "y": 95
+      },
+      "style": {
+       "bold": false,
+       "italic": false,
+       "heightMm": 10,
+       "moduleMm": 0.35,
+       "underline": false,
+       "humanReadable": true
+      },
+      "value": "{{barcode}}"
+     }
+    ]
+   }
+  },
+  "coning_receive": {
+   "stageKey": "coning_receive",
+   "dimensions": {
+    "width": 75,
+    "height": 125,
+    "columns": 1,
+    "offsetX": 3,
+    "offsetY": 0,
+    "fontSize": 10,
+    "marginTop": 0,
+    "pageWidth": 75,
+    "marginLeft": 0,
+    "orientation": "landscape",
+    "verticalGap": 2,
+    "horizontalGap": 2
+   },
+   "content": {
+    "copies": 1,
+    "texts": [
+     {
+      "id": "t-cor-title",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 0,
+       "y": 123
+      },
+      "style": {
+       "bold": true,
+       "size": 16,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": true,
+        "paddingMm": 0.7,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "RECEIVE FROM CONING"
+     },
+     {
+      "id": "l-cor-vline",
+      "type": "line",
+      "angle": 90,
+      "pos": {
+       "x": 6,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.1
+      },
+      "value": ""
+     },
+     {
+      "id": "t-cor-date",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 9,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "DATE : @date"
+     },
+     {
+      "id": "t-cor-operator",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 9,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 12,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "OPR : @operatorName"
+     },
+     {
+      "id": "t-cor-item",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 15,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "ITEM : @itemName (@cut)"
+     },
+     {
+      "id": "t-cor-yarn",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 21,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "YARN : @yarnName"
+     },
+     {
+      "id": "t-cor-theli",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 21,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 12,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "THELI : @wrapperName"
+     },
+     {
+      "id": "t-cor-cone",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 27,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 14,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "CONE : @coneCount (@coneType)"
+     },
+     {
+      "id": "t-cor-machine",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 27,
+       "y": 55
+      },
+      "style": {
+       "bold": true,
+       "size": 12,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "M/C : @machineName"
+     },
+     {
+      "id": "l-cor-hline",
+      "type": "line",
+      "angle": 0,
+      "pos": {
+       "x": 32,
+       "y": 0
+      },
+      "style": {
+       "visible": true,
+       "lengthMm": 125,
+       "thicknessMm": 0.5
+      },
+      "value": ""
+     },
+     {
+      "id": "t-cor-net",
+      "type": "text",
+      "angle": 270,
+      "pos": {
+       "x": 35,
+       "y": 122
+      },
+      "style": {
+       "bold": true,
+       "size": 15,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "NET WT : @netWeight KG"
+     },
+     {
+      "id": "bc-cor",
+      "type": "barcode",
+      "angle": 270,
+      "pos": {
+       "x": 45,
+       "y": 95
+      },
+      "style": {
+       "bold": false,
+       "italic": false,
+       "heightMm": 10,
+       "moduleMm": 0.35,
+       "underline": false,
+       "humanReadable": true
+      },
+      "value": "{{barcode}}"
+     }
+    ]
+   }
+  },
+  "coning_receive_small": {
+   "stageKey": "coning_receive_small",
+   "dimensions": {
+    "width": 50,
+    "height": 25,
+    "columns": 2,
+    "offsetX": 1,
+    "offsetY": -1,
+    "fontSize": 10,
+    "marginTop": 0,
+    "pageWidth": 105,
+    "marginLeft": 0,
+    "orientation": "portrait",
+    "verticalGap": 2,
+    "horizontalGap": 2
+   },
+   "content": {
+    "copies": 1,
+    "texts": [
+     {
+      "id": "t-cors-item",
+      "type": "text",
+      "angle": 0,
+      "pos": {
+       "x": 3,
+       "y": 3
+      },
+      "style": {
+       "bold": true,
+       "size": 10,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": true
+      },
+      "value": "@itemName"
+     },
+     {
+      "id": "t-cors-operator",
+      "type": "text",
+      "angle": 0,
+      "pos": {
+       "x": 3,
+       "y": 8
+      },
+      "style": {
+       "bold": false,
+       "size": 10,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "@operatorName"
+     },
+     {
+      "id": "bc-cors",
+      "type": "barcode",
+      "angle": 0,
+      "pos": {
+       "x": 5,
+       "y": 14
+      },
+      "style": {
+       "bold": false,
+       "italic": false,
+       "heightMm": 7,
+       "moduleMm": 0.25,
+       "underline": false,
+       "humanReadable": true
+      },
+      "value": "{{barcode}}"
+     },
+     {
+      "id": "t-cors-cut",
+      "type": "text",
+      "angle": 0,
+      "pos": {
+       "x": 29,
+       "y": 3
+      },
+      "style": {
+       "bold": true,
+       "size": 10,
+       "italic": false,
+       "opacity": 1,
+       "visible": true,
+       "underline": false,
+       "background": {
+        "color": "#000000",
+        "enabled": false,
+        "paddingMm": 0.8,
+        "textColor": "#ffffff"
+       },
+       "wrapAtCenter": false
+      },
+      "value": "(@cut)"
+     }
+    ]
+   }
+  }
+ }
+}

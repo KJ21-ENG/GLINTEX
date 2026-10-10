@@ -72,8 +72,11 @@ function validateHtmlArtifact(a) {
   for (const p of a.pages) {
     if (!p || typeof p.html !== "string" || !p.html.length || p.html.length > HTML_PAGE_MAX)
       throw new Error("Only inline HTML label pages are accepted");
+    // Label text is escaped by the renderer; only tags and attributes can carry active content.
+    const markupOnly = p.html.replace(/>[^<]*</g, "><");
+    if (/<(?![a-zA-Z/!])/.test(markupOnly)) throw new Error("Label page contains unsupported content");
     for (const pattern of FORBIDDEN_MARKUP)
-      if (pattern.test(p.html)) throw new Error("Label page contains unsupported content");
+      if (pattern.test(markupOnly)) throw new Error("Label page contains unsupported content");
   }
   const stage = a.templateSnapshot?.stageKey;
   if (stage !== undefined && (typeof stage !== "string" || !/^[a-z0-9_]{1,40}$/.test(stage)))

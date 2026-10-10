@@ -7,10 +7,15 @@ import { renderLabelMarkup, renderPage, pageGeometry, assemblePrintDocument, BAS
 export const ARTIFACT_VERSION = 2;
 export const SUPPORTED_DPI = [203, 300, 600];
 export const MAX_PAGES = 100;
+// The desktop validator refuses pages over 2 MB and jobs over 20 MB; fail earlier with a clear message.
+const PAGE_HTML_MAX = 2 * 1024 * 1024;
+const JOB_HTML_MAX = 18 * 1024 * 1024;
 
 export const normalizeCopies = (value) => {
   const n = Math.round(Number(value));
-  return Number.isFinite(n) && n > 0 ? Math.min(LIMITS.copiesMax, n) : 1;
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > LIMITS.copiesMax) throw new Error(`At most ${LIMITS.copiesMax} copies per job; print the rest as another job`);
+  return n;
 };
 
 export const validateMedia = (media) => {
@@ -38,6 +43,7 @@ export const buildPrintableArtifact = (templateInput, dataArray = [{}], options 
   const geometry = pageGeometry(media);
   const pages = [];
   const warnings = [];
+  let projectedBytes = 0;
   for (const row of rows) {
     const inners = row.map((data) => {
       const layout = layoutLabel(template, data, measurer, { dpi });
@@ -49,6 +55,9 @@ export const buildPrintableArtifact = (templateInput, dataArray = [{}], options 
     });
     while (inners.length < media.columns) inners.push(null);
     const html = renderPage(media, inners);
+    if (html.length > PAGE_HTML_MAX) throw new Error('A label page is larger than 2 MB; use a smaller image');
+    projectedBytes += html.length * copies;
+    if (projectedBytes > JOB_HTML_MAX) throw new Error('Label job is larger than 18 MB; split the batch or use a smaller image');
     for (let copy = 0; copy < copies; copy += 1) pages.push({ html });
   }
   return {

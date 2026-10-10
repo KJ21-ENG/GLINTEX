@@ -16,7 +16,7 @@ export default function MediaPanel({ template, dispatch, canEdit }) {
   const overRoll = used > media.rollWidthMm + 0.001;
   return (
     <>
-      <Section title="Label & roll" defaultOpen>
+      <Section title="Size & roll" defaultOpen>
         <Field label="Preset">
           <SelectField value="" disabled={disabled} onChange={(key) => { const p = PRESETS.find((x) => x.key === key); if (p) set(p.media); }} options={[{ value: '', label: 'Apply a preset…' }, ...PRESETS.map((p) => ({ value: p.key, label: p.label }))]} />
         </Field>

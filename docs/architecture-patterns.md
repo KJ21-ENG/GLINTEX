@@ -9,5 +9,5 @@
 - **Description**: Built with React and structured around reusable UI components. Uses React Router for client-side routing and Tailwind CSS for utility-first styling.
 
 ## Print-Client
-- **Pattern**: Desktop Application Architecture
-- **Description**: A hybrid architecture powered by Tauri, utilizing a Rust-based core for interacting with the OS (system tray, IPC, native printing logic) and a React frontend for the user interface.
+
+Retired 2026-10-10. Printing is part of the Electron desktop app (`apps/desktop/src/printing`), with a browser print-dialog fallback; see `docs/label-designer.md`.

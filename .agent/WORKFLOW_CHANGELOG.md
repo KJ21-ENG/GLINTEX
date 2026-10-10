@@ -18,3 +18,9 @@
 - Change: Automatic facts refresh: what the repository shows has changed since the last refresh.
 - CI files added: .github/workflows/electron-windows.yml.
 - Npm scripts added: dev:desktop, make:desktop:windows, package:desktop, test:desktop.
+
+## Version 4 - 2026-10-10T12:14:04Z
+
+- Approved by: not required (automatic facts refresh; rules unchanged)
+- Change: Automatic facts refresh: what the repository shows has changed since the last refresh.
+- CI files removed: .github/workflows/release.yml.

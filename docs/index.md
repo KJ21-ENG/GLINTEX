@@ -19,19 +19,17 @@
 - **Root:** /Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/frontend
 
 #### print-client
-- **Type:** desktop
-- **Tech Stack:** Tauri + React
-- **Root:** /Volumes/MacSSD/Development/CursorAI_Project/GLINTEX/apps/print-client
+
+Retired on 2026-10-10. Label printing goes through the desktop app or the browser print dialog; see [Label designer and printing](./label-designer.md).
+
 
 ## Generated Documentation
 
 - [Project Overview](./project-overview.md)
 - [Architecture (Backend)](./architecture-backend.md)
 - [Architecture (Frontend)](./architecture-frontend.md)
-- [Architecture (Print Client)](./architecture-print-client.md)
 - [Source Tree Analysis](./source-tree-analysis.md)
 - [UI Component Inventory (Frontend)](./ui-component-inventory-frontend.md)
-- [UI Component Inventory (Print Client)](./ui-component-inventory-print-client.md)
 - [Development Guide](./development-instructions.md)
 - [Deployment Guide](./deployment-configuration.md)
 - [API Contracts (Backend)](./api-contracts-backend.md)
@@ -46,7 +44,7 @@
 - [PROD_DB_RESET_2025-12-31](./PROD_DB_RESET_2025-12-31.md)
 - [PERFORMANCE_V2_ROLLOUT](./PERFORMANCE_V2_ROLLOUT.md)
 - [DEPLOY_HOSTINGER_VPS](./DEPLOY_HOSTINGER_VPS.md)
-- [Print Client README](../apps/print-client/README.md)
+- [Label designer and printing](./label-designer.md)
 
 ## Getting Started
 

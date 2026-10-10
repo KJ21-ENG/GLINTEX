@@ -16,5 +16,5 @@
 ## Frontend Part
 - None
 
-## Print-Client Part
+## Print-Client Part (retired 2026-10-10; see label-designer.md)
 - `README.md`

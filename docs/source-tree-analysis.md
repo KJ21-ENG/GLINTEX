@@ -8,7 +8,7 @@ GLINTEX/
 ├── apps/
 │   ├── backend/          # Express API server connecting to PostgreSQL
 │   ├── frontend/         # Vite React SPA for the primary web interface
-│   └── print-client/     # Tauri desktop application for local printer proxy
+│   └── desktop/          # Electron factory workstation (printing, scale)
 ```
 
 ## Backend (`apps/backend`)
@@ -36,12 +36,6 @@ frontend/
 └── tailwind.config.js    # Styling definitions 
 ```
 
-## Print Client (`apps/print-client`)
-```
-print-client/
-├── src/                  # React Vite scaffolding
-├── src-tauri/
-│   ├── src/main.rs       # Tauri Rust backend for OS integration
-│   └── tauri.conf.json   # Configuration for system tray and window properties
-└── package.json          # Dependency definition
-```
+## Print Client (retired)
+
+The Tauri print client was removed on 2026-10-10. See `docs/label-designer.md`.

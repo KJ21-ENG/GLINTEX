@@ -104,11 +104,11 @@ Missing/changed/ambiguous identity never substitutes another port. Close competi
 
 Install the manufacturer's Windows driver if needed. Select the exact printer name. TSC TE244 **203 × 203 dpi** is the initial factory profile, not a universal setting. Other configurable profiles are 300/600 dpi; verify the driver and physical device.
 
-Template + transaction + media profile produces one canonical bitmap artifact. Preview and printing use the same page artwork, dimensions, columns/gaps/offsets, fonts, rotations and barcode geometry. Editor guides/selection handles stay outside artwork. Template retrieval failure does not silently substitute another template.
+Template + transaction + media profile produces one HTML page artifact laid out in millimetres with embedded fonts (see [label-designer.md](label-designer.md)). The designer preview, the print preview and the hidden print window render the same markup; editor guides and selection handles stay outside it. Template retrieval failure does not silently substitute another template. Retained PNG artifacts from earlier builds still reprint.
 
 Vertical die-cut gap is recorded in the artifact snapshot but is controlled by the Windows driver stock/gap-sensor settings. Set that driver gap to match your media. Printed page height is label height plus top margin, not full media pitch; extra gap pixels are not injected.
 
-Set actual roll/label sizes, zero margins, 100% scale and no fit-to-page. Native printing awaits image decoding/font readiness. Electron `print()` sizes are microns; `printToPDF()` sizes are inches. The normal desktop path does not depend on localhost:9090 or printer-native font layouts.
+Set actual roll/label sizes, zero margins, 100% scale and no fit-to-page. Native printing awaits font and image readiness. Electron `print()` sizes are microns; `printToPDF()` sizes are inches. Nothing depends on a local print service or on printer-resident fonts; the former Tauri print client is retired.
 
 Jobs have stable IDs and retain artwork/template/profile snapshots. **Submitted means Windows accepted submission, not that paper printed.** A crash/timeout during submission is **outcome uncertain**. Check labels and spooler before deliberate Reprint; ambiguous jobs are never automatically retried. Reprint uses persisted artwork and must never resave a receipt.
 

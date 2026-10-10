@@ -429,6 +429,7 @@ export function ConingReceiveForm() {
                     const barcode = res.row.barcode || '';
                     const boxName = asArray(db.boxes).find((b) => b.id === row.boxId)?.name;
                     const operatorName = asArray(db.operators).find((o) => o.id === row.operatorId)?.name;
+                    const machineName = asArray(db.machines).find((m) => m.id === issue.machineId)?.name;
                     const rowNetWeight = Number(res.row.netWeight ?? calcRowNet(row));
                     const rowGrossWeight = Number(res.row.grossWeight ?? row.grossWeight);
                     const rowTareWeight = Number(res.row.tareWeight ?? (rowGrossWeight - rowNetWeight));
@@ -444,6 +445,7 @@ export function ConingReceiveForm() {
                         netWeight: rowNetWeight,
                         boxName,
                         operatorName,
+                        machineName,
                         itemName: issueDetails.itemName,
                         cut: issueDetails.cutName,
                         yarnName: issueDetails.yarnName,

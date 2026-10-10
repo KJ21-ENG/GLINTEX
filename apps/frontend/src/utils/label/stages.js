@@ -172,6 +172,7 @@ export const STAGE_VARIABLES = {
     { key: 'shift', label: 'Shift' },
     { key: 'boxName', label: 'Box' },
     { key: 'operatorName', label: 'Operator' },
+    { key: 'machineName', label: 'Machine' },
     { key: 'date', label: 'Date' },
   ],
   [LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL]: [

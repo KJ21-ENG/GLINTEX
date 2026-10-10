@@ -7,7 +7,10 @@ export const pt = (value) => `${Math.round(Number(value) * 100) / 100}pt`;
 export const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 export const BASE_CSS = [
-  '.pg{position:relative;overflow:hidden;background:#fff;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
+  // contain:size keeps Chromium's multi-page print layout from measuring the document width
+  // from the unrotated positions of the text lines inside a landscape canvas; without it any
+  // text beyond the page width makes a job with two or more pages print scaled down.
+  '.pg{position:relative;overflow:hidden;contain:size;background:#fff;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
   '.lbw{position:absolute;overflow:hidden}',
   '.lb{position:absolute;left:0;top:0;transform-origin:0 0;overflow:visible}',
   '.el{position:absolute;transform-origin:0 0;overflow:visible;box-sizing:border-box}',

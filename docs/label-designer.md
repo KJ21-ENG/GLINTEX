@@ -71,6 +71,10 @@ selection handles and guides on top.
 - `apps/desktop/src/printing/`: validation, document assembly, hidden print window, queue.
 - `apps/desktop/scripts/print-integration.cjs`: every stage through the production printer
   module in real Chromium (printToPDF + capture).
+  It also prints two-label batches and asserts every page keeps the scale of a one-label job:
+  Chromium measures a multi-page document's width from the unrotated positions of the text
+  lines inside a sideways canvas, so the page box carries `contain: size` to stop it shrinking
+  jobs whose text sits beyond the roll width.
 
 ## Verification
 

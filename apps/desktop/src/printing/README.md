@@ -39,5 +39,6 @@ Retention limits: 100 records, 100 MB; uncertain records are never pruned.
 rejected active content), the driver contract with mocked windows, durable queue semantics
 and legacy acceptance. `electron apps/desktop/scripts/print-integration.cjs <dir>` runs every
 stage design through the real printer module in Chromium with the Windows submission replaced
-by printToPDF and a page capture. `electron apps/desktop/scripts/visual-runner.cjs` renders the
+by printToPDF and a page capture, and fails if a multi-page job prints at a different scale
+than a one-page job. `electron apps/desktop/scripts/visual-runner.cjs` renders the
 designer and workstation panel. Physical alignment on TSC TE244 media is an operator step.

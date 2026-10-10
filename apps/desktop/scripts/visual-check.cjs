@@ -29,6 +29,18 @@ async function main() {
       "import.meta.env": JSON.stringify({ VITE_API_BASE: "http://127.0.0.1:4188" }),
     },
     loader: { ".woff2": "file", ".woff": "file" },
+    publicPath: "/",
+    plugins: [
+      {
+        // Vite's `?url` asset imports: hand the bare file to the file loader.
+        name: "vite-url-suffix",
+        setup(build) {
+          build.onResolve({ filter: /\?url$/ }, (args) => ({
+            path: require.resolve(args.path.replace(/\?url$/, ""), { paths: [args.resolveDir, path.join(root, "apps/frontend")] }),
+          }));
+        },
+      },
+    ],
     nodePaths: [
       path.join(root, "apps/frontend/node_modules"),
       path.join(root, "node_modules"),
@@ -74,11 +86,13 @@ async function main() {
           }
           const r = JSON.parse(raw);
           if (!/^[a-z_]+$/.test(r.name)) throw Error("name");
-          await fs.writeFile(
-            path.join(output, r.name + ".png"),
-            Buffer.from(r.png.split(",")[1], "base64"),
-          );
-          delete r.png;
+          if (r.png) {
+            await fs.writeFile(
+              path.join(output, r.name + ".png"),
+              Buffer.from(r.png.split(",")[1], "base64"),
+            );
+            delete r.png;
+          }
           await fs.writeFile(
             path.join(output, r.name + ".json"),
             JSON.stringify(r, null, 2),

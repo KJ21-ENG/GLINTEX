@@ -78,8 +78,8 @@ async function main() {
   }
   if (!result?.done) throw Error("Real renderer label test timed out");
   const report = JSON.parse(result.text);
-  if (report.completed !== 9 || report.results.some((r) => r.different !== 0))
-    throw Error("Canonical pixel equivalence failed");
+  if (report.completed !== 9 || report.results.some((r) => r.version !== 2 || r.fonts < 6 || r.warnings.length))
+    throw Error("Version 2 artifacts with embedded fonts and no layout warnings expected: " + result.text);
   let panel = false;
   for (let attempt = 0; attempt < 100 && !panel; attempt++) {
     panel = await win.webContents.executeJavaScript(
@@ -127,25 +127,21 @@ async function main() {
   const dpiChecks = [];
   for (const dpi of [300, 600, 203]) {
     await win.webContents.executeJavaScript(`window.fixtureSetDpi(${dpi})`);
-    let dimensions;
+    let text = "";
     for (let i = 0; i < 100; i++) {
-      dimensions = await win.webContents.executeJavaScript(
-        `(() => { const canvas=document.querySelector('#editor canvas'); return canvas ? {width:canvas.width,height:canvas.height,text:document.querySelector('#editor').innerText} : null; })()`,
+      text = await win.webContents.executeJavaScript(
+        `document.querySelector('#editor')?.innerText || ''`,
       );
-      if (
-        dimensions?.width === Math.round((75 * dpi) / 25.4) &&
-        dimensions?.height === Math.round((125 * dpi) / 25.4) &&
-        dimensions.text.includes(dpi + " dpi")
-      )
-        break;
+      if (text.includes(dpi + " dpi") && text.includes("exact printed artwork")) break;
       await delay(100);
     }
-    if (
-      dimensions?.width !== Math.round((75 * dpi) / 25.4) ||
-      dimensions?.height !== Math.round((125 * dpi) / 25.4)
-    )
-      throw Error("Editor did not refresh exact raster for " + dpi + " dpi");
-    dpiChecks.push({ dpi, width: dimensions.width, height: dimensions.height });
+    if (!text.includes(dpi + " dpi"))
+      throw Error("Editor did not pick up the " + dpi + " dpi printer profile");
+    const elements = await win.webContents.executeJavaScript(
+      `document.querySelectorAll('#editor [data-element-id]').length`,
+    );
+    if (elements < 5) throw Error("Editor shows too few label elements: " + elements);
+    dpiChecks.push({ dpi, elements });
   }
   await win.webContents.executeJavaScript(
     `document.querySelector('#editor').scrollIntoView({block:'start'})`,
@@ -174,7 +170,7 @@ async function main() {
     ),
   );
   console.log(
-    "VISUAL_QA_PASS: nine canonical artifacts identical at every pixel; workstation fixture states present",
+    "VISUAL_QA_PASS: nine version 2 label documents built with embedded fonts in real Chromium; designer and workstation fixture states present",
   );
 }
 main()

@@ -74,6 +74,10 @@ jobs:
         run: |
           & ./apps/desktop/node_modules/.bin/electron.cmd apps/desktop/scripts/visual-runner.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Real Chromium print integration (every stage through the production printer module)
+        run: |
+          & ./apps/desktop/node_modules/.bin/electron.cmd apps/desktop/scripts/print-integration.cjs apps/desktop/test/visual/print-output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Windows x64 release candidate
         working-directory: apps/desktop
         run: |
@@ -126,6 +130,7 @@ jobs:
             apps/desktop/out/verification/*-reports/*.png
             apps/desktop/test/visual/output/*.png
             apps/desktop/test/visual/output/*.json
+            apps/desktop/test/visual/print-output/*
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

@@ -1,19 +1,43 @@
 # Windows label printing contract
 
-`buildPrintableArtifact` in the shared frontend creates a version 1 immutable artifact. Its full-roll-width, single-row PNG pages are the artwork, at the selected 203/300/600 dpi profile. Preview must display these PNGs unchanged; CSS zoom is only a viewing aid. Driver HTML contains only those PNGs, at exact millimetre dimensions. No template interpolation, font selection, barcode construction or layout occurs after artifact creation. Templates, resolved pixels, profile and SHA-256 are retained for explicit reprint.
+`buildPrintableArtifact` in the shared frontend produces a version 2 artifact: self-contained
+HTML pages laid out in millimetres, the stylesheet they use, and the font files they need as
+data URIs. The designer preview, the print preview and the hidden print window all render
+the same page markup; nothing is re-laid out after the artifact is built. Text is emitted as
+explicitly positioned lines (the layout engine measures with the same font faces), barcodes
+and QR codes are inline SVG rectangles whose module width is a whole number of printer dots.
 
-The Label Designer calls the same `buildPrintableArtifact`, decodes its first immutable page PNG, and crops the first repeated column only to position existing editor overlays. It does not independently rasterize the artwork. Its selection handles, rulers and guides remain separate DOM overlays. The preview-only centering padding was removed (the 105 mm / two 50 mm + 2 mm gap default previously added 1.5 mm). No centering is inferred for saved custom formats, including the previously reported 3.3 mm Coning offset. Actual saved production templates were not downloaded or mutated; all nine frontend default stages and all eight backend seed templates are covered by geometry/equivalence tests (the seed is parsed as data without running it).
+Columns repeat one transaction across a row by default (`columnMode: repeat`), or fill with
+consecutive labels (`sequence`). Copies repeat the row; a batch advances to a new row for each
+transaction. The driver receives copies=1 because all pages are materialised. Page height is
+label length plus the top margin; the vertical die-cut gap is a printer/media feed setting
+recorded in the snapshot, not extra height.
 
-Columns deliberately repeat one transaction across a row, as the existing app did. Copies repeat the row; a batch advances to a new row for each transaction. The driver receives copies=1 because all repeated pages are already materialized. Height is label height + explicit top margin. Vertical die-cut gap is a printer/media feed configuration recorded in the snapshot, not extra pixels added to a printed page. Set the Windows driver's stock/label size and gap sensor to the same media. Neither actual paper alignment nor physical barcode readability is claimed by software tests.
+`validateArtifact` accepts version 2 (inline HTML pages, inline CSS, woff2 data-URI fonts;
+no scripts, frames, forms, external references or event handlers; 2 MB per page, 20 MB per
+job, 100 pages) and still accepts version 1 PNG artifacts so retained jobs from older builds
+can be reprinted. `buildDocument` assembles the final document for either version.
 
-`webContents.print` page width and height use microns (mm × 1000). `printToPDF` uses inches (mm / 25.4). Scaling is 100%, zero driver margins, explicit deviceName, selected dpi, no default-printer fallback. The isolated hidden print window waits for all embedded images to decode and fonts to settle before calling print. External resources, scripts, permissions and new windows are blocked.
+The hidden print window loads the document through the private `glintex-print://` scheme on
+the print partition (an in-memory response with a strict Content-Security-Policy header),
+waits for fonts and images, then calls `webContents.print` with microns page size, zero
+margins, 100 % scale, the explicit device name and the profile dpi. `printToPDF` uses inches.
+
+Templates are stored per stage under `v2:<stage>`; a desktop build that still runs the
+previous renderer keeps reading the untouched legacy `<stage>` rows.
 
 ## Durable job semantics
 
-Queue records are atomically replaced and synced before entering `submitting`. Crash recovery never submits automatically. Queued/preparing jobs become failed and require an operator reprint; submitting jobs become `outcome uncertain`. Driver success means submitted to Windows, not paper printed. Exceptions/timeouts after submission begins are uncertain. Reprint creates a new ID referencing the previous one, retaining identical pixels/profile; it does not touch receipts/backend records.
-
-Limits: 100 pages per job, 20 MB serialized artifact, 24 million pixels per page and 48 million decoded pixels across all pages (roughly192 MB RGBA plus renderer overhead), 100 retained records and 100 MB retained queue data. Old completed/failed records are pruned first. Uncertain records are retained; if they exhaust capacity, printing is blocked rather than deleting unresolved evidence. After checking physical output, operators can archive old queue files with the app closed (settings and queue directory are shown in the support information). Archive through normal OS file tools; do not edit active queue records. Reprint is unavailable after retention expiry. This local queue is not encrypted at rest; use normal Windows workstation account/disk protections.
+Unchanged: queue records are atomically replaced and synced before entering `submitting`;
+crash recovery never submits automatically; driver success means submitted to Windows, not
+paper printed; reprint creates a new job referencing the previous one with identical pages.
+Retention limits: 100 records, 100 MB; uncertain records are never pruned.
 
 ## Software validation
 
-`node --test apps/desktop/test/print*.test.cjs` exercises all default stage artifacts with recording-canvas mocks, rotated text and barcode payloads, physical sizes, copies/columns, failed template retrieval, mocked printer callbacks, awaited readiness, timeout closure, durable crash recovery, exact reprint snapshots and bounds. Recording-canvas tests validate rendering calls/geometry, not glyph raster quality. Real Chromium visual and Windows runtime checks are separate integration/release gates. Physical TSC TE244 203 dpi calibration is an operator acceptance step.
+`node --test apps/desktop/test/print*.test.cjs` covers geometry, validation (including
+rejected active content), the driver contract with mocked windows, durable queue semantics
+and legacy acceptance. `electron apps/desktop/scripts/print-integration.cjs <dir>` runs every
+stage design through the real printer module in Chromium with the Windows submission replaced
+by printToPDF and a page capture. `electron apps/desktop/scripts/visual-runner.cjs` renders the
+designer and workstation panel. Physical alignment on TSC TE244 media is an operator step.

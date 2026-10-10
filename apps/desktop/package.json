@@ -1,7 +1,7 @@
 {
   "name": "glintex-desktop",
   "productName": "GLINTEX",
-  "version": "1.1.4",
+  "version": "1.2.0",
   "private": true,
   "description": "GLINTEX factory workstation with native scale and label printing",
   "author": "GLINTEX",

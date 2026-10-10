@@ -9,7 +9,7 @@ GLINTEX is a comprehensive ERP/manufacturing management system tracking inventor
 - **Print Proxy:** Rust, Tauri, React
 
 ## Classification
-- Monorepo containing 3 distinct workspaces (`apps/backend`, `apps/frontend`, `apps/print-client`).
+- Monorepo containing 3 distinct workspaces (`apps/backend`, `apps/frontend`, `apps/desktop`).
 
 ## Architecture Highlights
 - Web interface interacting with structured Service/Controller pipelines running standard REST endpoints.

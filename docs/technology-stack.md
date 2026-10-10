@@ -14,6 +14,5 @@
 - **Architecture Type**: Component-based SPA
 
 ## Print-Client
-- **Framework**: Tauri with React.js (via Vite)
-- **Key Dependencies**: @tauri-apps/api, @tauri-apps/plugin-autostart, @tauri-apps/plugin-opener
-- **Architecture Type**: Desktop application (Rust backend + React frontend)
+
+Retired 2026-10-10 (Tauri/Rust helper removed). Printing lives in the Electron desktop app; see `docs/label-designer.md`.

@@ -1,5 +1,6 @@
 // Label engine, version 2: model, migration, layout, HTML and artifact geometry.
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { normalizeTemplate, createElement, canvasSize, usedRollWidthMm, elementBox, rotatedBox } from '../label/model.js';
 import { migrateV1Template, toV2Template } from '../label/migrate.js';
@@ -200,6 +201,18 @@ test('backend seed data equals the exported factory designs', async () => {
     assert.equal(entry.stageKey, `v2:${entry.stage}`, 'version 2 rows are namespaced');
     assert.deepEqual(entry.content, normalizeTemplate(DEFAULT_STAGE_TEMPLATES[entry.stage]), `${entry.stage} seed is stale; run apps/frontend/scripts/export-label-defaults.mjs`);
     assert.equal(entry.dimensions.version, 2);
+  }
+});
+
+test('production design seed holds a normalized version 2 design for every stage', () => {
+  const seed = JSON.parse(readFileSync(new URL('../../../../backend/scripts/stickerTemplates.production.json', import.meta.url), 'utf8'));
+  assert.equal(seed.templates.length, Object.keys(DEFAULT_STAGE_TEMPLATES).length);
+  for (const entry of seed.templates) {
+    assert.ok(DEFAULT_STAGE_TEMPLATES[entry.stage], `unknown stage ${entry.stage}`);
+    assert.equal(entry.stageKey, `v2:${entry.stage}`);
+    assert.deepEqual(entry.content, normalizeTemplate(entry.content), `${entry.stage} is not normalized`);
+    assert.deepEqual(entry.dimensions, { version: 2, ...entry.content.media });
+    assert.ok(entry.content.elements.some((el) => el.type === 'barcode' || el.type === 'qr'), `${entry.stage} has no code`);
   }
 });
 

@@ -241,7 +241,7 @@ async function start() {
     directory: path.join(app.getPath("userData"), "print-jobs"),
     settings,
     getPrinters: () => mainWindow.webContents.getPrintersAsync(),
-    printArtifact: createElectronPrinter({ BrowserWindow }),
+    printArtifact: createElectronPrinter({ BrowserWindow, session }),
   });
   const safety = async () => {
     await printer.ready;

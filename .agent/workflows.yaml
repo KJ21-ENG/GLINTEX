@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
-  "workflow_version": 2,
+  "workflow_version": 3,
   "status": "evidence-inferred",
   "project_kind": "brownfield",
   "archetype": "generic-software-project",
   "generated_from": {
-    "observed_at": "2026-09-15T12:47:13Z",
+    "observed_at": "2026-10-10T10:22:58Z",
     "project_kind": "brownfield",
-    "commit_count": 617,
+    "commit_count": 679,
     "detected_stacks": [
       "javascript-or-typescript"
     ],
@@ -16,9 +16,13 @@
       "build:backend",
       "build:frontend",
       "dev:backend",
+      "dev:desktop",
       "dev:frontend",
+      "make:desktop:windows",
+      "package:desktop",
       "preview:frontend",
-      "start:backend"
+      "start:backend",
+      "test:desktop"
     ],
     "composer_scripts": [],
     "script_catalog": {
@@ -26,9 +30,13 @@
         "build:backend",
         "build:frontend",
         "dev:backend",
+        "dev:desktop",
         "dev:frontend",
+        "make:desktop:windows",
+        "package:desktop",
         "preview:frontend",
-        "start:backend"
+        "start:backend",
+        "test:desktop"
       ],
       "composer": []
     },
@@ -42,13 +50,15 @@
     },
     "ci_files": [
       ".github/workflows/deploy-production.yml",
+      ".github/workflows/electron-windows.yml",
       ".github/workflows/release.yml"
     ],
     "documentation": [
       "README.md"
     ],
     "existing_agent_instructions": [
-      "AGENTS.md"
+      "AGENTS.md",
+      "CLAUDE.md"
     ],
     "project_dossier": {
       "ecosystems": [
@@ -123,9 +133,13 @@
         "build:backend",
         "build:frontend",
         "dev:backend",
+        "dev:desktop",
         "dev:frontend",
+        "make:desktop:windows",
+        "package:desktop",
         "preview:frontend",
-        "start:backend"
+        "start:backend",
+        "test:desktop"
       ],
       "composer": []
     },
@@ -139,6 +153,7 @@
     },
     "ci_files": [
       ".github/workflows/deploy-production.yml",
+      ".github/workflows/electron-windows.yml",
       ".github/workflows/release.yml"
     ],
     "validation_policy": "Use project-native targeted checks first; run full, security, and operational gates in proportion to risk.",
@@ -158,5 +173,16 @@
   "last_evolved_at": "2026-10-06T11:17:00Z",
   "last_evolved_by": "Kush",
   "last_change": "Owner retired persistent VPS staging on 2026-10-06; preserve production and require new authority before recreation.",
-  "last_protected_policy_approval": "User teardown request in task 01a03e28-5bfc-7202-958a-5ef78b4f744b on 2026-10-06"
+  "last_protected_policy_approval": "User teardown request in task 01a03e28-5bfc-7202-958a-5ef78b4f744b on 2026-10-06",
+  "facts": {
+    "fingerprint": "7121866ca653a29a",
+    "basis": "discovery-v1",
+    "refreshed_at": "2026-10-10T10:22:58Z",
+    "refreshed_by": "automatic facts refresh",
+    "recent": [
+      "7121866ca653a29a",
+      "2d4f44f28bfd7236"
+    ]
+  },
+  "last_facts_refresh_at": "2026-10-10T10:22:58Z"
 }

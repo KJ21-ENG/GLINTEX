@@ -22,8 +22,71 @@ function validateProfile(profile) {
     mode: "windows-driver",
   };
 }
+const SUPPORTED_DPI = [203, 300, 600];
+const HTML_PAGE_MAX = 2 * 1024 * 1024;
+const CSS_MAX = 256 * 1024;
+const FONT_MAX = 512 * 1024;
+// Active content, external references and anything that is not inline markup.
+const FORBIDDEN_MARKUP = [
+  /<\s*\/?\s*(script|iframe|frame|frameset|object|embed|link|meta|base|form|input|button|textarea|select|video|audio|source|template|slot|math|svg\s+[^>]*\bhref|use|foreignObject|noscript|style)\b/i,
+  /\bon[a-z]+\s*=/i,
+  /javascript:/i,
+  /vbscript:/i,
+  /expression\s*\(/i,
+  /@import/i,
+  /url\(\s*(?!['"]?data:image\/(png|jpeg|svg\+xml);base64,)[^)]*\)/i,
+  /\b(src|href|xlink:href)\s*=\s*(?!"data:image\/(png|jpeg|svg\+xml);base64,[A-Za-z0-9+/=]+")/i,
+  /<\?/,
+  /<!(?!doctype)/i,
+];
+const FORBIDDEN_CSS = [/@import/i, /url\(\s*(?!['"]?data:font\/woff2;base64,)/i, /expression\s*\(/i, /javascript:/i, /<\//i];
+
+function validateHtmlArtifact(a) {
+  if (!SUPPORTED_DPI.includes(a.dpi)) throw new Error("Unsupported label artifact");
+  for (const key of ["widthMm", "heightMm"])
+    if (!Number.isFinite(a[key]) || a[key] < 1 || a[key] > 500)
+      throw new Error("Invalid physical label size");
+  if (!Array.isArray(a.pages) || !a.pages.length || a.pages.length > 100)
+    throw new Error("Label jobs require 1–100 pages");
+  if (Buffer.byteLength(JSON.stringify(a)) > MAX_BYTES)
+    throw new Error("Label job exceeds 20 MB; split the batch");
+  if (typeof a.css !== "string" || a.css.length > CSS_MAX)
+    throw new Error("Invalid label stylesheet");
+  for (const pattern of FORBIDDEN_CSS)
+    if (pattern.test(a.css)) throw new Error("Label stylesheet contains unsupported content");
+  if (!Array.isArray(a.fonts) || a.fonts.length > 12)
+    throw new Error("Invalid label fonts");
+  for (const f of a.fonts) {
+    if (
+      !f ||
+      typeof f.family !== "string" ||
+      !/^[A-Za-z0-9 ]{1,64}$/.test(f.family) ||
+      ![100, 200, 300, 400, 500, 600, 700, 800, 900].includes(f.weight) ||
+      !["normal", "italic"].includes(f.style || "normal") ||
+      typeof f.dataUrl !== "string" ||
+      f.dataUrl.length > FONT_MAX ||
+      !/^data:font\/woff2;base64,[A-Za-z0-9+/]+=*$/.test(f.dataUrl)
+    )
+      throw new Error("Invalid embedded label font");
+  }
+  for (const p of a.pages) {
+    if (!p || typeof p.html !== "string" || !p.html.length || p.html.length > HTML_PAGE_MAX)
+      throw new Error("Only inline HTML label pages are accepted");
+    for (const pattern of FORBIDDEN_MARKUP)
+      if (pattern.test(p.html)) throw new Error("Label page contains unsupported content");
+  }
+  const stage = a.templateSnapshot?.stageKey;
+  if (stage !== undefined && (typeof stage !== "string" || !/^[a-z0-9_]{1,40}$/.test(stage)))
+    throw new Error("Invalid label stage");
+}
+
 function validateArtifact(a) {
-  if (!a || a.version !== 1 || ![203, 300, 600].includes(a.dpi))
+  if (!a || typeof a !== "object") throw new Error("Unsupported label artifact");
+  if (a.version === 2) {
+    validateHtmlArtifact(a);
+    return clone(a);
+  }
+  if (a.version !== 1 || !SUPPORTED_DPI.includes(a.dpi))
     throw new Error("Unsupported label artifact");
   for (const key of ["widthMm", "heightMm"])
     if (!Number.isFinite(a[key]) || a[key] < 1 || a[key] > 500)
@@ -70,6 +133,21 @@ function validateArtifact(a) {
       throw new Error("Artwork pixels do not match physical size and DPI");
   }
   return clone(a);
+}
+
+const mm = (v) => `${Math.round(Number(v) * 1000) / 1000}mm`;
+// The complete document the hidden print window loads; identical for preview and paper.
+function buildDocument(a) {
+  if (a.version === 2) {
+    const fonts = a.fonts
+      .map(
+        (f) =>
+          `@font-face{font-family:"${f.family}";font-weight:${f.weight};font-style:${f.style || "normal"};src:url(${f.dataUrl}) format("woff2")}`,
+      )
+      .join("\n");
+    return `<!doctype html><html><head><meta charset="utf-8"><title>GLINTEX label</title><style>@page{size:${mm(a.widthMm)} ${mm(a.heightMm)};margin:0}html,body{margin:0;padding:0;background:#fff}.pg{break-after:page;page-break-after:always}.pg:last-child{break-after:auto;page-break-after:auto}\n${fonts}\n${a.css}</style></head><body>${a.pages.map((p) => p.html).join("")}</body></html>`;
+  }
+  return `<!doctype html><meta charset="utf-8"><style>@page{size:${a.widthMm}mm ${a.heightMm}mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0}img{display:block;width:${a.widthMm}mm;height:${a.heightMm}mm;break-after:page;image-rendering:pixelated}img:last-child{break-after:auto}</style>${a.pages.map((p) => `<img src="${p.pngDataUrl}">`).join("")}`;
 }
 class PrintController {
   constructor({
@@ -331,4 +409,4 @@ class PrintController {
     }
   }
 }
-module.exports = { PrintController, validateArtifact, validateProfile };
+module.exports = { PrintController, validateArtifact, validateProfile, buildDocument };

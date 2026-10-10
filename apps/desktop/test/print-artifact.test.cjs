@@ -1,302 +1,94 @@
-// Geometry/contract tests use a recording canvas, not a claim of visual or hardware validation.
+// Version 2 label artifacts: geometry contract, validation on the main-process side and
+// the document the hidden print window receives. No visual or hardware claims here;
+// the real-Chromium gate is scripts/print-integration.cjs.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const vm = require("node:vm");
 const path = require("node:path");
-const root = path.resolve(__dirname, "../../frontend/src/utils");
-function load(file, context) {
-  let source = fs.readFileSync(path.join(root, file), "utf8");
-  const names = [...source.matchAll(/export const (\w+)/g)].map((m) => m[1]);
-  source = source
-    .replace(/import[\s\S]*?from ['"][^'"]+['"];\n/g, "")
-    .replace(/import\.meta(?:\?)?\.env/g, "({})")
-    .replace(/export const /g, "const ")
-    .replace(/export default \{[\s\S]*?\};/g, "");
-  const c = vm.createContext({
-    TextEncoder,
-    Uint8Array,
-    console,
-    setTimeout,
-    clearTimeout,
-    AbortController,
-    ...context,
-  });
-  vm.runInContext(source + "\nthis.exports = {" + names.join(",") + "}", c);
-  return c.exports;
-}
-const canvases = [];
-function canvas() {
-  const c = {
-    width: 1,
-    height: 1,
-    ops: [],
-    toDataURL() {
-      return (
-        "data:image/png;base64," +
-        Buffer.from(
-          JSON.stringify({
-            width: this.width,
-            height: this.height,
-            ops: this.ops,
-          }),
-        ).toString("base64")
-      );
-    },
-  };
-  c.getContext = () => ({
-    save() {},
-    restore() {},
-    translate(...a) {
-      c.ops.push(["translate", ...a]);
-    },
-    rotate(a) {
-      c.ops.push(["rotate", a]);
-    },
-    fillRect(...a) {
-      c.ops.push(["fillRect", ...a]);
-    },
-    fillText(...a) {
-      c.ops.push(["text", ...a]);
-    },
-    drawImage(other, ...a) {
-      c.ops.push(["image", other.toDataURL(), ...a]);
-    },
-    measureText(s) {
-      return { width: s.length * 6 };
-    },
-    getImageData() {
-      return { data: new Uint8Array(c.width * c.height * 4) };
-    },
-    putImageData() {},
-  });
-  canvases.push(c);
-  return c;
-}
-const lp = load("labelPrint.js", {
-  formatDateDDMMYYYY: (x) => String(x),
-  fetch: async () => ({ ok: false, status: 503 }),
-});
-const bitmap = load("labelBitmap.js", {
-  ...lp,
-  document: {
-    createElement: canvas,
-    fonts: { ready: Promise.resolve(), load: async () => [] },
-  },
-  bwipjs: {
-    toCanvas(c, o) {
-      c.width = 100;
-      c.height = 40;
-      c.ops.push(["barcode", o.text, o.bcid]);
-    },
-  },
-});
-test("every repository stage produces canonical pages with physical dimensions", async () => {
-  for (const [stage, template] of Object.entries(lp.DEFAULT_STAGE_TEMPLATES)) {
-    const a = await bitmap.buildPrintableArtifact(
-      template,
-      [
-        {
-          barcode: "RCO-123-C001",
-          itemName: "Representative long material value",
-          date: "2026-10-05",
-        },
-      ],
-      { stageKey: stage },
-    );
-    assert.equal(a.pages.length, template.content.copies || 1, stage);
-    const page = JSON.parse(
-      Buffer.from(a.pages[0].pngDataUrl.split(",")[1], "base64"),
-    );
-    assert.equal(page.width, Math.round((a.widthMm * a.dpi) / 25.4));
-    assert.equal(page.height, Math.round((a.heightMm * a.dpi) / 25.4));
-    assert.equal(
-      page.ops.filter((o) => o[0] === "image").length,
-      template.dimensions.columns,
-    );
+const { pathToFileURL } = require("node:url");
+const { validateArtifact, buildDocument } = require("../src/printing/controller.cjs");
+const labelDir = path.resolve(__dirname, "../../frontend/src/utils/label");
+const load = (name) => import(pathToFileURL(path.join(labelDir, name)).href);
+
+const fontDataUrl = "data:font/woff2;base64," + Buffer.from("not a real font but a valid data url").toString("base64");
+const fonts = [{ family: "Inter", weight: 700, style: "normal", dataUrl: fontDataUrl }];
+
+test("every repository stage produces a version 2 artifact with physical page geometry", async () => {
+  const { DEFAULT_STAGE_TEMPLATES } = await load("defaults.js");
+  const { buildPrintableArtifact } = await load("artifact.js");
+  const { buildSampleData } = await load("sampleData.js");
+  for (const [stage, template] of Object.entries(DEFAULT_STAGE_TEMPLATES)) {
+    const artifact = buildPrintableArtifact(template, [buildSampleData(stage, "typical")], { stageKey: stage, dpi: 203, fonts });
+    assert.equal(artifact.version, 2);
+    assert.equal(artifact.widthMm, template.media.rollWidthMm);
+    assert.equal(artifact.heightMm, template.media.heightMm + template.media.marginTopMm);
+    assert.equal(artifact.templateSnapshot.stageKey, stage);
+    const accepted = validateArtifact(artifact);
+    assert.equal(accepted.pages.length, template.copies || 1, "one page per copy");
+    const document = buildDocument(accepted);
+    assert.ok(document.includes(`@page{size:${artifact.widthMm}mm ${artifact.heightMm}mm;margin:0}`));
+    assert.ok(document.includes('@font-face{font-family:"Inter"'));
+    assert.ok(document.includes('class="sym"'), `${stage} barcode missing`);
+    assert.ok(!document.includes("<script"));
   }
 });
-test("small format retains explicit origin without preview-only 1.5 mm centering", async () => {
-  const t = lp.DEFAULT_STAGE_TEMPLATES.cutter_issue_small;
-  const a = await bitmap.buildPrintableArtifact(t, [{}]);
-  const p = JSON.parse(
-    Buffer.from(a.pages[0].pngDataUrl.split(",")[1], "base64"),
-  );
-  const draws = p.ops.filter((o) => o[0] === "image");
-  assert.equal(draws[0][2], 0);
-  assert.equal(draws[1][2], Math.round((52 * 203) / 25.4));
-  assert.equal(draws[0][1], draws[1][1]);
+
+test("copies repeat pages and columns repeat the transaction; sequence mode fills columns", async () => {
+  const { buildPrintableArtifact } = await load("artifact.js");
+  const { createElement } = await load("model.js");
+  const base = { version: 2, media: { widthMm: 50, heightMm: 25, orientation: "portrait", rollWidthMm: 105, columns: 2, columnGapMm: 2, marginLeftMm: 1.5 }, elements: [createElement("text", { id: "t", text: "@n", w: 40, h: 6 })] };
+  const repeat = validateArtifact(buildPrintableArtifact(base, [{ n: "one" }, { n: "two" }], { copies: 3, dpi: 300 }));
+  assert.equal(repeat.pages.length, 6);
+  assert.equal((repeat.pages[0].html.match(/>one</g) || []).length, 2);
+  const sequence = validateArtifact(buildPrintableArtifact({ ...base, media: { ...base.media, columnMode: "sequence" } }, [{ n: "one" }, { n: "two" }, { n: "three" }], { dpi: 203 }));
+  assert.equal(sequence.pages.length, 2);
+  assert.throws(() => buildPrintableArtifact(base, Array.from({ length: 101 }, () => ({}))), /at most 100/);
 });
-test("copies and columns are independent: pages repeat, columns share identical artwork", async () => {
-  const t = lp.DEFAULT_STAGE_TEMPLATES.cutter_issue_small;
-  const a = await bitmap.buildPrintableArtifact(
-    t,
-    [{ itemName: "A" }, { itemName: "B" }],
-    { copies: 3 },
-  );
-  assert.equal(a.pages.length, 6);
-  assert.equal(a.pages[0].pngDataUrl, a.pages[2].pngDataUrl);
-  assert.notEqual(a.pages[0].pngDataUrl, a.pages[3].pngDataUrl);
+
+test("main process rejects active content, external references and oversized pages", async () => {
+  const { buildPrintableArtifact } = await load("artifact.js");
+  const { createElement } = await load("model.js");
+  const good = buildPrintableArtifact({ version: 2, media: { widthMm: 50, heightMm: 25, orientation: "portrait" }, elements: [createElement("text", { id: "t", text: "ok", w: 40, h: 6 })] }, [{}], { dpi: 203, fonts });
+  validateArtifact(good);
+  const withPage = (html) => ({ ...good, pages: [{ html }] });
+  for (const bad of [
+    '<div class="pg"><script>alert(1)</script></div>',
+    '<div class="pg" onload="x()"></div>',
+    '<div class="pg"><img src="http://evil.invalid/a.png"></div>',
+    '<div class="pg"><iframe src="about:blank"></iframe></div>',
+    '<div class="pg" style="background:url(http://evil.invalid/x)"></div>',
+    '<div class="pg"><a href="javascript:alert(1)">x</a></div>',
+    '<div class="pg"><link rel="stylesheet" href="x.css"></div>',
+    '<div class="pg"><svg><use href="#x"/></svg></div>',
+    "x".repeat(2 * 1024 * 1024 + 1),
+  ]) assert.throws(() => validateArtifact(withPage(bad)), /unsupported content|inline HTML/i, bad.slice(0, 40));
+  assert.throws(() => validateArtifact({ ...good, css: "@import url(http://evil.invalid/x.css)" }), /stylesheet/);
+  assert.throws(() => validateArtifact({ ...good, fonts: [{ family: "Inter", weight: 700, dataUrl: "http://evil.invalid/f.woff2" }] }), /font/);
+  assert.throws(() => validateArtifact({ ...good, fonts: [{ family: "Inter", weight: 700, dataUrl: "data:font/woff2;base64," + "A".repeat(600 * 1024) }] }), /font/);
+  assert.throws(() => validateArtifact({ ...good, dpi: 150 }), /Unsupported/);
+  assert.throws(() => validateArtifact({ ...good, widthMm: 900 }), /physical label size/);
+  assert.throws(() => validateArtifact({ ...good, pages: [] }), /1–100 pages/);
+  assert.throws(() => validateArtifact({ ...good, templateSnapshot: { stageKey: "../x" } }), /stage/);
+  // inline data images remain allowed
+  validateArtifact(withPage('<div class="pg"><img class="im" src="data:image/png;base64,iVBORw0KGgo="></div>'));
 });
-test("off-roll geometry and excess copies fail explicitly", async () => {
-  const t = lp.DEFAULT_STAGE_TEMPLATES.cutter_issue_small;
-  await assert.rejects(
-    bitmap.buildPrintableArtifact(
-      { ...t, dimensions: { ...t.dimensions, pageWidth: 90 } },
-      [{}],
-    ),
-    /roll width/,
-  );
-  await assert.rejects(
-    bitmap.buildPrintableArtifact(t, [{}], { copies: 101 }),
-    /100/,
-  );
+
+test("legacy version 1 PNG artifacts stay accepted for retained-job reprints", () => {
+  const b = Buffer.alloc(33);
+  Buffer.from("89504e470d0a1a0a", "hex").copy(b);
+  b.writeUInt32BE(13, 8); b.write("IHDR", 12); b.writeUInt32BE(400, 16); b.writeUInt32BE(200, 20); b[24] = 8; b[25] = 6;
+  b.writeUInt32BE(require("node:zlib").crc32(b.subarray(12, 29)), 29);
+  const v1 = { version: 1, widthMm: (400 * 25.4) / 203, heightMm: (200 * 25.4) / 203, dpi: 203, pages: [{ pngDataUrl: "data:image/png;base64," + b.toString("base64") }] };
+  const accepted = validateArtifact(v1);
+  assert.ok(buildDocument(accepted).includes("<img src=\"data:image/png;base64,"));
 });
-test("failed template request never substitutes a default", async () => {
-  await assert.rejects(lp.loadTemplate("inbound"), /503/);
-});
-test("rotation and barcode content remain in rendered contract", () => {
-  const result = bitmap.renderLabelToCanvas(
-    {
-      dimensions: { width: 75, height: 125 },
-      content: {
-        texts: [
-          {
-            id: "a",
-            type: "text",
-            pos: { x: 10, y: 10 },
-            angle: 270,
-            value: "Long text",
-            style: { fontFamily: "inter", bold: true, size: 12 },
-          },
-          {
-            id: "b",
-            type: "barcode",
-            pos: { x: 30, y: 50 },
-            angle: 90,
-            value: "{{barcode}}",
-            style: { heightMm: 10, moduleMm: 0.25 },
-          },
-        ],
-      },
-    },
-    { barcode: "ICU-000123-001" },
-    { pixelsPerMm: 203 / 25.4 },
-  );
-  assert.ok(
-    result.canvas.ops.some(
-      (o) => o[0] === "rotate" && o[1] === (270 * Math.PI) / 180,
-    ),
-  );
-  assert.ok(result.fields.some((f) => f._computedValue === "ICU-000123-001"));
-});
-test("all stage preview rasters equal artifact label rasters, with no guides or extra transforms", async () => {
-  for (const [stage, t] of Object.entries(lp.DEFAULT_STAGE_TEMPLATES)) {
-    const data = {
-      barcode: "RCO-123-C001",
-      itemName: "Long representative material value",
-      operatorName: "Operator",
-    };
-    const options = {
-      stageKey: stage,
-      pixelsPerMm: 203 / 25.4,
-      preserveColor: false,
-      printerMode: true,
-    };
-    const preview = bitmap
-      .renderLabelToCanvas(t, data, options)
-      .canvas.toDataURL("image/png");
-    const a = await bitmap.buildPrintableArtifact(t, [data], {
-      stageKey: stage,
-      copies: 1,
-    });
-    const p = JSON.parse(
-      Buffer.from(a.pages[0].pngDataUrl.split(",")[1], "base64"),
-    );
-    for (const draw of p.ops.filter((o) => o[0] === "image"))
-      assert.equal(draw[1], preview, stage);
-  }
-});
-test("backend seed templates also use identical canonical preview/output geometry without touching database", async () => {
-  const source = fs
-    .readFileSync(
-      path.resolve(root, "../../../backend/scripts/seedStickerTemplates.mjs"),
-      "utf8",
-    )
-    .replace(/^import[^\n]+\n/, "")
-    .split("async function seed()")[0];
-  const c = vm.createContext({});
-  vm.runInContext(source + "\nthis.data=templates", c);
-  assert.equal(c.data.length, 8);
-  for (const t of c.data) {
-    const data = {
-      barcode: "ICU-123-001",
-      itemName: "Material",
-      netWeight: "12.345",
-    };
-    const a = await bitmap.buildPrintableArtifact(t, [data], {
-      stageKey: t.stageKey,
-      copies: 1,
-    });
-    const page = JSON.parse(
-      Buffer.from(a.pages[0].pngDataUrl.split(",")[1], "base64"),
-    );
-    const preview = bitmap
-      .renderLabelToCanvas(t, data, {
-        stageKey: t.stageKey,
-        pixelsPerMm: 203 / 25.4,
-        preserveColor: false,
-        printerMode: true,
-      })
-      .canvas.toDataURL("image/png");
-    assert.equal(page.ops.find((o) => o[0] === "image")[1], preview);
-  }
-});
-test("line geometry rotates in local coordinates at every right angle", () => {
-  for (const angle of [0, 90, 180, 270]) {
-    const r = bitmap.renderLabelToCanvas(
-      {
-        dimensions: { width: 50, height: 50 },
-        content: {
-          texts: [
-            {
-              id: "line",
-              type: "line",
-              pos: { x: 25, y: 25 },
-              angle,
-              style: { lengthMm: 10, thicknessMm: 0.5 },
-            },
-          ],
-        },
-      },
-      {},
-      { pixelsPerMm: 203 / 25.4 },
-    );
-    assert.ok(
-      r.canvas.ops.some(
-        (o) => o[0] === "rotate" && o[1] === (angle * Math.PI) / 180,
-      ),
-    );
-    assert.ok(
-      r.canvas.ops.some(
-        (o) =>
-          o[0] === "fillRect" &&
-          o[1] === 0 &&
-          o[2] === 0 &&
-          o[3] === Math.round((10 * 203) / 25.4) &&
-          o[4] === Math.round((0.5 * 203) / 25.4),
-      ),
-    );
-    assert.equal(r.fields[0].renderMetrics.widthMm, 10);
-    assert.equal(r.fields[0].renderMetrics.heightMm, 0.5);
-  }
-});
-test("renderer rejects high-DPI batch memory before allocating page canvases", async () => {
-  const t = lp.DEFAULT_STAGE_TEMPLATES.inbound;
-  const before = canvases.length;
-  await assert.rejects(
-    bitmap.buildPrintableArtifact(t, [{}], { dpi: 600, copies: 100 }),
-    /decoded pixel budget/,
-  );
-  assert.equal(canvases.length, before);
+
+test("converted legacy designs keep their reading orientation on the page", async () => {
+  const { migrateV1Template } = await load("migrate.js");
+  const { buildPrintableArtifact } = await load("artifact.js");
+  const legacy = migrateV1Template({ dimensions: { width: 75, height: 125, orientation: "landscape", pageWidth: 75, columns: 1 }, content: { copies: 1, texts: [{ id: "t", type: "text", angle: 270, pos: { x: 0, y: 123 }, value: "TITLE", style: { size: 20, bold: true } }] } });
+  const artifact = buildPrintableArtifact(legacy, [{}], { dpi: 203 });
+  assert.equal(artifact.widthMm, 75);
+  assert.equal(artifact.heightMm, 125);
+  assert.ok(artifact.pages[0].html.includes("rotate(-90deg)"));
+  assert.ok(artifact.pages[0].html.includes(">TITLE<"));
 });

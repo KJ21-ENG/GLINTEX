@@ -1,6 +1,7 @@
 import { useAuth } from '../../context/AuthContext';
 import React, { useEffect, useRef, useState } from 'react';
-import { buildPrintableArtifact } from '../../utils/labelBitmap';
+import { buildPrintableArtifact, CALIBRATION_TEMPLATE } from '../../utils/labelPrint';
+import LabelArtifactPreview from '../labels/LabelArtifactPreview';
 import { DEFAULT_SCALE_SETTINGS } from '../../utils/weightScaleParser';
 import ScaleSettingsFields from './ScaleSettingsFields';
 import DesktopUpdateNotice from './DesktopUpdateNotice';
@@ -108,14 +109,8 @@ export default function DesktopWorkstation() {
   const changeMedia = (key, value) => { setMedia(s => ({ ...s, [key]: Number(value) })); setTestArtifact(null); };
   const scaleLabel = scaleStatus.state || scaleStatus.status || (scaleStatus.isConnected ? 'connected' : 'disconnected');
   async function prepareCalibration() {
-    const template = { dimensions: { ...media, fontSize: 8 }, content: { copies: 1, texts: [
-      { id: 'title', value: 'GLINTEX TEST — not a receipt', pos: { x: 1, y: 1 }, style: { size: 8 } },
-      { id: 'ruler', type: 'line', pos: { x: 2, y: 7 }, style: { lengthMm: 20, thicknessMm: 0.3 } },
-      { id: 'legend', value: 'Above line: 20 mm', pos: { x: 2, y: 9 }, style: { size: 7 } },
-      { id: 'barcode', type: 'barcode', value: 'GLINTEX123', pos: { x: 2, y: 14 }, style: { heightMm: 6, moduleMm: 0.25, humanReadable: true } },
-    ] } };
-    const artifact = await buildPrintableArtifact(template, [{}], { dpi: printer.dpi, copies: 1 });
-    artifact.templateSnapshot.stageKey = 'calibration';
+    const template = { ...CALIBRATION_TEMPLATE, media: { ...CALIBRATION_TEMPLATE.media, widthMm: Number(media.width) || 75, heightMm: Number(media.height) || 125, rollWidthMm: Number(media.pageWidth) || Number(media.width) || 75, columns: Number(media.columns) || 1, columnGapMm: Number(media.horizontalGap) || 0, rowGapMm: Number(media.verticalGap) || 0, marginLeftMm: Number(media.marginLeft) || 0, marginTopMm: Number(media.marginTop) || 0 } };
+    const artifact = await buildPrintableArtifact(template, [{}], { stageKey: 'calibration', dpi: printer.dpi, copies: 1 });
     setTestArtifact(artifact); setMessage('Check the media dimensions and preview before submitting the test label. No production record is created.');
   }
   return <section ref={setupRef} className="border-b bg-card text-foreground" aria-label="Desktop workstation">
@@ -185,7 +180,7 @@ export default function DesktopWorkstation() {
         <p className="text-sm">TE244 at 203 dpi is an initial profile. Confirm your actual driver and stock. Successful submission means accepted by the print system, not confirmed on paper.</p>
         <details><summary className="cursor-pointer">Calibration / test label</summary><p className="text-xs mt-2">Match verticalGap in Windows driver stock/gap-sensor settings. It records the physical media gap; the printed page excludes that gap.</p><div className="grid sm:grid-cols-3 gap-3 mt-3">{Object.entries(media).map(([key,value]) => <Field key={key} label={`${key}${key === 'columns' ? '' : ' (mm)'}`}><input type="number" step={key === 'columns' ? '1' : '0.1'} className={fieldClass} value={value} onChange={e => changeMedia(key,e.target.value)}/></Field>)}</div>
           <button type="button" className={`${buttonClass} mt-3`} onClick={() => act(prepareCalibration)}>Prepare test preview</button>
-          {testArtifact && <div className="mt-3"><img alt="Exact test label artwork sent to Windows printing" src={testArtifact.pages[0].pngDataUrl} className="bg-white border max-w-full"/><p>{testArtifact.widthMm} × {testArtifact.heightMm} mm at {testArtifact.dpi} dpi</p><button type="button" className={buttonClass} onClick={() => act(async () => { const r = await bridge.printers.submit({ artifact: testArtifact, profile: printer }); if (!r.success) throw new Error(r.error || 'Print submission failed'); setMessage(`Test job ${r.job.id}: ${r.job.state}`); await refreshDevices(); })}>Submit test label</button></div>}
+          {testArtifact && <div className="mt-3"><LabelArtifactPreview artifact={testArtifact} maxWidthPx={360} /><p>{testArtifact.widthMm} × {testArtifact.heightMm} mm · exact document sent to the printer · {testArtifact.dpi} dpi profile</p><button type="button" className={buttonClass} onClick={() => act(async () => { const r = await bridge.printers.submit({ artifact: testArtifact, profile: printer }); if (!r.success) throw new Error(r.error || 'Print submission failed'); setMessage(`Test job ${r.job.id}: ${r.job.state}`); await refreshDevices(); })}>Submit test label</button></div>}
         </details>
       </fieldset>
       <section aria-label="Print queue" className="space-y-2"><h2 className="font-semibold">Retained print jobs</h2><p className="text-sm">A reprint creates a new label job only. Check the printer before reprinting an uncertain submission; the original might already have printed.</p>{jobs.length === 0 ? <p>No retained jobs.</p> : <ul className="space-y-2">{jobs.slice(0,100).map(job => <li className="border rounded p-2 text-sm" key={job.id}><div className="font-mono">{job.id}</div><div>{job.state} · {job.profile?.printerName} · {job.createdAt}</div>{(job.error || job.message) && <div>{job.error || job.message}</div>}{['submitted','failed','outcome uncertain','outcome-uncertain','outcome_uncertain'].includes(job.state) && <button type="button" className={buttonClass} disabled={busy} onClick={() => { if (window.confirm('Reprint this retained artwork? Check for already printed labels first. This does not save another receipt.')) act(async () => { const r = await bridge.printers.reprint(job.id); if (!r.success) throw new Error(r.error || 'Reprint failed'); setMessage(`Reprint ${r.job.id}: ${r.job.state}`); await refreshDevices(); }); }}>Controlled reprint</button>}</li>)}</ul>}</section>

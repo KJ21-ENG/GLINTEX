@@ -49,11 +49,14 @@ export default function Inspector({ template, selectedIds, variables, warnings, 
   const elementWarnings = warnings.filter((w) => ids.includes(w.id));
   const insertAt = (ref, current, snippet, key) => {
     const node = ref.current;
-    const start = node?.selectionStart ?? current.length;
-    const end = node?.selectionEnd ?? current.length;
-    const next = `${current.slice(0, start)}${snippet}${current.slice(end)}`;
+    // At the caret when the field is being edited; otherwise appended with a space.
+    const focused = node && typeof document !== 'undefined' && document.activeElement === node;
+    const start = focused ? node.selectionStart : current.length;
+    const end = focused ? node.selectionEnd : current.length;
+    const glue = !focused && current && !/\s$/.test(current) ? ' ' : '';
+    const next = `${current.slice(0, start)}${glue}${snippet}${current.slice(end)}`;
     updateOne({ [key]: next });
-    requestAnimationFrame(() => { if (node) { node.focus(); node.setSelectionRange(start + snippet.length, start + snippet.length); } });
+    requestAnimationFrame(() => { if (node) { node.focus(); const caret = start + glue.length + snippet.length; node.setSelectionRange(caret, caret); } });
   };
   const sameType = selected.every((s) => s.type === el.type);
 

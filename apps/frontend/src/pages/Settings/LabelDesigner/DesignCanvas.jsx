@@ -72,7 +72,7 @@ export default function DesignCanvas({ template, layout, markup, css, zoom, sele
   const { widthMm: canvasW, heightMm: canvasH } = layout.canvas;
   const hostRef = useRef(null);
   const surfaceRef = useRef(null);
-  const [gesture, setGesture] = useState(null);
+  const [, setGesture] = useState(null);
   const [guides, setGuides] = useState({ x: null, y: null });
   const [marquee, setMarquee] = useState(null);
   const warningsById = useMemo(() => Object.fromEntries(warnings.map((w) => [w.id, w])), [warnings]);
@@ -91,6 +91,103 @@ export default function DesignCanvas({ template, layout, markup, css, zoom, sele
     return { x: (clientX - rect.left) / pxPerMm, y: (clientY - rect.top) / pxPerMm };
   }, [pxPerMm]);
 
+  // Gestures live in refs and attach their window listeners synchronously on pointer-down,
+  // so a fast move/release sequence can never slip in before a React commit.
+  const gestureRef = useRef(null);
+  const marqueeRef = useRef(null);
+  const latest = useRef({});
+  latest.current = { boxes, byId, layout, selectedIds, snap, dispatch, toMm };
+
+  const detach = () => {
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
+  };
+  const attach = () => {
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
+  };
+
+  function onPointerMove(event) {
+    const { boxes, byId, layout, snap, dispatch, toMm } = latest.current;
+    const point = toMm(event.clientX, event.clientY);
+    if (marqueeRef.current) {
+      marqueeRef.current = { ...marqueeRef.current, end: point };
+      setMarquee(marqueeRef.current);
+      return;
+    }
+    const gesture = gestureRef.current;
+    if (!gesture) return;
+    if (gesture.kind === 'move') {
+      let dx = point.x - gesture.start.x;
+      let dy = point.y - gesture.start.y;
+      const primary = boxes.find((b) => b.el.id === gesture.primary);
+      let guideX = null;
+      let guideY = null;
+      if (snap && primary && !event.altKey) {
+        const origin = gesture.origins[gesture.primary];
+        const shiftX = origin.x - primary.el.x;
+        const shiftY = origin.y - primary.el.y;
+        const box = { x: primary.box.x + shiftX + dx, y: primary.box.y + shiftY + dy, w: primary.box.w, h: primary.box.h };
+        const { xs, ys } = snapCandidates(layout, new Set(gesture.ids));
+        const sx = [snapDelta(box.x, xs), snapDelta(box.x + box.w / 2, xs), snapDelta(box.x + box.w, xs)].filter(Boolean).sort((a, b) => Math.abs(a.diff) - Math.abs(b.diff))[0];
+        const sy = [snapDelta(box.y, ys), snapDelta(box.y + box.h / 2, ys), snapDelta(box.y + box.h, ys)].filter(Boolean).sort((a, b) => Math.abs(a.diff) - Math.abs(b.diff))[0];
+        if (sx) { dx += sx.diff; guideX = sx.guide; }
+        if (sy) { dy += sy.diff; guideY = sy.guide; }
+      }
+      setGuides({ x: guideX, y: guideY });
+      dispatch({ type: 'updateElements', ids: gesture.ids, history: false, patch: (el) => ({ x: round(gesture.origins[el.id].x + dx), y: round(gesture.origins[el.id].y + dy) }) });
+      return;
+    }
+    if (gesture.kind === 'resize') {
+      const el = byId[gesture.id];
+      if (!el) return;
+      const dx = point.x - gesture.start.x;
+      const dy = point.y - gesture.start.y;
+      const o = gesture.origin;
+      let { x, y, w, h } = o;
+      const hnd = gesture.handle;
+      if (hnd.includes('e')) w = Math.max(1, o.w + dx);
+      if (hnd.includes('s')) h = Math.max(1, o.h + dy);
+      if (hnd.includes('w')) { w = Math.max(1, o.w - dx); x = o.x + (o.w - w); }
+      if (hnd.includes('n')) { h = Math.max(1, o.h - dy); y = o.y + (o.h - h); }
+      if (event.shiftKey && (el.type === 'image' || el.type === 'rect')) { const k = Math.max(w / o.w, h / o.h); w = o.w * k; h = o.h * k; }
+      const sideways = el.rotation === 90 || el.rotation === 270;
+      let patch;
+      if (el.type === 'qr') patch = { sizeMm: round(Math.max(4, Math.max(w, h))) };
+      else if (el.type === 'line') patch = { lengthMm: round(Math.max(0.5, el.direction === 'horizontal' ? w : h)) };
+      else patch = { x: round(x), y: round(y), w: round(sideways ? h : w), h: round(sideways ? w : h) };
+      dispatch({ type: 'updateElements', ids: [el.id], history: false, patch });
+    }
+  }
+
+  function onPointerUp() {
+    const { boxes, selectedIds, dispatch } = latest.current;
+    detach();
+    document.body.style.userSelect = '';
+    const marquee = marqueeRef.current;
+    if (marquee) {
+      marqueeRef.current = null;
+      setMarquee(null);
+      const x1 = Math.min(marquee.start.x, marquee.end.x), x2 = Math.max(marquee.start.x, marquee.end.x);
+      const y1 = Math.min(marquee.start.y, marquee.end.y), y2 = Math.max(marquee.start.y, marquee.end.y);
+      if (x2 - x1 > 0.5 || y2 - y1 > 0.5) {
+        const hit = boxes.filter(({ box }) => box.x < x2 && box.x + box.w > x1 && box.y < y2 && box.y + box.h > y1).map(({ el }) => el.id);
+        dispatch({ type: 'select', ids: marquee.additive ? [...selectedIds, ...hit] : hit });
+      }
+      return;
+    }
+    if (gestureRef.current) {
+      gestureRef.current = null;
+      setGesture(null);
+      dispatch({ type: 'commitTransaction' });
+      setGuides({ x: null, y: null });
+    }
+  }
+
+  useEffect(() => () => detach(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const startDrag = (event, el) => {
     event.stopPropagation();
     if (event.button !== 0) return;
@@ -105,9 +202,11 @@ export default function DesignCanvas({ template, layout, markup, css, zoom, sele
     }
     const movable = ids.filter((id) => byId[id] && !byId[id].locked);
     if (!movable.length) return;
-    event.currentTarget.ownerDocument.body.style.userSelect = 'none';
+    document.body.style.userSelect = 'none';
     dispatch({ type: 'beginTransaction' });
-    setGesture({ kind: 'move', primary: el.id, ids: movable, start: toMm(event.clientX, event.clientY), origins: Object.fromEntries(movable.map((id) => [id, { x: byId[id].x, y: byId[id].y }])) });
+    gestureRef.current = { kind: 'move', primary: el.id, ids: movable, start: toMm(event.clientX, event.clientY), origins: Object.fromEntries(movable.map((id) => [id, { x: byId[id].x, y: byId[id].y }])) };
+    setGesture(gestureRef.current);
+    attach();
   };
 
   const startResize = (event, el, handle) => {
@@ -115,87 +214,21 @@ export default function DesignCanvas({ template, layout, markup, css, zoom, sele
     if (event.button !== 0) return;
     const visual = boxes.find((b) => b.el.id === el.id)?.box;
     if (!visual) return;
+    document.body.style.userSelect = 'none';
     dispatch({ type: 'beginTransaction' });
-    setGesture({ kind: 'resize', id: el.id, handle, start: toMm(event.clientX, event.clientY), origin: { ...visual }, rotation: el.rotation });
+    gestureRef.current = { kind: 'resize', id: el.id, handle, start: toMm(event.clientX, event.clientY), origin: { ...visual }, rotation: el.rotation };
+    setGesture(gestureRef.current);
+    attach();
   };
 
   const startMarquee = (event) => {
     if (event.button !== 0 || event.target !== event.currentTarget) return;
     const start = toMm(event.clientX, event.clientY);
     if (!event.shiftKey) dispatch({ type: 'select', ids: [] });
-    setMarquee({ start, end: start, additive: event.shiftKey });
+    marqueeRef.current = { start, end: start, additive: event.shiftKey };
+    setMarquee(marqueeRef.current);
+    attach();
   };
-
-  useEffect(() => {
-    if (!gesture && !marquee) return undefined;
-    const onMove = (event) => {
-      const point = toMm(event.clientX, event.clientY);
-      if (marquee) {
-        setMarquee((m) => ({ ...m, end: point }));
-        return;
-      }
-      if (gesture.kind === 'move') {
-        let dx = point.x - gesture.start.x;
-        let dy = point.y - gesture.start.y;
-        const primary = boxes.find((b) => b.el.id === gesture.primary);
-        let guideX = null;
-        let guideY = null;
-        if (snap && primary && !event.altKey) {
-          const origin = gesture.origins[gesture.primary];
-          const shiftX = origin.x - primary.el.x;
-          const shiftY = origin.y - primary.el.y;
-          const box = { x: primary.box.x + shiftX + dx, y: primary.box.y + shiftY + dy, w: primary.box.w, h: primary.box.h };
-          const { xs, ys } = snapCandidates(layout, new Set(gesture.ids));
-          const sx = [snapDelta(box.x, xs), snapDelta(box.x + box.w / 2, xs), snapDelta(box.x + box.w, xs)].filter(Boolean).sort((a, b) => Math.abs(a.diff) - Math.abs(b.diff))[0];
-          const sy = [snapDelta(box.y, ys), snapDelta(box.y + box.h / 2, ys), snapDelta(box.y + box.h, ys)].filter(Boolean).sort((a, b) => Math.abs(a.diff) - Math.abs(b.diff))[0];
-          if (sx) { dx += sx.diff; guideX = sx.guide; }
-          if (sy) { dy += sy.diff; guideY = sy.guide; }
-        }
-        setGuides({ x: guideX, y: guideY });
-        dispatch({ type: 'updateElements', ids: gesture.ids, history: false, patch: (el) => ({ x: round(gesture.origins[el.id].x + dx), y: round(gesture.origins[el.id].y + dy) }) });
-        return;
-      }
-      if (gesture.kind === 'resize') {
-        const el = byId[gesture.id];
-        if (!el) return;
-        const dx = point.x - gesture.start.x;
-        const dy = point.y - gesture.start.y;
-        const o = gesture.origin;
-        let { x, y, w, h } = o;
-        const hnd = gesture.handle;
-        if (hnd.includes('e')) w = Math.max(1, o.w + dx);
-        if (hnd.includes('s')) h = Math.max(1, o.h + dy);
-        if (hnd.includes('w')) { w = Math.max(1, o.w - dx); x = o.x + (o.w - w); }
-        if (hnd.includes('n')) { h = Math.max(1, o.h - dy); y = o.y + (o.h - h); }
-        if (event.shiftKey && (el.type === 'image' || el.type === 'rect')) { const k = Math.max(w / o.w, h / o.h); w = o.w * k; h = o.h * k; }
-        const sideways = el.rotation === 90 || el.rotation === 270;
-        let patch;
-        if (el.type === 'qr') patch = { sizeMm: round(Math.max(4, Math.max(w, h))) };
-        else if (el.type === 'line') patch = { lengthMm: round(Math.max(0.5, el.direction === 'horizontal' ? w : h)) };
-        else patch = { x: round(x), y: round(y), w: round(sideways ? h : w), h: round(sideways ? w : h) };
-        dispatch({ type: 'updateElements', ids: [el.id], history: false, patch });
-      }
-    };
-    const onUp = () => {
-      document.body.style.userSelect = '';
-      if (marquee) {
-        const x1 = Math.min(marquee.start.x, marquee.end.x), x2 = Math.max(marquee.start.x, marquee.end.x);
-        const y1 = Math.min(marquee.start.y, marquee.end.y), y2 = Math.max(marquee.start.y, marquee.end.y);
-        if (x2 - x1 > 0.5 || y2 - y1 > 0.5) {
-          const hit = boxes.filter(({ box }) => box.x < x2 && box.x + box.w > x1 && box.y < y2 && box.y + box.h > y1).map(({ el }) => el.id);
-          dispatch({ type: 'select', ids: marquee.additive ? [...selectedIds, ...hit] : hit });
-        }
-        setMarquee(null);
-        return;
-      }
-      dispatch({ type: 'commitTransaction' });
-      setGesture(null);
-      setGuides({ x: null, y: null });
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp, { once: true });
-    return () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
-  }, [gesture, marquee, boxes, byId, dispatch, layout, selectedIds, snap, toMm]);
 
   const onKeyDown = (event) => {
     if (!selectedIds.length) return;
@@ -252,7 +285,9 @@ export default function DesignCanvas({ template, layout, markup, css, zoom, sele
                 key={el.id}
                 data-element-id={el.id}
                 className={cn('absolute group', el.locked ? 'cursor-default' : 'cursor-move')}
-                style={{ left: box.x * pxPerMm, top: box.y * pxPerMm, width: Math.max(2, box.w * pxPerMm), height: Math.max(2, box.h * pxPerMm) }}
+                // Selected overlays sit above the rest so a selected element can always be dragged,
+                // even where a later element overlaps it.
+                style={{ left: box.x * pxPerMm, top: box.y * pxPerMm, width: Math.max(2, box.w * pxPerMm), height: Math.max(2, box.h * pxPerMm), zIndex: selected ? 20 : 10 }}
                 onPointerDown={(event) => startDrag(event, el)}
                 onDoubleClick={() => onOpenInspector?.(el.id)}
                 title={el.name || el.text || el.value || el.type}

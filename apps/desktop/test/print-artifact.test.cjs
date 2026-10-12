@@ -5,7 +5,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
-const { validateArtifact, buildDocument } = require("../src/printing/controller.cjs");
+const { validateArtifact, validateProfile, buildDocument } = require("../src/printing/controller.cjs");
 const labelDir = path.resolve(__dirname, "../../frontend/src/utils/label");
 const load = (name) => import(pathToFileURL(path.join(labelDir, name)).href);
 
@@ -91,4 +91,13 @@ test("converted legacy designs keep their reading orientation on the page", asyn
   assert.equal(artifact.heightMm, 125);
   assert.ok(artifact.pages[0].html.includes("rotate(-90deg)"));
   assert.ok(artifact.pages[0].html.includes(">TITLE<"));
+});
+
+test("printer profile carries calibration nudges, rounded and bounded", () => {
+  const base = { printerName: "TSC TE244", dpi: 203 };
+  assert.deepEqual(validateProfile(base), { printerName: "TSC TE244", dpi: 203, mode: "windows-driver", offsetXMm: 0, offsetYMm: 0 });
+  assert.deepEqual(validateProfile({ ...base, offsetXMm: 3, offsetYMm: -0.26 }), { printerName: "TSC TE244", dpi: 203, mode: "windows-driver", offsetXMm: 3, offsetYMm: -0.3 });
+  assert.equal(validateProfile({ ...base, offsetXMm: "" }).offsetXMm, 0);
+  assert.throws(() => validateProfile({ ...base, offsetXMm: 12 }), /between -10 and 10 mm/);
+  assert.throws(() => validateProfile({ ...base, offsetYMm: "wide" }), /between -10 and 10 mm/);
 });

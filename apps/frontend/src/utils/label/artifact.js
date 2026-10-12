@@ -32,7 +32,11 @@ export const buildPrintableArtifact = (templateInput, dataArray = [{}], options 
   const measurer = options.measurer || createEstimateMeasurer();
   const copies = normalizeCopies(options.copies || template.copies || 1);
   if (!Array.isArray(dataArray) || dataArray.length === 0) throw new Error('Nothing to print');
-  const { media } = template;
+  // A printer's calibration nudge moves every label on that printer; the design's own
+  // offsets stay in the template. Both end up in the page geometry.
+  const nudgeX = Number(options.offsetXMm) || 0;
+  const nudgeY = Number(options.offsetYMm) || 0;
+  const media = { ...template.media, offsetXMm: template.media.offsetXMm + nudgeX, offsetYMm: template.media.offsetYMm + nudgeY };
   const rows = [];
   if (media.columnMode === 'sequence') {
     for (let i = 0; i < dataArray.length; i += media.columns) rows.push(dataArray.slice(i, i + media.columns));
@@ -70,7 +74,7 @@ export const buildPrintableArtifact = (templateInput, dataArray = [{}], options 
     pages,
     warnings: [...new Set(warnings)],
     templateSnapshot: { stageKey: options.stageKey || 'calibration', template },
-    profileSnapshot: { dpi, rowGapMm: media.rowGapMm, columns: media.columns, copies, columnMode: media.columnMode },
+    profileSnapshot: { dpi, rowGapMm: media.rowGapMm, columns: media.columns, copies, columnMode: media.columnMode, offsetXMm: nudgeX, offsetYMm: nudgeY },
   };
 };
 

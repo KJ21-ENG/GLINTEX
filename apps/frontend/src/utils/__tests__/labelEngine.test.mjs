@@ -247,3 +247,17 @@ test('letter spacing counts every glyph and barcode boxes cover their text', () 
   const dot = 25.4 / 203;
   assert.ok(Math.abs(qr.layout.moduleMm / dot - Math.round(qr.layout.moduleMm / dot)) < 1e-9, 'QR modules are whole dots');
 });
+
+test('a printer nudge moves every label on the page without touching the design', () => {
+  const template = DEFAULT_STAGE_TEMPLATES.inbound;
+  const plain = buildPrintableArtifact(template, [buildSampleData('inbound')], { stageKey: 'inbound' });
+  const nudged = buildPrintableArtifact(template, [buildSampleData('inbound')], { stageKey: 'inbound', offsetXMm: 3, offsetYMm: -1.5 });
+  assert.match(plain.pages[0].html, /class="lbw" style="left:0mm;top:0mm;/);
+  assert.match(nudged.pages[0].html, /class="lbw" style="left:3mm;top:-1.5mm;/);
+  assert.equal(nudged.widthMm, plain.widthMm);
+  assert.equal(nudged.heightMm, plain.heightMm);
+  assert.deepEqual(nudged.templateSnapshot.template.media, template.media);
+  assert.equal(nudged.profileSnapshot.offsetXMm, 3);
+  assert.equal(nudged.profileSnapshot.offsetYMm, -1.5);
+  assert.equal(plain.profileSnapshot.offsetXMm, 0);
+});

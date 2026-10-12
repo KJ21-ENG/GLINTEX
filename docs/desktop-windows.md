@@ -123,7 +123,7 @@ Retention defaults: 100 jobs / 100 MiB. Old eligible terminal records can be pru
 - [ ] Compare two fresh captured transactions and their provenance; distinguish a manually entered transaction
 - [ ] Unplug/replug and sleep/wake; verify the exact selected device reconnects and a fresh capture is required
 - [ ] Preview every actual stage template, long values, punctuation/fonts, rotations and barcode quiet zones
-- [ ] Print calibration/test labels on actual media; measure known geometry/outer dimensions with a ruler, then calibrate documented profile offsets
+- [ ] Print calibration/test labels on actual media; measure known geometry/outer dimensions with a ruler, then set the printer's Nudge X/Y in Workstation setup (stored in the printer profile, applied to every label on that printer)
 - [ ] Inspect small Cutter issue and small Coning receive labels for eliminated preview-only centering offsets
 - [ ] Scan barcodes; check columns, last-page copies, margins, no clipping or unwanted blanks
 - [ ] Turn printer off/remove paper; observe failures/uncertainty and check spooler/paper before reprinting

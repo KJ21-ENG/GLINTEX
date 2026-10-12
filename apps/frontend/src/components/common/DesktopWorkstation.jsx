@@ -30,7 +30,7 @@ export default function DesktopWorkstation() {
   const [scale, setScale] = useState(initialScale);
   const [ports, setPorts] = useState([]);
   const [printers, setPrinters] = useState([]);
-  const [printer, setPrinter] = useState({ printerName: '', dpi: 203 });
+  const [printer, setPrinter] = useState({ printerName: '', dpi: 203, offsetXMm: 0, offsetYMm: 0 });
   const [jobs, setJobs] = useState([]);
   const [startAtLogin, setStartAtLogin] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -67,7 +67,7 @@ export default function DesktopWorkstation() {
     Promise.all([bridge.getController(), bridge.settings.get()]).then(([c, s]) => {
       if (!live) return;
       setController(c); setScale({ ...initialScale, ...s.scale });
-      setPrinter(s.printer || { printerName: '', dpi: 203 }); setStartAtLogin(Boolean(s.startAtLogin));
+      setPrinter({ printerName: '', dpi: 203, offsetXMm: 0, offsetYMm: 0, ...(s.printer || {}) }); setStartAtLogin(Boolean(s.startAtLogin));
     }).catch(e => live && setError(e.message));
     refreshStatus().catch(e => live && setError(e.message));
     const unsubscribe = bridge.scale.onStatus?.(s => live && setScaleStatus(s));
@@ -110,7 +110,7 @@ export default function DesktopWorkstation() {
   const scaleLabel = scaleStatus.state || scaleStatus.status || (scaleStatus.isConnected ? 'connected' : 'disconnected');
   async function prepareCalibration() {
     const template = { ...CALIBRATION_TEMPLATE, media: { ...CALIBRATION_TEMPLATE.media, widthMm: Number(media.width) || 75, heightMm: Number(media.height) || 125, rollWidthMm: Number(media.pageWidth) || Number(media.width) || 75, columns: Number(media.columns) || 1, columnGapMm: Number(media.horizontalGap) || 0, rowGapMm: Number(media.verticalGap) || 0, marginLeftMm: Number(media.marginLeft) || 0, marginTopMm: Number(media.marginTop) || 0 } };
-    const artifact = await buildPrintableArtifact(template, [{}], { stageKey: 'calibration', dpi: printer.dpi, copies: 1 });
+    const artifact = await buildPrintableArtifact(template, [{}], { stageKey: 'calibration', dpi: printer.dpi, copies: 1, offsetXMm: printer.offsetXMm, offsetYMm: printer.offsetYMm });
     setTestArtifact(artifact); setMessage('Check the media dimensions and preview before submitting the test label. No production record is created.');
   }
   return <section ref={setupRef} className="border-b bg-card text-foreground" aria-label="Desktop workstation">
@@ -175,7 +175,7 @@ export default function DesktopWorkstation() {
       </fieldset>
       <fieldset className="border rounded p-3 space-y-3" disabled={busy || !canConfigure}>
         <legend className="px-2 font-semibold">Windows printer</legend>
-        <div className="grid sm:grid-cols-2 gap-3"><Field label="Explicit printer"><select className={fieldClass} value={printer.printerName} onChange={e => { setPrinter(p => ({ ...p, printerName: e.target.value })); setTestArtifact(null); }}><option value="">Choose printer</option>{printer.printerName && !printers.some(p => p.name === printer.printerName) && <option>{printer.printerName}</option>}{printers.map(p => <option key={p.name} value={p.name}>{p.displayName || p.name}</option>)}</select></Field><Field label="Driver resolution (verify in Windows)"><select className={fieldClass} value={printer.dpi} onChange={e => { setPrinter(p => ({ ...p, dpi: Number(e.target.value) })); setTestArtifact(null); }}>{[203,300,600].map(v => <option key={v} value={v}>{v} dpi</option>)}</select></Field></div>
+        <div className="grid sm:grid-cols-2 gap-3"><Field label="Explicit printer"><select className={fieldClass} value={printer.printerName} onChange={e => { setPrinter(p => ({ ...p, printerName: e.target.value })); setTestArtifact(null); }}><option value="">Choose printer</option>{printer.printerName && !printers.some(p => p.name === printer.printerName) && <option>{printer.printerName}</option>}{printers.map(p => <option key={p.name} value={p.name}>{p.displayName || p.name}</option>)}</select></Field><Field label="Driver resolution (verify in Windows)"><select className={fieldClass} value={printer.dpi} onChange={e => { setPrinter(p => ({ ...p, dpi: Number(e.target.value) })); setTestArtifact(null); }}>{[203,300,600].map(v => <option key={v} value={v}>{v} dpi</option>)}</select></Field><Field label="Nudge X (mm)"><input type="number" step="0.1" min="-10" max="10" className={fieldClass} value={printer.offsetXMm ?? 0} onChange={e => { setPrinter(p => ({ ...p, offsetXMm: Number(e.target.value) })); setTestArtifact(null); }}/></Field><Field label="Nudge Y (mm)"><input type="number" step="0.1" min="-10" max="10" className={fieldClass} value={printer.offsetYMm ?? 0} onChange={e => { setPrinter(p => ({ ...p, offsetYMm: Number(e.target.value) })); setTestArtifact(null); }}/></Field></div><p className="text-xs">Nudge moves every label this printer prints: +X away from the roll's left edge, +Y further down the roll. Set it from the test label so its 2 mm margin and 20 mm square measure true; designs keep their own offsets.</p>
         <button type="button" className={buttonClass} onClick={() => act(async () => { const savedProfile = await bridge.printers.configure(printer); setPrinter(savedProfile); window.dispatchEvent(new CustomEvent('glintex:printer-profile-changed', { detail: savedProfile })); setMessage('Printer saved. Confirm matching stock size in Windows Printing Preferences.'); })}>Save printer</button>
         <p className="text-sm">TE244 at 203 dpi is an initial profile. Confirm your actual driver and stock. Successful submission means accepted by the print system, not confirmed on paper.</p>
         <details><summary className="cursor-pointer">Calibration / test label</summary><p className="text-xs mt-2">Match verticalGap in Windows driver stock/gap-sensor settings. It records the physical media gap; the printed page excludes that gap.</p><div className="grid sm:grid-cols-3 gap-3 mt-3">{Object.entries(media).map(([key,value]) => <Field key={key} label={`${key}${key === 'columns' ? '' : ' (mm)'}`}><input type="number" step={key === 'columns' ? '1' : '0.1'} className={fieldClass} value={value} onChange={e => changeMedia(key,e.target.value)}/></Field>)}</div>

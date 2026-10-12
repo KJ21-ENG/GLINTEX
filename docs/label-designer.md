@@ -86,5 +86,7 @@ selection handles and guides on top.
 - `node --test apps/desktop/test/*.test.cjs`
 - `electron apps/desktop/scripts/visual-runner.cjs` (needs `npm run build:frontend` first)
 - `electron apps/desktop/scripts/print-integration.cjs <output-dir>`
-- Paper: print the calibration label from Workstation setup, measure the 50 mm line and the
-  20 mm square, adjust the nudges in Label & roll, then scan a barcode on every stage.
+- Paper: print the test label from Workstation setup, measure its 2 mm margin, 50 mm line and
+  20 mm square, and set that printer's Nudge X/Y in Workstation setup until they measure true.
+  The nudge moves every label on that printer; a design's own Label & roll offsets are for the
+  roll geometry, not for printer alignment. Then scan a barcode on every stage.

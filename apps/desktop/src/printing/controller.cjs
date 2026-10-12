@@ -20,7 +20,18 @@ function validateProfile(profile) {
     printerName: profile.printerName,
     dpi: profile.dpi,
     mode: "windows-driver",
+    offsetXMm: validateNudge(profile.offsetXMm, "X"),
+    offsetYMm: validateNudge(profile.offsetYMm, "Y"),
   };
+}
+// Calibration nudge for this printer, in millimetres: every label it prints is moved by it.
+const NUDGE_MAX_MM = 10;
+function validateNudge(value, axis) {
+  if (value === undefined || value === null || value === "") return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n) || Math.abs(n) > NUDGE_MAX_MM)
+    throw new Error(`Printer nudge ${axis} must be between -${NUDGE_MAX_MM} and ${NUDGE_MAX_MM} mm`);
+  return Math.round(n * 10) / 10;
 }
 const SUPPORTED_DPI = [203, 300, 600];
 const HTML_PAGE_MAX = 2 * 1024 * 1024;

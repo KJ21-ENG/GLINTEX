@@ -164,7 +164,7 @@ export const printStageTemplatesBatch = async (stageKey, dataArray = [], options
     const status = await window.glintexDesktop.printers.status();
     if (!status.profile) throw new Error('Configure the Windows printer in Workstation setup first');
     const profile = options.printer ? { ...status.profile, printerName: options.printer } : status.profile;
-    const artifact = await buildPrintableArtifact(template, dataArray, { stageKey, copies, dpi: profile.dpi });
+    const artifact = await buildPrintableArtifact(template, dataArray, { stageKey, copies, dpi: profile.dpi, offsetXMm: profile.offsetXMm, offsetYMm: profile.offsetYMm });
     const result = await window.glintexDesktop.printers.submit({ artifact, profile });
     if (!result.success) throw new Error(`${result.error || 'Label submission failed'}${result.job?.id ? ` (job ${result.job.id})` : ''}`);
     return result;

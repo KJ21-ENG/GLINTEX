@@ -1,25 +1,25 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AlignLeft, AlignCenter, AlignRight, ArrowUpToLine, AlignVerticalJustifyCenter, ArrowDownToLine, Bold, Italic, Underline, Lock, Unlock, Eye, EyeOff, Copy, Trash2, Upload, RotateCw, BringToFront, SendToBack } from 'lucide-react';
 import { Field, NumberField, SelectField, Segmented, Toggle, Section, inputClass } from './fields';
 import VariableMenu from './VariableMenu';
 import { FONT_FAMILIES, QR_EC_LEVELS, LIMITS } from '../../../utils/label/model';
 import { Button } from '../../../components/ui';
+import { prepareLabelImage, toBlackAndWhite } from '../../../utils/label/imageTools';
+import { useOptionalInventory } from '../../../context/InventoryContext';
 
 const TYPE_LABELS = { text: 'Text', barcode: 'Barcode', qr: 'QR code', line: 'Line', rect: 'Box', image: 'Image' };
 
-const readImage = (file) => new Promise((resolve, reject) => {
-  if (!file) return reject(new Error('No file selected'));
-  if (!['image/png', 'image/jpeg', 'image/svg+xml'].includes(file.type)) return reject(new Error('Use a PNG, JPEG or SVG image'));
-  if (file.size > LIMITS.imageBytesMax) return reject(new Error(`Image must be under ${Math.round(LIMITS.imageBytesMax / 1024)} KB`));
-  const reader = new FileReader();
-  reader.onload = () => resolve(String(reader.result));
-  reader.onerror = () => reject(new Error('Could not read the image'));
-  reader.readAsDataURL(file);
-});
 
 export default function Inspector({ template, selectedIds, variables, warnings, dispatch, canEdit, editRequest = 0, onNotify }) {
   const selected = template.elements.filter((el) => selectedIds.includes(el.id));
   const textAreaRef = useRef(null);
+  const inventory = useOptionalInventory();
+  const companyLogo = inventory?.brand?.logoDataUrl || inventory?.brand?.faviconDataUrl || '';
+  const [imageBusy, setImageBusy] = useState(false);
+  const runImage = async (work) => {
+    setImageBusy(true);
+    try { const src = await work(); if (src) updateOne({ src }); } catch (error) { onNotify?.('error', error?.message || 'Could not use this image'); } finally { setImageBusy(false); }
+  };
   const valueRef = useRef(null);
   // Double-clicking an element on the canvas lands the caret in its text.
   useEffect(() => {
@@ -94,6 +94,15 @@ export default function Inspector({ template, selectedIds, variables, warnings, 
               <Segmented value={el.rotation} disabled={disabled} onChange={(v) => update({ rotation: Number(v) })} options={[0, 90, 180, 270].map((r) => ({ value: r, label: `${r}°`, icon: r === 0 ? undefined : RotateCw }))} />
             </Field>
           </div>
+        </Section>
+
+        <Section title="Appearance">
+          <Field label="Opacity">
+            <Segmented value={String(el.opacity ?? 1)} disabled={disabled} onChange={(v) => update({ opacity: Number(v) })} options={[{ value: '1', label: '100%' }, { value: '0.75', label: '75%' }, { value: '0.5', label: '50%' }, { value: '0.25', label: '25%' }]} />
+          </Field>
+          <p className="text-[11px] text-muted-foreground">{['barcode', 'qr'].includes(el.type) && (el.opacity ?? 1) < 1
+            ? 'Barcodes and QR codes below 100% may not scan. Keep codes fully opaque.'
+            : 'Thermal printers have no grey, so lighter levels print as a fine dot screen, exactly as the preview shows. 25% suits a faint background logo; keep text at 50% or more. The screen also lightens anything underneath, so place faint elements at the back.'}</p>
         </Section>
 
         {el.type === 'text' && sameType ? (<>
@@ -183,14 +192,23 @@ export default function Inspector({ template, selectedIds, variables, warnings, 
         {el.type === 'image' && !multi ? (
           <Section title="Image">
             <div className="flex items-center gap-3">
-              {el.src ? <img src={el.src} alt="" className="h-14 w-14 object-contain border border-border bg-white rounded" /> : <div className="h-14 w-14 rounded border border-dashed border-border grid place-items-center text-[10px] text-muted-foreground">none</div>}
-              <label className={`h-8 inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 text-xs cursor-pointer hover:bg-accent ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
-                <Upload className="h-3.5 w-3.5" /> Choose image
-                <input type="file" accept="image/png,image/jpeg,image/svg+xml" className="hidden" onChange={async (e) => { try { const src = await readImage(e.target.files?.[0]); updateOne({ src }); } catch (error) { onNotify?.('error', error.message); } e.target.value = ''; }} />
-              </label>
+              {el.src ? <img src={el.src} alt="" className="h-14 w-14 object-contain border border-border bg-white rounded" /> : <div className="h-14 w-14 rounded border border-dashed border-border grid place-items-center text-[10px] text-muted-foreground">None</div>}
+              <div className="flex flex-col gap-1.5">
+                <label className={`h-8 inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 text-xs cursor-pointer hover:bg-accent ${disabled || imageBusy ? 'pointer-events-none opacity-50' : ''}`}>
+                  <Upload className="h-3.5 w-3.5" /> {el.src ? 'Replace image' : 'Upload image'}
+                  <input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; runImage(() => prepareLabelImage(file)); }} />
+                </label>
+                {companyLogo ? (
+                  <Button type="button" variant="outline" size="sm" className="h-8 text-xs" disabled={disabled || imageBusy} onClick={() => runImage(() => prepareLabelImage(companyLogo))}>Use company logo</Button>
+                ) : null}
+              </div>
             </div>
+            <p className="text-[11px] text-muted-foreground">PNG, JPEG, SVG, WebP or GIF up to 8 MB; large images are resized for the label automatically.</p>
             <Field label="Fit"><Segmented value={el.fit} disabled={disabled} onChange={(v) => updateOne({ fit: v })} options={[{ value: 'contain', label: 'Keep proportions' }, { value: 'stretch', label: 'Stretch' }]} /></Field>
-            <p className="text-[11px] text-muted-foreground">Thermal printers print pure black; use a black-and-white logo for a clean result.</p>
+            {el.src ? (
+              <Button type="button" variant="outline" size="sm" className="h-8 text-xs w-full" disabled={disabled || imageBusy} onClick={() => runImage(() => toBlackAndWhite(el.src))}>Make black and white</Button>
+            ) : null}
+            <p className="text-[11px] text-muted-foreground">Thermal printers print pure black only. Make black and white turns the logo into crisp black shapes so it prints cleanly; undo restores the original.</p>
           </Section>
         ) : null}
       </div>

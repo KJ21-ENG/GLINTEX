@@ -13,6 +13,10 @@ export const useInventory = () => {
   return context;
 };
 
+// For components that also render outside the app shell (tests, fixtures): null when absent.
+export const useOptionalInventory = () => useContext(InventoryContext);
+
+
 export const useBrand = useInventory;
 
 const BOOTSTRAP_KEYS = [

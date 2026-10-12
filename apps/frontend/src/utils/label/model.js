@@ -53,6 +53,9 @@ export const LIMITS = Object.freeze({
   copiesMax: 100,
   elementsMax: 200,
   imageBytesMax: 150 * 1024,
+  opacityMin: 0.25,
+  imageSourceBytesMax: 8 * 1024 * 1024,
+  imagePixelsMax: 1200,
 });
 
 const num = (value, fallback, min = -Infinity, max = Infinity) => {
@@ -129,6 +132,9 @@ export const normalizeElement = (raw = {}, index = 0) => {
     rotation: pick(Number(raw.rotation) || 0, ROTATIONS, 0),
     locked: bool(raw.locked),
     hidden: bool(raw.hidden),
+    // 1, 0.75, 0.5 or 0.25. Thermal printers have no grey; lighter levels print as a
+    // screen of dots, and finer steps than quarters are indistinguishable on paper.
+    opacity: Math.round(num(raw.opacity, 1, LIMITS.opacityMin, 1) * 4) / 4,
   };
   if (type === 'text') {
     return {

@@ -20,6 +20,7 @@ export const BASE_CSS = [
   '.bg{position:absolute;left:0;top:0;width:100%;height:100%;background:#000}',
   'svg.sym{position:absolute;display:block;left:0;top:0}',
   'img.im{position:absolute;display:block;left:0;top:0;width:100%;height:100%}',
+  'svg.scr{position:absolute;display:block;left:0;top:0;width:100%;height:100%}',
 ].join('\n');
 
 export const fontFaceCss = (fonts = []) => fonts.map((f) => (
@@ -33,6 +34,23 @@ export const rotationTransform = (rotation, w, h) => {
   return '';
 };
 
+// Thermal printers have no grey: their drivers turn anything lighter than black into
+// blank paper, and Chromium's print path neither keeps CSS masks nor tiles background
+// images reliably on a rotated label. A lighter element is therefore drawn normally and
+// covered by white hatch lines drawn as vector shapes: in every band of eight printer dots,
+// two (75%), four (50%) or six (25%) dots are left blank. Preview and paper match. The
+// hatch also lightens anything underneath the element's box; faint elements belong at
+// the back.
+export const opacityScreen = (opacity, box, dpi = 203) => {
+  if (opacity === undefined || opacity >= 1 || !box) return '';
+  const dot = 25.4 / (dpi || 203);
+  const period = dot * 8;
+  const blank = dot * Math.max(1, Math.min(7, Math.round((1 - opacity) * 8)));
+  const r = (v) => Math.round(v * 1000) / 1000;
+  const rects = [];
+  for (let y = 0; y < box.h; y += period) rects.push(`<rect x="0" y="${r(y)}" width="${r(box.w)}" height="${r(Math.min(blank, box.h - y))}"/>`);
+  return `<svg class="scr" viewBox="0 0 ${r(box.w)} ${r(box.h)}" preserveAspectRatio="none" shape-rendering="crispEdges" fill="#fff" xmlns="http://www.w3.org/2000/svg">${rects.join('')}</svg>`;
+};
 const elementStyle = (box, rotation, extra = '') => {
   const transform = rotationTransform(rotation, box.w, box.h);
   return `left:${mm(box.x)};top:${mm(box.y)};width:${mm(box.w)};height:${mm(box.h)};${transform ? `transform:${transform};` : ''}${extra}`;
@@ -48,7 +66,7 @@ export const renderTextElement = (el, fontFamilyCss) => {
   const parts = [];
   if (el.invert) parts.push('<div class="bg"></div>');
   for (const line of layout.lines) parts.push(lineHtml(line, font, el.invert ? 'ln inv' : 'ln'));
-  return `<div class="el${layout.clip ? ' clip' : ''}" data-id="${esc(el.id)}" style="${elementStyle(box, el.rotation)}">${parts.join('')}</div>`;
+  return `<div class="el${layout.clip ? ' clip' : ''}" data-id="${esc(el.id)}" style="${elementStyle(box, el.rotation, '')}">${parts.join('')}</div>`;
 };
 
 export const renderBarcodeElement = (el, fontFamilyCss) => {
@@ -58,7 +76,7 @@ export const renderBarcodeElement = (el, fontFamilyCss) => {
   const text = layout.textLine
     ? lineHtml(layout.textLine, { lineHeightMm: layout.textLine.lineHeightMm, sizePt: layout.textLine.fontSizePt, family: fontFamilyCss('inter'), bold: false, italic: false, letterSpacingPt: 0, underline: false })
     : '';
-  return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(box, el.rotation)}">${svg}${text}</div>`;
+  return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(box, el.rotation, '')}">${svg}${text}</div>`;
 };
 
 export const renderQrElement = (el) => {
@@ -69,25 +87,26 @@ export const renderQrElement = (el) => {
     for (const run of runs) rects.push(`<rect x="${round3(run.x * m)}" y="${round3(y * m)}" width="${round3(run.w * m)}" height="${round3(m)}"/>`);
   });
   const svg = `<svg class="sym" style="width:${mm(box.w)};height:${mm(box.h)}" viewBox="0 0 ${round3(box.w)} ${round3(box.h)}" shape-rendering="crispEdges" fill="#000" xmlns="http://www.w3.org/2000/svg">${rects.join('')}</svg>`;
-  return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(box, el.rotation)}">${svg}</div>`;
+  return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(box, el.rotation, '')}">${svg}</div>`;
 };
 
 export const renderLineElement = (el) => `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(el.box, el.rotation, 'background:#000;')}"></div>`;
 
 export const renderRectElement = (el) => {
-  const extra = `border:${mm(el.strokeMm)} solid #000;border-radius:${mm(el.radiusMm)};background:${el.fill ? '#000' : 'transparent'};`;
-  return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(el.box, el.rotation, extra)}"></div>`;
+  // The outline sits on an inner box so a lightening screen covers the border too.
+  const inner = `position:absolute;left:0;top:0;width:100%;height:100%;box-sizing:border-box;border:${mm(el.strokeMm)} solid #000;border-radius:${mm(el.radiusMm)};background:${el.fill ? '#000' : 'transparent'};`;
+  return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(el.box, el.rotation)}"><div style="${inner}"></div></div>`;
 };
 
 export const renderImageElement = (el) => {
   if (!el.src) return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(el.box, el.rotation, 'border:0.2mm dashed #999;')}"></div>`;
-  return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(el.box, el.rotation)}"><img class="im" alt="" src="${el.src}" style="object-fit:${el.fit === 'stretch' ? 'fill' : 'contain'}"></div>`;
+  return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(el.box, el.rotation, '')}"><img class="im" alt="" src="${el.src}" style="object-fit:${el.fit === 'stretch' ? 'fill' : 'contain'}"></div>`;
 };
 
 const round3 = (v) => Math.round(Number(v) * 1000) / 1000;
 
 // Inner markup of one label in reading orientation.
-export const renderLabelMarkup = (layoutResult, fontFamilyCss) => layoutResult.elements.map((el) => {
+const renderElement = (el, fontFamilyCss) => {
   if (el.type === 'text') return renderTextElement(el, fontFamilyCss);
   if (el.type === 'barcode') return renderBarcodeElement(el, fontFamilyCss);
   if (el.type === 'qr') return renderQrElement(el);
@@ -95,6 +114,12 @@ export const renderLabelMarkup = (layoutResult, fontFamilyCss) => layoutResult.e
   if (el.type === 'rect') return renderRectElement(el);
   if (el.type === 'image') return renderImageElement(el);
   return '';
+};
+export const renderLabelMarkup = (layoutResult, fontFamilyCss) => layoutResult.elements.map((el) => {
+  const html = renderElement(el, fontFamilyCss);
+  const screen = opacityScreen(el.opacity, el.box, layoutResult.dpi);
+  // The screen is the element's last child, so it covers exactly the element's box.
+  return screen && html.endsWith('</div>') ? `${html.slice(0, -6)}${screen}</div>` : html;
 }).join('');
 
 // The label wrapper rotates a landscape design onto the portrait page.

@@ -90,3 +90,18 @@ selection handles and guides on top.
   20 mm square, and set that printer's Nudge X/Y in Workstation setup until they measure true.
   The nudge moves every label on that printer; a design's own Label & roll offsets are for the
   roll geometry, not for printer alignment. Then scan a barcode on every stage.
+
+## Opacity and images
+
+- Every element has an opacity of 100, 75, 50 or 25% (Inspector, Appearance). Thermal
+  printers have no grey and their drivers turn anything lighter than black into blank paper,
+  so a lighter element is drawn normally and covered by white vector hatch lines, two printer
+  dots per step in every band of eight. The preview shows exactly that pattern. 25% suits a
+  faint background logo; keep text at 50% or more and barcodes at 100%. The hatch also
+  lightens anything underneath the element, so faint elements belong at the back. CSS masks
+  and tiled backgrounds were tried and do not survive Chromium's print path on a sideways
+  label; the hatch was verified on the TSC driver's actual printer bitmap.
+- Images: PNG, JPEG, SVG, WebP or GIF up to 8 MB. Large or non-PNG/JPEG images are resized
+  and re-encoded in the browser to fit the 150 KB stored limit (`utils/label/imageTools.js`).
+  "Use company logo" takes the brand logo or favicon from Settings. "Make black and white"
+  turns the image into pure black on transparent so it prints crisply; undo restores it.

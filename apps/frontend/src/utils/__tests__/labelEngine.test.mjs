@@ -2,7 +2,7 @@
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { normalizeTemplate, createElement, canvasSize, usedRollWidthMm, elementBox, rotatedBox } from '../label/model.js';
+import { normalizeTemplate, normalizeElement, createElement, canvasSize, usedRollWidthMm, elementBox, rotatedBox } from '../label/model.js';
 import { migrateV1Template, toV2Template } from '../label/migrate.js';
 import { layoutLabel, createEstimateMeasurer, wrapParagraph, quantizeToDots } from '../label/layout.js';
 import { renderLabelMarkup, renderPage, rotationTransform, assemblePrintDocument, mm } from '../label/html.js';
@@ -260,4 +260,27 @@ test('a printer nudge moves every label on the page without touching the design'
   assert.equal(nudged.profileSnapshot.offsetXMm, 3);
   assert.equal(nudged.profileSnapshot.offsetYMm, -1.5);
   assert.equal(plain.profileSnapshot.offsetXMm, 0);
+});
+
+test('opacity snaps to quarters and prints as white vector hatching, never grey', () => {
+  assert.equal(normalizeElement({ type: 'text' }).opacity, 1);
+  assert.equal(normalizeElement({ type: 'text', opacity: 0.6 }).opacity, 0.5);
+  assert.equal(normalizeElement({ type: 'text', opacity: 0.7 }).opacity, 0.75);
+  assert.equal(normalizeElement({ type: 'image', opacity: 0 }).opacity, 0.25);
+  assert.equal(normalizeElement({ type: 'line', opacity: 7 }).opacity, 1);
+  const template = { ...DEFAULT_STAGE_TEMPLATES.inbound, elements: DEFAULT_STAGE_TEMPLATES.inbound.elements.map((el, i) => (i === 0 ? { ...el, opacity: 0.5 } : el)) };
+  const artifact = buildPrintableArtifact(template, [buildSampleData('inbound')], { stageKey: 'inbound', dpi: 203 });
+  const page = artifact.pages[0].html;
+  assert.equal((page.match(/<svg class="scr"/g) || []).length, 1, 'only the lightened element carries hatching');
+  assert.doesNotMatch(page, /opacity:|mask-image|background-image/, 'no grey, mask or tiled image reaches the printer');
+  const dot = 25.4 / 203;
+  const rects = [...page.matchAll(/<svg class="scr"[^>]*>(.*?)<\/svg>/g)][0][1].match(/<rect [^>]*>/g);
+  const ys = rects.map((r) => Number(r.match(/ y="([\d.]+)"/)[1]));
+  const hs = rects.map((r) => Number(r.match(/height="([\d.]+)"/)[1]));
+  assert.ok(Math.abs(ys[1] - ys[0] - dot * 8) < 0.002, 'bands repeat every eight printer dots');
+  assert.ok(Math.abs(hs[0] - dot * 4) < 0.002, '50% leaves four of eight dots blank');
+  const firstId = template.elements[0].id;
+  assert.match(page, new RegExp(`data-id="${firstId}"[^>]*>(?:(?!data-id=).)*<svg class="scr"`));
+  const bytes = page.length;
+  assert.ok(bytes < 200 * 1024, 'hatching keeps the page small');
 });

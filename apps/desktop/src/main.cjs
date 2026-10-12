@@ -26,6 +26,7 @@ const {
   createAppHandler,
 } = require("./security.cjs");
 const { assertPermission, mayReadJob } = require("./authorization.cjs");
+const { WindowRegistry, appWindowUrl } = require("./windows.cjs");
 app.setName("GLINTEX");
 // Keep a stable path independent of package/version/Squirrel installation folders.
 app.setPath("userData", path.join(app.getPath("appData"), "GLINTEX"));
@@ -46,7 +47,8 @@ if (selfTest && !process.env.GLINTEX_TEST_DATA)
 if (process.env.GLINTEX_TEST_DATA && (testMode || smoke || selfTest))
   app.setPath("userData", path.resolve(process.env.GLINTEX_TEST_DATA));
 app.setAppUserModelId("com.squirrel.GLINTEX.GLINTEX");
-let mainWindow, settings, scale, printer, driverSetup, updater, updateScheduler, desktopSession, fixtureServer;
+let mainWindow, windows, settings, scale, printer, driverSetup, updater, updateScheduler, desktopSession, fixtureServer;
+const windowLoads = new WeakMap();
 let closingForUpdate = false, closeApproved = false, closeChecking = false, nativeOperations = 0;
 const apiRequests = new Set();
 const squirrel =
@@ -59,10 +61,11 @@ if (squirrel || skipInstallerLaunch || !app.requestSingleInstanceLock())
   app.quit();
 else {
   app.on("second-instance", () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
+    const target = windows?.focused();
+    if (target) {
+      if (target.isMinimized()) target.restore();
+      target.show();
+      target.focus();
     }
   });
   app
@@ -124,9 +127,7 @@ async function start() {
     fetch: (url, options) => desktopSession.fetch(url, options), origin, fixture: selfTest || testMode,
   }).initialize();
   updateScheduler = new UpdateScheduler({ updater });
-  updater.on("status", status => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("glintex:update-status", status);
-  });
+  updater.on("status", status => windows?.broadcast("glintex:update-status", status));
   desktopSession.protocol.handle(
     new URL(origin).protocol.slice(0, -1),
     createAppHandler({
@@ -157,25 +158,92 @@ async function start() {
     void updater.authenticationCompleted(details);
   });
   desktopSession.webRequest.onErrorOccurred(details => apiRequests.delete(details.id));
-  mainWindow = new BrowserWindow({
-    width: 1360,
-    height: 900,
-    minWidth: 1000,
-    minHeight: 650,
-    title: "GLINTEX",
-    icon: path.join(__dirname, "../assets/icon.png"),
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      partition: "persist:glintex-workstation",
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      webviewTag: false,
-    },
-  });
+  // Every application window is built here: same bundle, same policies, same bridge.
+  // Staff open several of them the way they used browser tabs.
+  const createAppWindow = ({ url, bounds }) => {
+    const win = new BrowserWindow({
+      ...(bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : { width: 1360, height: 900 }),
+      minWidth: 1000,
+      minHeight: 650,
+      title: "GLINTEX",
+      icon: path.join(__dirname, "../assets/icon.png"),
+      show: false,
+      webPreferences: {
+        preload: path.join(__dirname, "preload.cjs"),
+        partition: "persist:glintex-workstation",
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        webviewTag: false,
+      },
+    });
+    win.webContents.setWindowOpenHandler(({ url: target }) => {
+      // Application pages open as another window of this app. External account setup
+      // remains in the normal browser; never load remote code in a privileged window.
+      if (isAppUrl(target, origin)) {
+        if (!closingForUpdate) openAppWindow(target, win);
+        return { action: "deny" };
+      }
+      if (!selfTest && !smoke)
+        void dialog
+          .showMessageBox(win, {
+            type: "info",
+            title: "Use the browser for this link",
+            message:
+              "External links and account connections open in the browser version of GLINTEX.",
+            buttons: ["Open GLINTEX in browser", "Cancel"],
+            defaultId: 1,
+            cancelId: 1,
+          })
+          .then(({ response }) => {
+            if (response === 0)
+              return shell.openExternal("https://app.glintex.in");
+          })
+          .catch(() => {});
+      return { action: "deny" };
+    });
+    win.webContents.on("will-navigate", (event, target) => {
+      if (!isAppUrl(target, origin)) event.preventDefault();
+    });
+    win.webContents.on("will-redirect", (event, target) => {
+      if (!isAppUrl(target, origin)) event.preventDefault();
+    });
+    win.webContents.on("will-attach-webview", (event) =>
+      event.preventDefault(),
+    );
+    win.webContents.on("render-process-gone", () => {
+      if (!win.isDestroyed()) win.reload();
+    });
+    // The browser habit: Ctrl+T opens another window too (Ctrl+N is the menu item).
+    win.webContents.on("before-input-event", (event, input) => {
+      if (input.type === "keyDown" && (input.control || input.meta) && !input.alt && !input.shift && input.key.toLowerCase() === "t") {
+        event.preventDefault();
+        openAppWindow(origin + "/", win);
+      }
+    });
+    win.on("ready-to-show", () => {
+      if (!smoke && !selfTest) win.show();
+    });
+    win.on("close", (event) => onWindowClose(win, event));
+    // A page's unsaved-form guard can still veto the approved close.
+    win.webContents.on("will-prevent-unload", () => {
+      if (closeApproved && windows.isLast(win)) { closeApproved = false; closingForUpdate = false; void updater.disarm(); void win.webContents.executeJavaScript("document.body.inert=false"); }
+    });
+    windowLoads.set(win, win.loadURL(url));
+    return win;
+  };
+  windows = new WindowRegistry({ create: createAppWindow });
+  const openAppWindow = (url, from) => {
+    try {
+      return windows.open(url, from ? { from } : {});
+    } catch (error) {
+      const parent = from && !from.isDestroyed() ? from : windows.focused();
+      if (parent && !selfTest && !smoke) void dialog.showMessageBox(parent, { type: "info", title: "GLINTEX windows", message: error.message, buttons: ["OK"] }).catch(() => {});
+      return null;
+    }
+  };
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
@@ -189,103 +257,78 @@ async function start() {
         ],
       },
       { role: "editMenu" },
+      {
+        label: "Window",
+        submenu: [
+          { label: "New window", accelerator: "CommandOrControl+N", click: () => { openAppWindow(origin + "/"); } },
+          { type: "separator" },
+          { role: "minimize" },
+          { role: "close" },
+        ],
+      },
     ]),
   );
-  mainWindow.webContents.setWindowOpenHandler(() => {
-    // External account setup remains in the normal browser; never load remote code
-    // or accept arbitrary caller URLs in the privileged desktop window.
-    if (!selfTest && !smoke)
-      void dialog
-        .showMessageBox(mainWindow, {
-          type: "info",
-          title: "Use the browser for this link",
-          message:
-            "External links and account connections open in the browser version of GLINTEX.",
-          buttons: ["Open GLINTEX in browser", "Cancel"],
-          defaultId: 1,
-          cancelId: 1,
-        })
-        .then(({ response }) => {
-          if (response === 0)
-            return shell.openExternal("https://app.glintex.in");
-        })
-        .catch(() => {});
-    return { action: "deny" };
-  });
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (!isAppUrl(url, origin)) event.preventDefault();
-  });
-  mainWindow.webContents.on("will-redirect", (event, url) => {
-    if (!isAppUrl(url, origin)) event.preventDefault();
-  });
-  mainWindow.webContents.on("will-attach-webview", (event) =>
-    event.preventDefault(),
-  );
-  mainWindow.webContents.on("render-process-gone", () => {
-    if (!mainWindow.isDestroyed()) mainWindow.reload();
-  });
+  mainWindow = windows.open(origin + "/");
   scale = new ScaleController({
     config: settings.get("scale"),
     saveConfig: (config) => settings.set("scale", config),
   });
   scale.subscribe((status) => {
-    if (
-      authenticated &&
-      Date.now() < authValidUntil &&
-      mainWindow &&
-      !mainWindow.isDestroyed()
-    )
-      mainWindow.webContents.send("glintex:scale-status", status);
+    if (authenticated && Date.now() < authValidUntil)
+      windows.broadcast("glintex:scale-status", status);
   });
   printer = new PrintController({
     directory: path.join(app.getPath("userData"), "print-jobs"),
     settings,
-    getPrinters: () => mainWindow.webContents.getPrintersAsync(),
+    getPrinters: () => {
+      const win = windows.primary();
+      if (!win) throw new Error("No application window is open");
+      return win.webContents.getPrintersAsync();
+    },
     printArtifact: createElectronPrinter({ BrowserWindow, session }),
   });
   const safety = async () => {
     await printer.ready;
     return updateBlockReason({ scale: scale.status(), driverRunning: driverSetup.running, nativeOperations, apiRequests: apiRequests.size, printJobs: [...printer.jobs.values()] });
   };
-  mainWindow.on("close", event => {
+  // Closing a window while an update is armed: other windows just close; the last one
+  // runs the preflight, because the installer may only start once GLINTEX has exited.
+  const onWindowClose = (win, event) => {
     if (closeApproved || !["armed", "installing"].includes(updater.status().state)) return;
+    if (!windows.isLast(win)) return;
     event.preventDefault();
     if (closeChecking) return;
     closeChecking = true;
     void (async () => {
       closingForUpdate = true;
       updater.set({ closeBlocked: false });
-      await mainWindow.webContents.executeJavaScript("document.body.inert=true");
+      await win.webContents.executeJavaScript("document.body.inert=true");
       const blocked = await safety();
       if (blocked) {
         updater.set({ closeBlocked: true, message: blocked });
-        if (!(selfTest && process.env.GLINTEX_TEST_PHASE === "update")) await dialog.showMessageBox(mainWindow, { type: "info", title: "Finish work before updating", message: blocked, buttons: ["Keep working"] });
+        if (!(selfTest && process.env.GLINTEX_TEST_PHASE === "update")) await dialog.showMessageBox(win, { type: "info", title: "Finish work before updating", message: blocked, buttons: ["Keep working"] });
         return;
       }
       const fixtureUpgrade = selfTest && process.env.GLINTEX_TEST_PHASE === "update";
-      const choice = fixtureUpgrade ? { response: 1 } : await dialog.showMessageBox(mainWindow, { type: "question", title: "Close GLINTEX and install the update?", message: "Confirm that every capture, receipt and edited form is saved, or deliberately discard unfinished forms. Windows printer submissions may still be printing; check the Windows queue first.", detail: "The verified installer opens after GLINTEX exits. Windows will not be restarted. Keep working if anything is unfinished.", buttons: ["Keep working", "Close and install"], defaultId: 0, cancelId: 0, noLink: true });
+      const choice = fixtureUpgrade ? { response: 1 } : await dialog.showMessageBox(win, { type: "question", title: "Close GLINTEX and install the update?", message: "Confirm that every capture, receipt and edited form is saved, or deliberately discard unfinished forms. Windows printer submissions may still be printing; check the Windows queue first.", detail: "The verified installer opens after GLINTEX exits. Windows will not be restarted. Keep working if anything is unfinished.", buttons: ["Keep working", "Close and install"], defaultId: 0, cancelId: 0, noLink: true });
       if (choice.response !== 1) return;
       await settings.pending;
       await desktopSession.cookies.flushStore();
       await updater.installAfterExit({ safety, silent: fixtureUpgrade });
       closeApproved = true;
-      mainWindow.close();
+      win.close();
     })().catch(async error => {
       await updater.disarm();
       if (selfTest) { console.error(error); app.exit(1); return; }
-      await dialog.showMessageBox(mainWindow, { type: "error", title: "Update stopped", message: error.message });
+      await dialog.showMessageBox(win, { type: "error", title: "Update stopped", message: error.message });
     }).finally(() => {
       closeChecking = false;
-      if (!closeApproved && mainWindow && !mainWindow.isDestroyed()) {
+      if (!closeApproved && !win.isDestroyed()) {
         closingForUpdate = false;
-        void mainWindow.webContents.executeJavaScript("document.body.inert=false");
+        void win.webContents.executeJavaScript("document.body.inert=false");
       }
     });
-  });
-  // A page's unsaved-form guard can still veto the approved close.
-  mainWindow.webContents.on("will-prevent-unload", () => {
-    if (closeApproved) { closeApproved = false; closingForUpdate = false; void updater.disarm(); void mainWindow.webContents.executeJavaScript("document.body.inert=false"); }
-  });
+  };
   const operations = {
     controller: () => ({
       version: app.getVersion(),
@@ -327,6 +370,11 @@ async function start() {
       return settings.get();
     },
     "server.status": serverStatus,
+    "windows.open": (target) => {
+      const win = openAppWindow(appWindowUrl(target === undefined ? "/" : target, origin));
+      if (!win) throw new Error(`At most ${windows.max} GLINTEX windows can be open; close one first`);
+      return { count: windows.count() };
+    },
     "updates.status": () => updater.status(),
     "updates.check": () => updater.check({ manual: true }),
     "updates.retry": () => updateScheduler.retry(),
@@ -360,12 +408,12 @@ async function start() {
     "printers.reprint": (id) => printer.reprint(validId(id)),
   };
   ipcMain.handle("glintex:operation", async (event, operation, payload) => {
-    assertSender(event, mainWindow?.webContents, origin);
+    assertSender(event, windows.contents(), origin);
     if (typeof operation !== "string" || !Object.hasOwn(operations, operation))
       throw new Error("Unknown desktop operation");
     if (closingForUpdate) throw new Error("Application is closing for an update. Finish or cancel the close first.");
     if (operation.startsWith("updates.") && payload !== undefined) throw new Error("Updates accept no custom URLs, files or commands");
-    if (operation === "controller" || operation === "server.status" || operation.startsWith("updates."))
+    if (operation === "controller" || operation === "server.status" || operation === "windows.open" || operation.startsWith("updates."))
       return operations[operation](payload);
     nativeOperations++;
     try {
@@ -417,16 +465,14 @@ async function start() {
       void updateScheduler.retry();
     }
   });
-  mainWindow.on("ready-to-show", () => {
-    if (!smoke && !selfTest) mainWindow.show();
-  });
-  await mainWindow.loadURL(origin + "/");
+  await windowLoads.get(mainWindow);
   if (!selfTest && !smoke) {
     updateScheduler.start();
   }
   if (selfTest) {
     const report = await require("./self-test.cjs").runSelfTest({
       window: mainWindow,
+      windows,
       session: desktopSession,
       app,
       reportDirectory:
@@ -468,9 +514,11 @@ async function start() {
 // Quit must wait for asynchronous close preflight/helper acknowledgement just
 // like clicking the window's close button. Re-enter quit only after approval.
 app.on('before-quit', event => {
-  if (!closeApproved && mainWindow && !mainWindow.isDestroyed() && ['armed','installing'].includes(updater?.status().state)) {
+  if (!closeApproved && windows?.count() && ['armed','installing'].includes(updater?.status().state)) {
     event.preventDefault();
-    mainWindow.close();
+    for (const win of windows.all()) win.close();
+    const remaining = windows.focused();
+    if (remaining && !closeApproved) remaining.focus();
   }
 });
 app.on("will-quit", () => {

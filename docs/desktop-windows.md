@@ -269,3 +269,19 @@ Device identity note: the configured COM path is never silently substituted. Ser
 ### Artifact visibility gate
 
 The GLINTEX repository is public. GitHub Actions artifacts from a public repository must **not** be assumed private to the owner; authenticated repository readers may be able to download them. This workflow therefore skips public-repository execution by default, including branch pushes. Prefer an explicitly authorized private build repository or private Windows runner with private artifact transfer. A manual `allow_public_artifacts` input is available only to record separately obtained explicit approval for public-repository artifact accessibility. The input itself is not authorization. Do not enable it merely to bypass this delivery constraint. ChatGPT Library owner attachments remain the planned private delivery channel after a suitable build route is established.
+
+## Multiple windows
+
+Staff who used several browser tabs open several windows of the desktop app instead.
+Every window is an equal copy of the signed-in workstation: same session, same bridge, same
+print queue and scale, and scale or update status reaches all of them.
+
+- `Ctrl+N`, `Ctrl+T`, the Window menu or the New window control in the sidebar open another
+  window on the current page. `Ctrl+click` or a middle click on a menu item opens that page in
+  a new window. At most six windows can be open.
+- Links to other origins still go to the normal browser; only pages of app.glintex.in open as
+  windows of the app.
+- Closing a window closes only that window. When an update is armed, the last window to close
+  runs the usual finish-work check before the installer starts.
+- The packaged self-test opens a second window from the bridge, verifies its session and
+  bridge, and closes it again, so the Windows verification covers this.

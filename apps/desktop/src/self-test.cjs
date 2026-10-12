@@ -80,6 +80,7 @@ async function startFixture() {
 }
 async function runSelfTest({
   window,
+  windows,
   session,
   app,
   reportDirectory,
@@ -134,6 +135,28 @@ async function runSelfTest({
     }
     await waitFor("document.body.innerText.includes('Workstation setup')");
     assert.equal(await fetchStatus("/api/auth/me"), 200, "existing session must survive the authenticated upgrade");
+    // Several equal windows: a second one opens from the bridge, carries the bridge and
+    // the signed-in session, and closes on its own without touching the first.
+    if (windows) {
+      const before = windows.count();
+      const opened = await evaluate("return window.glintexDesktop.windows.open('/')");
+      assert.equal(opened.count, before + 1, "bridge must open another window");
+      const second = windows.all()[before];
+      await new Promise((resolve, reject) => {
+        if (!second.webContents.isLoading()) return resolve();
+        second.webContents.once("did-finish-load", resolve);
+        second.webContents.once("did-fail-load", (_e, _code, description) => reject(new Error(description)));
+      });
+      const secondChecks = await second.webContents.executeJavaScript(
+        "(async()=>({bridge:typeof window.glintexDesktop?.windows?.open==='function',me:(await fetch('/api/auth/me',{credentials:'include'})).status,origin:location.origin,node:typeof window.require}))()",
+      );
+      assert.deepEqual(secondChecks, { bridge: true, me: 200, origin: new URL(window.webContents.getURL()).origin, node: "undefined" });
+      await assert.rejects(evaluate("return window.glintexDesktop.windows.open('/api/auth/me')"), /application path/);
+      second.close();
+      for (let n = 0; n < 50 && windows.count() !== before; n++) await new Promise((r) => setTimeout(r, 100));
+      assert.equal(windows.count(), before, "closing a secondary window leaves the first open");
+      assert.equal(window.isDestroyed(), false);
+    }
     if (process.platform === 'win32' && phase !== 'restored') {
       await waitFor("!['signin','checking'].includes((await window.glintexDesktop.updates.status()).state)");
       assert.equal((await evaluate('return window.glintexDesktop.updates.status()')).state, phase === 'update' ? 'available' : 'current');
@@ -224,6 +247,7 @@ async function runSelfTest({
       "native-serial-load",
       "login-or-restored-session",
       ...(process.platform === 'win32' && ['first','update'].includes(phase) ? ['automatic-discovery-after-signin'] : []),
+      ...(windows && ['first', 'update', 'restored'].includes(phase) ? ['multi-window'] : []),
       "httponly-samesite-cookie",
       "hardware-auth-gate",
       "same-origin-challan-frame-no-bridge",

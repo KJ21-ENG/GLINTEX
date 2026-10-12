@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld(
       update: (settings) => call("settings.update", settings),
     },
     server: { status: () => call("server.status") },
+    windows: { open: (path = "/") => call("windows.open", path) },
     updates: {
       status: () => call("updates.status"),
       check: () => call("updates.check"),

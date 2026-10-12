@@ -28,6 +28,8 @@ import { cn } from "../../lib/utils";
 import { getProcessDefinition, PROCESS_DEFINITIONS } from "../../constants/processes";
 import { useAuth } from "../../context/AuthContext";
 import { useUnsavedChanges } from "../../context/UnsavedChangesContext";
+import { hasDesktopWindows, openDesktopWindow, currentAppPath, openInNewWindowIfRequested } from "../../utils/desktopWindows";
+import { AppWindow } from "lucide-react";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import { ACCESS_LEVELS, getPermissionLevel } from "../../utils/permissions";
 
@@ -263,6 +265,8 @@ export default function DashboardLayout() {
               <NavLink
                 key={item.key}
                 to={`/app/${item.key}`}
+                onClick={(e) => openInNewWindowIfRequested(e, `/app/${item.key}`)}
+                onAuxClick={(e) => openInNewWindowIfRequested(e, `/app/${item.key}`)}
                 className={({ isActive }) => cn(
                   "flex items-center rounded-md text-sm font-medium transition-colors",
                   isExpanded ? "gap-3 px-3 py-2.5" : "justify-center px-2 py-2.5",
@@ -315,12 +319,32 @@ export default function DashboardLayout() {
               {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </Button>
           </div>
+          {hasDesktopWindows() && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start gap-2"
+              title="Open this page in another window (Ctrl+N). Ctrl+click or middle-click a menu item to open it in a new window."
+              onClick={() => openDesktopWindow(currentAppPath()).catch((error) => window.alert(error?.message || 'Could not open another window'))}
+            >
+              <AppWindow className="h-4 w-4" />
+              <span className="flex-1 text-left">New window</span>
+              <kbd className="text-[10px] text-muted-foreground">Ctrl+N</kbd>
+            </Button>
+          )}
         </div>
       )}
 
       {/* Collapsed footer — process switcher + theme toggle */}
       {!isExpanded && (
         <div className="p-2 border-t border-border/50 flex flex-col items-center gap-1">
+          {hasDesktopWindows() && (
+            <SidebarTooltip label="New window (Ctrl+N)">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openDesktopWindow(currentAppPath()).catch((error) => window.alert(error?.message || 'Could not open another window'))}>
+                <AppWindow className="h-4 w-4" />
+              </Button>
+            </SidebarTooltip>
+          )}
           <div className="relative" ref={processMenuRef}>
             <SidebarTooltip label={!processMenuPos ? `Process: ${processDef?.label || process}` : ""}>
               <Button
@@ -416,7 +440,8 @@ export default function DashboardLayout() {
               <NavLink
                 key={item.key}
                 to={`/app/${item.key}`}
-                onClick={() => setSidebarOpen(false)}
+                onClick={(e) => { if (!openInNewWindowIfRequested(e, `/app/${item.key}`)) setSidebarOpen(false); }}
+                onAuxClick={(e) => openInNewWindowIfRequested(e, `/app/${item.key}`)}
                 className={({ isActive }) => cn(
                   "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors",
                   isActive

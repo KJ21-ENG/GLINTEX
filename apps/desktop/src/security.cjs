@@ -16,11 +16,12 @@ function isAppUrl(value, origin) {
     return false;
   }
 }
-function assertSender(event, webContents, origin) {
+// `allowed` is one application window's webContents or an iterable of them.
+function assertSender(event, allowed, origin) {
+  const candidates = allowed && typeof allowed[Symbol.iterator] === "function" && typeof allowed.isDestroyed !== "function" ? [...allowed] : [allowed];
+  const webContents = candidates.find((wc) => wc && !wc.isDestroyed() && event.sender === wc);
   if (
     !webContents ||
-    webContents.isDestroyed() ||
-    event.sender !== webContents ||
     !event.senderFrame ||
     event.senderFrame !== webContents.mainFrame ||
     !isAppUrl(event.senderFrame.url, origin)

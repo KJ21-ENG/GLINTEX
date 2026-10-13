@@ -74,6 +74,51 @@ export const loadTemplateWithOrigin = async (stageKey, options = {}) => {
 
 export const loadTemplate = async (stageKey, options = {}) => (await loadTemplateWithOrigin(stageKey, options)).template;
 
+// Variants: several named designs per stage, one of them in use. They live in
+// `v2v:<stage>`; the one in use is also the live `v2:<stage>` design every print path reads.
+export const VARIANTS_KEY_PREFIX = 'v2v:';
+export const STANDARD_VARIANT = { id: 'standard', name: 'Standard' };
+export const newVariantId = () => `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+// Returns { variants: [{ id, name, template }], activeId, origin } where origin describes
+// the design in use: 'saved', 'legacy' (old designer) or 'default' (factory design).
+export const loadTemplateVariants = async (stageKey, options = {}) => {
+  const apiBase = options.apiBase || API_BASE_DEFAULT;
+  if (!stageKey) throw new Error('Missing label stage');
+  const row = await fetchTemplateRow(apiBase, `${VARIANTS_KEY_PREFIX}${stageKey}`);
+  const stored = row?.content && Array.isArray(row.content.variants) ? row.content : null;
+  if (stored && stored.variants.length) {
+    const variants = stored.variants.map((variant) => ({ id: variant.id, name: variant.name, template: normalizeTemplate(variant.template), updatedAt: variant.updatedAt }));
+    const activeId = variants.some((variant) => variant.id === stored.activeId) ? stored.activeId : variants[0].id;
+    return { variants, activeId, origin: 'saved' };
+  }
+  try {
+    const { template, origin } = await loadTemplateWithOrigin(stageKey, options);
+    return { variants: [{ ...STANDARD_VARIANT, template }], activeId: STANDARD_VARIANT.id, origin };
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    return { variants: [{ ...STANDARD_VARIANT, template: getDefaultTemplate(stageKey) }], activeId: STANDARD_VARIANT.id, origin: 'default' };
+  }
+};
+
+export const saveTemplateVariants = async (stageKey, { variants, activeId }, options = {}) => {
+  const apiBase = options.apiBase || API_BASE_DEFAULT;
+  try {
+    const response = await fetch(`${apiBase}/sticker_templates/${encodeURIComponent(stageKey)}/variants`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ activeId, variants: variants.map((variant) => ({ id: variant.id, name: variant.name, template: normalizeTemplate(variant.template), updatedAt: variant.updatedAt })) }),
+    });
+    notifyUnauthorized(response);
+    const result = await safeReadJson(response);
+    if (!response.ok) return { success: false, error: result?.error || 'Failed to save label variants' };
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message || 'Failed to save label variants' };
+  }
+};
+
 // Stored shape: { dimensions, content } for compatibility with the existing route and
 // table; version 2 designs keep the whole template in `content` and a summary in `dimensions`.
 export const saveTemplate = async (stageKey, template, options = {}) => {

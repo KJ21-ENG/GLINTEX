@@ -63,3 +63,44 @@ test('admin and Settings designer retain read/edit controls; unknown keys and mi
     assert.equal(f.calls.writes, designer ? 1 : 0);
   }
 });
+
+const design = (text) => ({ version: 2, media: { widthMm: 75, heightMm: 125, orientation: 'landscape' }, copies: 1, elements: [{ id: 't', type: 'text', text }] });
+
+test('label variants: one save stores every variant and makes the chosen one the live design', async () => {
+  const f = await fixture({ settings: 1, 'settings.edit': 1 }, 'designer'); const cookie = await login(f.app);
+  const variants = [{ id: 'standard', name: 'Standard', template: design('STANDARD') }, { id: 'v-plain', name: 'Plain', template: design('PLAIN') }];
+  const saved = await request(f.app).put('/api/sticker_templates/holo_issue/variants').set('Cookie', cookie).send({ activeId: 'v-plain', variants }).expect(200);
+  assert.equal(saved.body.template.stageKey, 'v2:holo_issue');
+  assert.equal(f.templates.get('v2:holo_issue').content.elements[0].text, 'PLAIN', 'the variant in use is the live design');
+  assert.equal(JSON.stringify(f.templates.get('v2v:holo_issue').content.variants.map((v) => v.name)), JSON.stringify(['Standard', 'Plain']));
+  assert.equal(f.templates.get('v2v:holo_issue').content.activeId, 'v-plain');
+  assert.equal(f.templates.get('holo_issue').content.texts[0].value, 'SAVED FIXTURE {itemName}', 'the legacy design is untouched');
+  // A stage reader (an operator who prints) can read the variants record like the live design.
+  const operator = await fixture({ 'issue.holo': 1 }); const opCookie = await login(operator.app);
+  operator.templates.set('v2v:holo_issue', f.templates.get('v2v:holo_issue'));
+  await request(operator.app).get('/api/sticker_templates/v2v:holo_issue').set('Cookie', opCookie).expect(200);
+  await request(operator.app).get('/api/sticker_templates/v2v:inbound').set('Cookie', opCookie).expect(403);
+  await request(operator.app).put('/api/sticker_templates/holo_issue/variants').set('Cookie', opCookie).send({ activeId: 'standard', variants }).expect(403);
+});
+
+test('label variants: invalid saves are refused and write nothing', async () => {
+  const f = await fixture({ settings: 1, 'settings.edit': 1 }, 'designer'); const cookie = await login(f.app);
+  const writes = f.calls.writes;
+  const ok = { id: 'standard', name: 'Standard', template: design('A') };
+  for (const [path, body] of [
+    ['unknown_stage', { activeId: 'standard', variants: [ok] }],
+    ['__proto__', { activeId: 'standard', variants: [ok] }],
+    ['holo_issue', { activeId: 'missing', variants: [ok] }],
+    ['holo_issue', { activeId: 'standard', variants: [] }],
+    ['holo_issue', { activeId: 'standard', variants: [ok, { ...ok }] }],
+    ['holo_issue', { activeId: 'standard', variants: [ok, { id: 'other', name: 'standard', template: design('B') }] }],
+    ['holo_issue', { activeId: 'standard', variants: [{ id: 'Bad Id!', name: 'X', template: design('A') }] }],
+    ['holo_issue', { activeId: 'standard', variants: [{ id: 'standard', name: 'Old', template: { texts: [] } }] }],
+    ['holo_issue', { activeId: 'standard', variants: Array.from({ length: 21 }, (_, i) => ({ id: `v${i}`, name: `V${i}`, template: design('A') })) }],
+  ]) {
+    const response = await request(f.app).put(`/api/sticker_templates/${path}/variants`).set('Cookie', cookie).send(body);
+    assert.ok([400, 404].includes(response.status), `${path} ${JSON.stringify(body).slice(0, 60)} -> ${response.status}`);
+  }
+  assert.equal(f.calls.writes, writes);
+  assert.equal(f.templates.has('v2v:holo_issue'), false);
+});

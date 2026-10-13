@@ -1,15 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Grid3x3, Magnet, Save, RotateCcw, Eye, ChevronDown, X, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Undo2, Redo2, ZoomIn, ZoomOut, Maximize2, Grid3x3, Magnet, Save, RotateCcw, Eye, ChevronDown, X, RefreshCw, CheckCircle2, CopyPlus, Pencil, Trash2 } from 'lucide-react';
 import { ConfirmDialog } from '../../../components/common/ConfirmDialog';
 import { Button } from '../../../components/ui';
 import { cn } from '../../../lib/utils';
 import { usePermission } from '../../../hooks/usePermission';
 import { useSubmitLock } from '../../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../../context/UnsavedChangesContext';
-import { LABEL_STAGE_KEYS, STAGE_GROUPS, getStageLabel, getStageVariables, loadTemplateWithOrigin, saveTemplate, getDefaultTemplate, printStageTemplatesBatch, hasDesktopPrinting } from '../../../utils/labelPrint';
+import { LABEL_STAGE_KEYS, STAGE_GROUPS, getStageLabel, getStageVariables, loadTemplateVariants, saveTemplateVariants, newVariantId, getDefaultTemplate, printStageTemplatesBatch, hasDesktopPrinting } from '../../../utils/labelPrint';
+import { askForInput } from '../../../utils/inputPrompt';
+import { ActionMenu } from '../../../components/ui';
 import { buildSampleData, SAMPLE_VARIANTS } from '../../../utils/label/sampleData';
-import { canvasSize } from '../../../utils/label/model';
+import { canvasSize, normalizeTemplate } from '../../../utils/label/model';
 import { designerReducer, initialDesignerState, isDirty } from './designerState';
 import { useDesignerLayout } from './useDesignerLayout';
 import DesignCanvas from './DesignCanvas';
@@ -48,6 +50,9 @@ export default function LabelDesigner() {
   const [confirm, setConfirm] = useState(null);
   const [editRequest, setEditRequest] = useState(0);
   const [reloadNonce, setReloadNonce] = useState(0);
+  // Saved variants of this stage and which one prints; on-screen edits live in `state`.
+  const [variantSet, setVariantSet] = useState({ variants: [], activeId: null });
+  const [currentVariantId, setCurrentVariantId] = useState(null);
   const canvasAreaRef = useRef(null);
   const dirty = useMemo(() => isDirty(state), [state.template, state.savedJson, state.origin, state.past.length, state.transaction]); // eslint-disable-line react-hooks/exhaustive-deps
   useUnsavedGuard('label-designer', dirty);
@@ -76,12 +81,16 @@ export default function LabelDesigner() {
     let live = true;
     dispatch({ type: 'loading' });
     try { window.localStorage.setItem(STAGE_STORAGE_KEY, stageKey); } catch { /* ignore */ }
-    loadTemplateWithOrigin(stageKey)
-      .then(({ template, origin }) => { if (live) dispatch({ type: 'load', stageKey, template, origin }); })
+    loadTemplateVariants(stageKey)
+      .then(({ variants, activeId, origin }) => {
+        if (!live) return;
+        setVariantSet({ variants, activeId });
+        setCurrentVariantId(activeId);
+        dispatch({ type: 'load', stageKey, template: variants.find((v) => v.id === activeId).template, origin });
+      })
       .catch((error) => {
         if (!live) return;
-        if (error.status === 404) dispatch({ type: 'load', stageKey, template: getDefaultTemplate(stageKey), origin: 'default' });
-        else dispatch({ type: 'loadFailed', error: error.message || 'Could not load this label' });
+        dispatch({ type: 'loadFailed', error: error.message || 'Could not load this label' });
       });
     return () => { live = false; };
   }, [stageKey, reloadNonce]);
@@ -110,12 +119,77 @@ export default function LabelDesigner() {
   };
 
   const [saving, save] = useSubmitLock();
+  const stageName = getStageLabel(stageKey);
+  const currentVariant = variantSet.variants.find((v) => v.id === currentVariantId) || null;
+  const activeVariant = variantSet.variants.find((v) => v.id === variantSet.activeId) || null;
+  const currentInUse = Boolean(currentVariant && currentVariant.id === variantSet.activeId);
+  const withCurrentEdits = () => {
+    const now = new Date().toISOString();
+    return variantSet.variants.map((v) => (v.id === currentVariantId ? { ...v, template: normalizeTemplate(state.template), updatedAt: now } : v));
+  };
+  const persist = async (variants, activeId) => {
+    const result = await saveTemplateVariants(stageKey, { variants, activeId });
+    if (!result.success) { notify('error', result.error || 'Save failed'); return false; }
+    setVariantSet({ variants, activeId });
+    return true;
+  };
+  const openVariant = (variant) => {
+    setCurrentVariantId(variant.id);
+    dispatch({ type: 'load', stageKey, template: variant.template, origin: 'saved' });
+  };
   const handleSave = save(async () => {
-    const result = await saveTemplate(stageKey, state.template);
-    if (!result.success) { notify('error', result.error || 'Save failed'); return; }
-    dispatch({ type: 'markSaved', template: result.template });
-    notify('success', `${getStageLabel(stageKey)} saved. Every new ${getStageLabel(stageKey).toLowerCase()} label prints this design.`);
+    if (!currentVariant) return;
+    const variants = withCurrentEdits();
+    if (!(await persist(variants, variantSet.activeId))) return;
+    dispatch({ type: 'markSaved', template: variants.find((v) => v.id === currentVariantId).template });
+    notify('success', currentInUse
+      ? `${currentVariant.name} saved. Every new ${stageName.toLowerCase()} label prints this design.`
+      : `${currentVariant.name} saved. ${activeVariant?.name || 'Another variant'} is still the one in use; choose Use for printing to switch.`);
   });
+  const handleUseForPrinting = save(async () => {
+    if (!currentVariant || currentInUse) return;
+    const variants = withCurrentEdits();
+    if (!(await persist(variants, currentVariant.id))) return;
+    dispatch({ type: 'markSaved', template: variants.find((v) => v.id === currentVariantId).template });
+    notify('success', `${currentVariant.name} is now in use. Every new ${stageName.toLowerCase()} label prints this design.`);
+  });
+  const uniqueName = (exceptId) => (value) => {
+    const name = String(value || '').trim();
+    if (!name) return 'Enter a name';
+    if (name.length > 60) return 'Keep the name under 60 characters';
+    if (variantSet.variants.some((v) => v.id !== exceptId && v.name.toLowerCase() === name.toLowerCase())) return 'Another variant already has this name';
+    return null;
+  };
+  const handleNewVariant = save(async () => {
+    if (!currentVariant) return;
+    if (variantSet.variants.length >= 20) { notify('error', 'A label can have at most 20 variants'); return; }
+    const name = await askForInput({ title: `New ${stageName.toLowerCase()} variant`, label: 'Name of the new variant. It starts as a copy of the design on screen.', defaultValue: `${currentVariant.name} copy`, confirmLabel: 'Create', validate: uniqueName(null) });
+    if (name === null) return;
+    const variant = { id: newVariantId(), name: name.trim(), template: normalizeTemplate(state.template), updatedAt: new Date().toISOString() };
+    if (!(await persist([...variantSet.variants, variant], variantSet.activeId))) return;
+    openVariant(variant);
+    notify('success', `${variant.name} created from the design on screen. ${activeVariant?.name || 'The current variant'} is still the one in use.`);
+  });
+  const handleRenameVariant = save(async () => {
+    if (!currentVariant) return;
+    const name = await askForInput({ title: 'Rename variant', label: 'Variant name', defaultValue: currentVariant.name, confirmLabel: 'Rename', validate: uniqueName(currentVariant.id) });
+    if (name === null || name.trim() === currentVariant.name) return;
+    const variants = variantSet.variants.map((v) => (v.id === currentVariant.id ? { ...v, name: name.trim() } : v));
+    if (await persist(variants, variantSet.activeId)) notify('success', `Renamed to ${name.trim()}.`);
+  });
+  const deleteCurrentVariant = save(async () => {
+    if (!currentVariant || currentInUse || variantSet.variants.length < 2) return;
+    const variants = variantSet.variants.filter((v) => v.id !== currentVariant.id);
+    if (!(await persist(variants, variantSet.activeId))) return;
+    openVariant(variants.find((v) => v.id === variantSet.activeId));
+    notify('success', `${currentVariant.name} deleted.`);
+  });
+  const changeVariant = (id) => {
+    if (id === currentVariantId) return;
+    if (dirty) { setConfirm({ kind: 'variant', next: id }); return; }
+    const next = variantSet.variants.find((v) => v.id === id);
+    if (next) openVariant(next);
+  };
 
   const handleTestPrint = async () => {
     setPrinting(true);
@@ -189,6 +263,24 @@ export default function LabelDesigner() {
             </select>
             <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           </div>
+          {variantSet.variants.length ? (
+            <div className="flex items-center gap-1">
+              <div className="relative">
+                <select aria-label="Label variant" className="h-9 max-w-[200px] appearance-none rounded-md border border-input bg-background pl-3 pr-8 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={currentVariantId || ''} onChange={(e) => changeVariant(e.target.value)} disabled={state.loading || saving}>
+                  {variantSet.variants.map((v) => <option key={v.id} value={v.id}>{v.id === variantSet.activeId ? `${v.name} · in use` : v.name}</option>)}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              </div>
+              {currentInUse
+                ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400" title="New labels of this stage print this variant"><CheckCircle2 className="h-3 w-3" />In use</span>
+                : <Button size="sm" variant="outline" className="h-8" onClick={handleUseForPrinting} disabled={!canEdit || state.loading || saving} title="Make new labels of this stage print this variant">Use for printing</Button>}
+              <ActionMenu actions={[
+                { label: 'New variant from this design', icon: <CopyPlus className="w-4 h-4" />, onClick: handleNewVariant, disabled: !canEdit || state.loading || saving },
+                { label: 'Rename variant', icon: <Pencil className="w-4 h-4" />, onClick: handleRenameVariant, disabled: !canEdit || state.loading || saving || state.origin !== 'saved' },
+                { label: 'Delete variant', icon: <Trash2 className="w-4 h-4" />, variant: 'destructive', onClick: () => setConfirm({ kind: 'deleteVariant' }), disabled: !canEdit || saving || currentInUse || variantSet.variants.length < 2, disabledReason: currentInUse ? 'The variant in use cannot be deleted' : 'The only variant cannot be deleted' },
+              ]} />
+            </div>
+          ) : null}
           <span className={cn('text-xs whitespace-nowrap', originTone)}>{state.loading ? 'Loading…' : originLabel}</span>
         </div>
         <div className="flex items-center gap-1 ml-auto">
@@ -257,12 +349,21 @@ export default function LabelDesigner() {
       <PrintPreviewDialog open={previewOpen} onOpenChange={setPreviewOpen} template={state.template} stageKey={stageKey} sampleData={sampleData} dpi={printerDpi} onTestPrint={handleTestPrint} printing={printing} />
       <ConfirmDialog
         open={!!confirm}
-        title={confirm?.kind === 'factory' ? 'Load the factory design?' : 'Discard unsaved changes?'}
-        message={confirm?.kind === 'factory' ? 'Your current design is replaced on screen. Nothing changes on the server until you press Save.' : `${getStageLabel(stageKey)} has unsaved changes. Switch stage anyway?`}
-        confirmLabel={confirm?.kind === 'factory' ? 'Load factory design' : 'Discard & switch'}
-        cancelLabel={confirm?.kind === 'factory' ? 'Keep mine' : 'Stay'}
+        title={confirm?.kind === 'factory' ? 'Load the factory design?' : confirm?.kind === 'deleteVariant' ? `Delete ${currentVariant?.name || 'this variant'}?` : 'Discard unsaved changes?'}
+        message={confirm?.kind === 'factory' ? 'Your current design is replaced on screen. Nothing changes on the server until you press Save.'
+          : confirm?.kind === 'deleteVariant' ? 'This variant is removed for everyone. The variant in use is not affected.'
+          : confirm?.kind === 'variant' ? `${currentVariant?.name || 'This variant'} has unsaved changes. Open another variant anyway?`
+          : `${getStageLabel(stageKey)} has unsaved changes. Switch stage anyway?`}
+        confirmLabel={confirm?.kind === 'factory' ? 'Load factory design' : confirm?.kind === 'deleteVariant' ? 'Delete variant' : 'Discard & switch'}
+        cancelLabel={confirm?.kind === 'factory' ? 'Keep mine' : confirm?.kind === 'deleteVariant' ? 'Keep it' : 'Stay'}
         destructive={confirm?.kind !== 'factory'}
-        onConfirm={() => { const c = confirm; setConfirm(null); if (c?.kind === 'factory') applyFactoryDesign(); else if (c?.next) setStageKey(c.next); }}
+        onConfirm={() => {
+          const c = confirm; setConfirm(null);
+          if (c?.kind === 'factory') applyFactoryDesign();
+          else if (c?.kind === 'deleteVariant') deleteCurrentVariant();
+          else if (c?.kind === 'variant') { const next = variantSet.variants.find((v) => v.id === c.next); if (next) openVariant(next); }
+          else if (c?.next) setStageKey(c.next);
+        }}
         onCancel={() => setConfirm(null)}
       />
     </div>

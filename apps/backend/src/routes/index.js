@@ -7,7 +7,7 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { parse } from 'csv-parse/sync';
 import prisma from '../lib/prisma.js';
-import { requireAuth, requireRole, requirePermission, requireEditPermission, requireDeletePermission, requireStickerTemplateRead } from '../middleware/auth.js';
+import { requireAuth, requireRole, requirePermission, requireEditPermission, requireDeletePermission, requireStickerTemplateRead, isStickerTemplateStage } from '../middleware/auth.js';
 import whatsapp from '../../whatsapp/service.js';
 import telegram from '../../telegram/service.js';
 import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
@@ -6609,6 +6609,58 @@ router.get('/api/sticker_templates/:stageKey', requireStickerTemplateRead, async
     const template = await prisma.stickerTemplate.findUnique({ where: { stageKey } });
     if (!template) return res.status(404).json({ error: 'Template not found' });
     res.json({ template });
+  } catch (err) {
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// Variants of one stage's label: several named designs, one of them in use. The design
+// in use is also written to `v2:<stage>` in the same transaction, so every print path
+// (web, desktop, older desktop builds) keeps reading exactly one live design.
+const LABEL_VARIANTS_MAX = 20;
+const LABEL_VARIANTS_BYTES_MAX = 8 * 1024 * 1024;
+router.put('/api/sticker_templates/:stageKey/variants', requireEditPermission('settings'), async (req, res) => {
+  try {
+    const actorUserId = req.user?.id;
+    const stage = String(req.params.stageKey || '').trim();
+    if (!isStickerTemplateStage(stage)) return res.status(404).json({ error: 'Unknown label stage' });
+    const body = req.body || {};
+    const variants = Array.isArray(body.variants) ? body.variants : null;
+    if (!variants || variants.length < 1 || variants.length > LABEL_VARIANTS_MAX) return res.status(400).json({ error: `Keep between 1 and ${LABEL_VARIANTS_MAX} variants` });
+    if (JSON.stringify(variants).length > LABEL_VARIANTS_BYTES_MAX) return res.status(400).json({ error: 'Variants are too large; use smaller images' });
+    const seenIds = new Set();
+    const seenNames = new Set();
+    const clean = [];
+    for (const variant of variants) {
+      const id = typeof variant?.id === 'string' ? variant.id.trim() : '';
+      const name = typeof variant?.name === 'string' ? variant.name.trim().slice(0, 60) : '';
+      const template = variant?.template;
+      if (!/^[a-z0-9-]{1,40}$/.test(id) || seenIds.has(id)) return res.status(400).json({ error: 'Each variant needs a unique id' });
+      if (!name || seenNames.has(name.toLowerCase())) return res.status(400).json({ error: 'Each variant needs a unique name' });
+      if (!template || typeof template !== 'object' || Number(template.version) !== 2 || !Array.isArray(template.elements) || !template.media || typeof template.media !== 'object') {
+        return res.status(400).json({ error: `Variant "${name}" is not a version 2 label design` });
+      }
+      seenIds.add(id);
+      seenNames.add(name.toLowerCase());
+      clean.push({ id, name, template, updatedAt: typeof variant.updatedAt === 'string' ? variant.updatedAt : new Date().toISOString() });
+    }
+    const active = clean.find((variant) => variant.id === body.activeId);
+    if (!active) return res.status(400).json({ error: 'Choose which variant is in use' });
+    const result = await prisma.$transaction(async (tx) => {
+      const variantsRow = await tx.stickerTemplate.upsert({
+        where: { stageKey: `v2v:${stage}` },
+        update: { dimensions: { kind: 'variants', count: clean.length }, content: { version: 1, activeId: active.id, variants: clean }, ...actorUpdateFields(actorUserId) },
+        create: { stageKey: `v2v:${stage}`, dimensions: { kind: 'variants', count: clean.length }, content: { version: 1, activeId: active.id, variants: clean }, ...actorCreateFields(actorUserId) },
+      });
+      const live = await tx.stickerTemplate.upsert({
+        where: { stageKey: `v2:${stage}` },
+        update: { dimensions: { version: 2, ...active.template.media }, content: active.template, ...actorUpdateFields(actorUserId) },
+        create: { stageKey: `v2:${stage}`, dimensions: { version: 2, ...active.template.media }, content: active.template, ...actorCreateFields(actorUserId) },
+      });
+      return { variantsRow, live };
+    });
+    await logCrudWithActor(req, { entityType: 'StickerTemplate', entityId: result.live.id, action: 'upsert', payload: { stageKey: `v2:${stage}`, variants: clean.map((v) => v.name), activeVariant: active.name } });
+    res.json({ variants: result.variantsRow, template: result.live });
   } catch (err) {
     res.status(500).json({ error: err.message || String(err) });
   }

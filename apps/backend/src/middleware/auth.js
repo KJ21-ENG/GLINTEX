@@ -113,10 +113,13 @@ const STICKER_TEMPLATE_PERMISSIONS = {
   coning_receive_small: 'receive.coning',
 };
 
+export const isStickerTemplateStage = (stageKey) => Object.prototype.hasOwnProperty.call(STICKER_TEMPLATE_PERMISSIONS, stageKey);
+
 export function requireStickerTemplateRead(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'unauthorized' });
-  // Version 2 designs are stored as `v2:<stage>`; the stage decides the permission.
-  const stageKey = String(req.params.stageKey || '').trim().replace(/^v2:/, '');
+  // Version 2 designs are stored as `v2:<stage>` and their variants as `v2v:<stage>`;
+  // the stage decides the permission.
+  const stageKey = String(req.params.stageKey || '').trim().replace(/^v2v?:/, '');
   if (!Object.prototype.hasOwnProperty.call(STICKER_TEMPLATE_PERMISSIONS, stageKey)) {
     return res.status(404).json({ error: 'Template not found' });
   }

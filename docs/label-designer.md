@@ -105,3 +105,17 @@ selection handles and guides on top.
   and re-encoded in the browser to fit the 150 KB stored limit (`utils/label/imageTools.js`).
   "Use company logo" takes the brand logo or favicon from Settings. "Make black and white"
   turns the image into pure black on transparent so it prints crisply; undo restores it.
+
+## Variants
+
+- Each stage can hold up to 20 named variants (picker next to the stage). Exactly one is
+  **in use**: every new label of that stage prints it, in the web app and the desktop app.
+- **New variant from this design** copies what is on screen (including unsaved edits) into a
+  new variant and opens it; the variant in use does not change. **Save** stores the open
+  variant. **Use for printing** stores it and makes it the one in use. Rename and Delete
+  live in the ⋮ menu; the variant in use and the only variant cannot be deleted.
+- Storage: `v2v:<stage>` holds `{ version: 1, activeId, variants: [{ id, name, template }] }`;
+  the variant in use is also written to `v2:<stage>` in the same transaction
+  (`PUT /api/sticker_templates/:stage/variants`), so every print path keeps reading one live
+  design and older desktop builds are unaffected. A stage without a variants record shows its
+  current design as the single variant "Standard".

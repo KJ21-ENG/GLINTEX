@@ -33,6 +33,8 @@ export async function fixture(rolePermissions = { 'receive.cutter': 2 }, roleKey
         templates.set(where.stageKey, template); return template;
       },
     },
+    // Variants are saved in one transaction; the fixture's writes are all-or-nothing per call.
+    $transaction: async (work) => work(prisma),
     user: { findUnique: async ({ where }) => users.find(u => u.username === where.username), update: async () => users[0] },
     userSession: {
       create: async ({ data }) => { const s = { id: `session-${sessions.length}`, ...data, user: users[0] }; sessions.push(s); return s; },

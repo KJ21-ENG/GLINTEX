@@ -78,7 +78,7 @@ async function main() {
   }
   if (!result?.done) throw Error("Real renderer label test timed out");
   const report = JSON.parse(result.text);
-  if (report.completed !== 9 || report.results.some((r) => r.version !== 2 || r.fonts < 6 || r.warnings.length))
+  if (report.completed !== 10 || report.results.some((r) => r.version !== 2 || r.fonts < 6 || r.warnings.length))
     throw Error("Version 2 artifacts with embedded fonts and no layout warnings expected: " + result.text);
   let panel = false;
   for (let attempt = 0; attempt < 100 && !panel; attempt++) {
@@ -175,7 +175,7 @@ async function main() {
     if (!outcome.success) throw Error(`Printer module failed for ${r.stage}: ${outcome.error}`);
     printed.push(r.stage);
   }
-  if (printed.length !== 9) throw Error("Expected nine stages through the printer module");
+  if (printed.length !== 10) throw Error("Expected ten stages through the printer module");
   await win.webContents.executeJavaScript(
     `document.querySelector('#editor').scrollIntoView({block:'start'})`,
   );
@@ -204,7 +204,7 @@ async function main() {
     ),
   );
   console.log(
-    "VISUAL_QA_PASS: nine version 2 label documents built with embedded fonts in real Chromium; designer and workstation fixture states present",
+    "VISUAL_QA_PASS: ten version 2 label documents built with embedded fonts in real Chromium; designer and workstation fixture states present",
   );
 }
 main()

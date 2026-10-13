@@ -82,8 +82,9 @@ export function Toggle({ checked, onChange, label, disabled }) {
   return (
     <label className={cn('flex items-center gap-2 text-sm select-none', disabled && 'opacity-50')}>
       <button type="button" role="switch" aria-checked={checked} disabled={disabled} onClick={() => onChange(!checked)}
-        className={cn('relative h-5 w-9 rounded-full transition-colors', checked ? 'bg-primary' : 'bg-muted-foreground/30')}>
-        <span className={cn('absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform', checked ? 'translate-x-4' : 'translate-x-0.5')} />
+        className={cn('relative h-5 w-9 shrink-0 rounded-full transition-colors', checked ? 'bg-primary' : 'bg-muted-foreground/30')}>
+        {/* Pinned to the left edge: without it the knob starts from the button's centred content. */}
+        <span className={cn('absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform', checked ? 'translate-x-[1.125rem]' : 'translate-x-0.5')} />
       </button>
       <span>{label}</span>
     </label>

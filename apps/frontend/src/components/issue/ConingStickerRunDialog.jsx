@@ -1,0 +1,314 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Minus, Plus, Printer, RefreshCw } from 'lucide-react';
+import { Button } from '../ui';
+import { Dialog, DialogContent } from '../ui/Dialog';
+import LabelArtifactPreview from '../labels/LabelArtifactPreview';
+import { getConingStickerRun, markConingStickersPrinted } from '../../api/client';
+import { LABEL_STAGE_KEYS, buildPrintableArtifact, loadTemplate, printStageTemplatesBatch } from '../../utils/labelPrint';
+import { labelsPerPage } from '../../utils/label/model';
+import { DEFAULT_SPARE, buildStickerSlots, compareRunRows, isPending, sheetCount, shiftGroupKey, suggestedCopies } from '../../utils/coningStickerRun';
+
+const STAGE = LABEL_STAGE_KEYS.CONING_ISSUE_SHEET;
+const formatDate = (iso) => (iso ? iso.split('-').reverse().join('/') : '');
+const formatTime = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+const rangeText = ({ dateFrom, dateTo, fromShifts, toShifts }) => (
+  dateFrom === dateTo
+    ? `${formatDate(dateFrom)} (${[...new Set([...fromShifts, ...toShifts])].join(', ')})`
+    : `${formatDate(dateFrom)} (${fromShifts.join(', ')}) → ${formatDate(dateTo)} (${toShifts.join(', ')})`
+);
+
+function StatusPill({ row }) {
+  if (row.status === 'not_printed') return <span className="whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Not printed</span>;
+  if (row.status === 'changed') {
+    const grew = row.crates > row.printedCrates;
+    return <span className="whitespace-nowrap rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-800">{grew ? `+${row.crates - row.printedCrates} crates since print` : 'Changed since print'}</span>;
+  }
+  return <span className="whitespace-nowrap rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800">Printed {formatTime(row.printedAt)} ×{row.printedCopies}</span>;
+}
+
+export default function ConingStickerRunDialog({ open, onOpenChange, onBack, range, canMarkPrinted }) {
+  const [rows, setRows] = useState([]);
+  const [selected, setSelected] = useState(() => new Set());
+  const [copyOverrides, setCopyOverrides] = useState({});
+  const [spare, setSpare] = useState(DEFAULT_SPARE);
+  const [showAll, setShowAll] = useState(false);
+  const [startAt, setStartAt] = useState(1);
+  const [newSheetPerShift, setNewSheetPerShift] = useState(true);
+  const [template, setTemplate] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [truncated, setTruncated] = useState(false);
+  const [view, setView] = useState('list');
+  const [previewPage, setPreviewPage] = useState(0);
+  const [artifact, setArtifact] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmPrint, setConfirmPrint] = useState(null);
+  const [notice, setNotice] = useState('');
+  const loadSeq = useRef(0);
+
+  const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    setLoading(true);
+    setError('');
+    try {
+      const [run, tpl] = await Promise.all([getConingStickerRun(range), loadTemplate(STAGE)]);
+      if (seq !== loadSeq.current) return;
+      const list = (run.rows || []).slice().sort(compareRunRows);
+      setRows(list);
+      setTruncated(Boolean(run.truncated));
+      setTemplate(tpl);
+      setSelected(new Set(list.filter(isPending).map((row) => row.id)));
+      setCopyOverrides({});
+    } catch (err) {
+      if (seq === loadSeq.current) setError(err.message || 'Unable to load coning stickers');
+    } finally {
+      if (seq === loadSeq.current) setLoading(false);
+    }
+  }, [range]);
+
+  useEffect(() => {
+    if (!open) return;
+    setView('list');
+    setConfirmPrint(null);
+    setNotice('');
+    void load();
+  }, [open, load]);
+
+  const perPage = template ? labelsPerPage(template.media) : 21;
+  const copiesOf = useCallback((row) => copyOverrides[row.id] ?? suggestedCopies(row, spare), [copyOverrides, spare]);
+  const visibleRows = useMemo(() => rows.filter((row) => showAll || isPending(row)), [rows, showAll]);
+  const selectedRows = useMemo(() => rows.filter((row) => selected.has(row.id)), [rows, selected]);
+  const slots = useMemo(
+    () => buildStickerSlots(selectedRows, { copiesOf, startAt, perPage, newSheetPerShift }),
+    [selectedRows, copiesOf, startAt, perPage, newSheetPerShift],
+  );
+  const totalStickers = slots.filter(Boolean).length;
+  const sheets = sheetCount(slots, perPage);
+  const pendingCount = rows.filter(isPending).length;
+  const isSheetTemplate = template?.media?.kind === 'sheet';
+
+  const toggle = (id, value) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (value) next.add(id); else next.delete(id);
+    return next;
+  });
+  const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((row) => selected.has(row.id));
+  const toggleAll = (value) => setSelected((prev) => {
+    const next = new Set(prev);
+    visibleRows.forEach((row) => (value ? next.add(row.id) : next.delete(row.id)));
+    return next;
+  });
+
+  const buildArtifact = async () => buildPrintableArtifact(template, slots, { stageKey: STAGE, copies: 1, dpi: 300 });
+
+  const openPreview = async () => {
+    if (!totalStickers) { setNotice('Select at least one barcode.'); return; }
+    setBusy(true);
+    setNotice('');
+    try {
+      setArtifact(await buildArtifact());
+      setPreviewPage(0);
+      setView('preview');
+    } catch (err) {
+      setNotice(err.message || 'Unable to build the preview');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const print = async () => {
+    if (!totalStickers) { setNotice('Select at least one barcode.'); return; }
+    if (!isSheetTemplate) { setNotice('The "Issue to coning · A4 sheet" label is not set to an A4 sheet. Fix it in Settings > Label Designer.'); return; }
+    setBusy(true);
+    setNotice('');
+    const entries = selectedRows.map((row) => ({ id: row.id, copies: copiesOf(row), revision: row.revision }));
+    try {
+      await printStageTemplatesBatch(STAGE, slots, { template, copies: 1 });
+      // The print dialog cannot tell whether the sheets came out, so the operator confirms.
+      setConfirmPrint({ entries, stickers: totalStickers, sheets });
+    } catch (err) {
+      setNotice(err.message || 'Stickers could not be printed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const markPrinted = async () => {
+    if (!confirmPrint) return;
+    setBusy(true);
+    try {
+      await markConingStickersPrinted(confirmPrint.entries);
+      setNotice(`${confirmPrint.stickers} stickers marked as printed.`);
+      setConfirmPrint(null);
+      setView('list');
+      await load();
+    } catch (err) {
+      setNotice(err.message || 'Unable to mark the stickers as printed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open || !range) return null;
+  let lastGroup = null;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent title="Coning issue stickers" onOpenChange={onOpenChange} className="max-w-6xl max-h-[92vh] overflow-y-auto">
+        <div className="space-y-3 text-left">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Button variant="ghost" size="sm" onClick={view === 'preview' ? () => setView('list') : onBack} disabled={Boolean(confirmPrint)} className="gap-1">
+              <ArrowLeft className="h-4 w-4" /> {view === 'preview' ? 'Back to list' : 'Change dates'}
+            </Button>
+            <span className="text-muted-foreground">{rangeText(range)}</span>
+            <Button variant="ghost" size="sm" onClick={() => { setNotice(''); void load(); }} disabled={loading || busy || Boolean(confirmPrint)} className="ml-auto gap-1">
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Reload
+            </Button>
+          </div>
+
+          {error && <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+          {!error && template && !isSheetTemplate && (
+            <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              The “Issue to coning · A4 sheet” label uses roll paper. In Settings › Label Designer, choose the A4 sheet paper and save it.
+            </p>
+          )}
+          {truncated && <p className="text-sm text-amber-700">Showing the first 500 barcodes. Choose a shorter range to see the rest.</p>}
+
+          {confirmPrint ? (
+            <div className="rounded-lg border p-5 space-y-3">
+              <p className="font-semibold">Did all {confirmPrint.sheets} {confirmPrint.sheets === 1 ? 'sheet' : 'sheets'} print correctly?</p>
+              <p className="text-sm text-muted-foreground">
+                Marking them printed moves these {confirmPrint.entries.length} barcodes out of the “Not printed” list.
+                If the printer jammed or you cancelled, leave them unprinted and print again.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={markPrinted} disabled={busy || !canMarkPrinted}>Yes, mark as printed</Button>
+                <Button variant="outline" onClick={() => setConfirmPrint(null)} disabled={busy}>No, leave unprinted</Button>
+              </div>
+            </div>
+          ) : view === 'preview' && artifact ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-center gap-2 text-sm">
+                <Button variant="outline" size="sm" onClick={() => setPreviewPage((p) => Math.max(0, p - 1))} disabled={previewPage === 0} aria-label="Previous sheet"><ChevronLeft className="h-4 w-4" /></Button>
+                <span>Sheet {previewPage + 1} of {artifact.pages.length}</span>
+                <Button variant="outline" size="sm" onClick={() => setPreviewPage((p) => Math.min(artifact.pages.length - 1, p + 1))} disabled={previewPage >= artifact.pages.length - 1} aria-label="Next sheet"><ChevronRight className="h-4 w-4" /></Button>
+              </div>
+              <div className="flex justify-center rounded-lg bg-muted/40 p-3">
+                <LabelArtifactPreview artifact={artifact} pageIndex={previewPage} maxWidthPx={460} />
+              </div>
+              {artifact.warnings?.length > 0 && <p className="text-xs text-amber-700">Some text was shrunk to fit: {artifact.warnings.slice(0, 3).join('; ')}</p>}
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border bg-muted/20 px-3 py-2 text-sm">
+                <span className="flex items-center gap-2">
+                  Spare per barcode
+                  <span className="inline-flex items-center rounded-md border bg-background">
+                    <button type="button" className="px-2 py-1" onClick={() => setSpare((v) => Math.max(0, v - 1))} aria-label="Fewer spare stickers"><Minus className="h-3.5 w-3.5" /></button>
+                    <b className="w-6 text-center tabular-nums">{spare}</b>
+                    <button type="button" className="px-2 py-1" onClick={() => setSpare((v) => Math.min(10, v + 1))} aria-label="More spare stickers"><Plus className="h-3.5 w-3.5" /></button>
+                  </span>
+                  <span className="text-xs text-muted-foreground">copies = crates + spare</span>
+                </span>
+                <span className="inline-flex overflow-hidden rounded-md border bg-background">
+                  <button type="button" onClick={() => setShowAll(false)} className={`px-3 py-1 ${!showAll ? 'bg-foreground text-background' : ''}`}>Not printed ({pendingCount})</button>
+                  <button type="button" onClick={() => setShowAll(true)} className={`px-3 py-1 ${showAll ? 'bg-foreground text-background' : ''}`}>All ({rows.length})</button>
+                </span>
+                <label className="flex items-center gap-2" htmlFor="coning-sticker-start">
+                  Start at label
+                  <input id="coning-sticker-start" type="number" min="1" max={perPage} value={startAt}
+                    onChange={(e) => setStartAt(Math.min(perPage, Math.max(1, Number(e.target.value) || 1)))}
+                    className="w-16 rounded-md border bg-background px-2 py-1 text-center tabular-nums" />
+                  <span className="text-xs text-muted-foreground">to finish a part-used sheet</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={newSheetPerShift} onChange={(e) => setNewSheetPerShift(e.target.checked)} className="h-4 w-4" />
+                  Each shift on its own sheet
+                </label>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <div className="max-h-[52vh] overflow-auto rounded-lg border">
+                  <table className="w-full min-w-[820px] text-sm">
+                    <thead className="sticky top-0 z-10 bg-background">
+                      <tr className="border-b text-left text-xs text-muted-foreground">
+                        <th className="w-8 p-2"><input type="checkbox" aria-label="Select all shown" checked={allVisibleSelected} onChange={(e) => toggleAll(e.target.checked)} className="h-4 w-4" /></th>
+                        <th className="p-2">Worker</th>
+                        <th className="p-2">Machine</th>
+                        <th className="p-2">Barcode</th>
+                        <th className="p-2">Item (cut) · twist</th>
+                        <th className="p-2">Cone</th>
+                        <th className="p-2 text-center">Crates</th>
+                        <th className="p-2 text-center">Copies</th>
+                        <th className="p-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loading && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Loading…</td></tr>}
+                      {!loading && visibleRows.length === 0 && (
+                        <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">
+                          {rows.length ? 'Every barcode in this range is printed. Choose All to reprint one.' : 'No coning issues in this range.'}
+                        </td></tr>
+                      )}
+                      {!loading && visibleRows.map((row) => {
+                        const group = shiftGroupKey(row);
+                        const header = group !== lastGroup;
+                        lastGroup = group;
+                        const night = row.shift === 'Night';
+                        return (
+                          <React.Fragment key={row.id}>
+                            {header && (
+                              <tr className={night ? 'bg-slate-900 text-white' : 'bg-muted'}>
+                                <td colSpan={9} className="px-2 py-1.5 text-xs font-bold tracking-wide">{(row.shift || 'No shift').toUpperCase()} SHIFT · {formatDate(row.date)}</td>
+                              </tr>
+                            )}
+                            <tr className={`border-b last:border-0 hover:bg-muted/40 ${!selected.has(row.id) ? 'text-muted-foreground' : ''}`}>
+                              <td className="p-2"><input type="checkbox" aria-label={`Select ${row.barcode}`} checked={selected.has(row.id)} onChange={(e) => toggle(row.id, e.target.checked)} className="h-4 w-4" /></td>
+                              <td className="p-2 font-semibold">{row.operatorName || '—'}</td>
+                              <td className="p-2">{row.machineName || '—'}</td>
+                              <td className="p-2 font-mono text-xs whitespace-nowrap">{row.barcode}</td>
+                              <td className="p-2">{row.itemName}{row.cut ? ` (${row.cut})` : ''}{row.twist ? ` · ${row.twist}` : ''}</td>
+                              <td className="p-2">{row.coneType || '—'}</td>
+                              <td className="p-2 text-center tabular-nums">{row.crates}</td>
+                              <td className="p-2 text-center">
+                                <input type="number" min="1" max="100" aria-label={`Copies for ${row.barcode}`} value={copiesOf(row)}
+                                  onChange={(e) => setCopyOverrides((prev) => ({ ...prev, [row.id]: Math.min(100, Math.max(1, Number(e.target.value) || 1)) }))}
+                                  className="w-16 rounded-md border bg-background px-1 py-0.5 text-center tabular-nums" />
+                              </td>
+                              <td className="p-2"><StatusPill row={row} /></td>
+                            </tr>
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="space-y-2 rounded-lg border p-3 text-sm">
+                  <div className="text-xs font-semibold text-muted-foreground">This print</div>
+                  <div className="text-3xl font-extrabold tabular-nums">{totalStickers}</div>
+                  <div className="text-xs text-muted-foreground">stickers</div>
+                  <div className="flex justify-between border-t pt-2"><span>Barcodes</span><b className="tabular-nums">{selectedRows.length}</b></div>
+                  <div className="flex justify-between"><span>A4 sheets ({perPage} per sheet)</span><b className="tabular-nums">{sheets}</b></div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {notice && <p className="text-sm text-muted-foreground" role="status">{notice}</p>}
+
+          {!confirmPrint && (
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+              {view === 'list' && <Button variant="outline" onClick={openPreview} disabled={busy || loading || !template}>Preview sheets</Button>}
+              <Button onClick={print} disabled={busy || loading || !template || !canMarkPrinted} className="gap-2">
+                <Printer className="h-4 w-4" /> {busy ? 'Preparing…' : `Print ${totalStickers} stickers`}
+              </Button>
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

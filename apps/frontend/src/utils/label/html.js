@@ -131,18 +131,28 @@ export const renderLabelWrapper = (media, inner, position) => {
   return `<div class="lbw" style="left:${mm(position.x)};top:${mm(position.y)};width:${mm(media.widthMm)};height:${mm(media.heightMm)}"><div class="lb" style="width:${mm(canvas.widthMm)};height:${mm(canvas.heightMm)}${transform ? `;transform:${transform}` : ''}">${inner}</div></div>`;
 };
 
-export const pageGeometry = (media) => ({
-  widthMm: media.rollWidthMm,
-  heightMm: media.heightMm + media.marginTopMm,
-  columnPosition: (column) => ({
-    x: media.marginLeftMm + media.offsetXMm + column * (media.widthMm + media.columnGapMm),
-    y: media.marginTopMm + media.offsetYMm,
-  }),
-});
+// A roll page is one row of labels; a sheet page is a fixed page of rows × columns, filled
+// left to right, then top to bottom. Slot index counts labels on the page in that order.
+export const pageGeometry = (media) => {
+  const sheet = media.kind === 'sheet';
+  const columns = Math.max(1, media.columns);
+  return {
+    widthMm: sheet ? media.pageWidthMm : media.rollWidthMm,
+    heightMm: sheet ? media.pageHeightMm : media.heightMm + media.marginTopMm,
+    columnPosition: (slot) => {
+      const column = slot % columns;
+      const row = sheet ? Math.floor(slot / columns) : 0;
+      return {
+        x: media.marginLeftMm + media.offsetXMm + column * (media.widthMm + media.columnGapMm),
+        y: media.marginTopMm + media.offsetYMm + row * (media.heightMm + media.rowGapMm),
+      };
+    },
+  };
+};
 
 export const renderPage = (media, labelInners) => {
   const geometry = pageGeometry(media);
-  const columns = labelInners.map((inner, column) => (inner == null ? '' : renderLabelWrapper(media, inner, geometry.columnPosition(column)))).join('');
+  const columns = labelInners.map((inner, slot) => (inner == null ? '' : renderLabelWrapper(media, inner, geometry.columnPosition(slot)))).join('');
   return `<div class="pg" style="width:${mm(geometry.widthMm)};height:${mm(geometry.heightMm)}">${columns}</div>`;
 };
 

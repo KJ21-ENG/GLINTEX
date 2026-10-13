@@ -1,21 +1,52 @@
 import React from 'react';
 import { Field, NumberField, SelectField, Segmented, Section } from './fields';
-import { usedRollWidthMm, LIMITS } from '../../../utils/label/model';
+import { usedRollWidthMm, usedSheetHeightMm, A4_SHEET_MEDIA, LIMITS } from '../../../utils/label/model';
 
 const PRESETS = [
-  { key: '75x125', label: '75 × 125 mm roll · landscape', media: { widthMm: 75, heightMm: 125, orientation: 'landscape', rollWidthMm: 75, columns: 1, columnGapMm: 2, rowGapMm: 2, marginLeftMm: 0, marginTopMm: 0 } },
-  { key: '50x25x2', label: '50 × 25 mm · 2 across', media: { widthMm: 50, heightMm: 25, orientation: 'portrait', rollWidthMm: 105, columns: 2, columnGapMm: 2, rowGapMm: 2, marginLeftMm: 1.5, marginTopMm: 0 } },
-  { key: '100x50', label: '100 × 50 mm roll', media: { widthMm: 100, heightMm: 50, orientation: 'portrait', rollWidthMm: 100, columns: 1, columnGapMm: 2, rowGapMm: 2, marginLeftMm: 0, marginTopMm: 0 } },
+  { key: '75x125', label: '75 × 125 mm roll · landscape', media: { kind: 'roll', columnMode: 'repeat', widthMm: 75, heightMm: 125, orientation: 'landscape', rollWidthMm: 75, columns: 1, columnGapMm: 2, rowGapMm: 2, marginLeftMm: 0, marginTopMm: 0 } },
+  { key: '50x25x2', label: '50 × 25 mm · 2 across', media: { kind: 'roll', columnMode: 'repeat', widthMm: 50, heightMm: 25, orientation: 'portrait', rollWidthMm: 105, columns: 2, columnGapMm: 2, rowGapMm: 2, marginLeftMm: 1.5, marginTopMm: 0 } },
+  { key: '100x50', label: '100 × 50 mm roll', media: { kind: 'roll', columnMode: 'repeat', widthMm: 100, heightMm: 50, orientation: 'portrait', rollWidthMm: 100, columns: 1, columnGapMm: 2, rowGapMm: 2, marginLeftMm: 0, marginTopMm: 0 } },
+];
+const SHEET_PRESETS = [
+  { key: 'a4-65x40', label: 'A4 · 3 × 7 · 65 × 40 mm', media: A4_SHEET_MEDIA },
 ];
 
 export default function MediaPanel({ template, dispatch, canEdit }) {
   const { media } = template;
   const disabled = !canEdit;
   const set = (patch) => dispatch({ type: 'updateMedia', patch });
+  const sheet = media.kind === 'sheet';
   const used = usedRollWidthMm(media);
   const overRoll = used > media.rollWidthMm + 0.001;
+  const usedHeight = usedSheetHeightMm(media);
+  const overSheet = used > media.pageWidthMm + 0.001 || usedHeight > media.pageHeightMm + 0.001;
   return (
     <>
+      <Section title="Paper" defaultOpen>
+        <Field label="Paper type" hint={sheet ? 'Office printer: the system print dialog opens so you can pick it.' : "This workstation's label printer."}>
+          <Segmented value={sheet ? 'sheet' : 'roll'} disabled={disabled} onChange={(v) => set(v === 'sheet' ? A4_SHEET_MEDIA : { ...PRESETS[0].media })} options={[{ value: 'roll', label: 'Label roll' }, { value: 'sheet', label: 'A4 sheet' }]} />
+        </Field>
+      </Section>
+      {sheet ? (
+        <Section title="Size & sheet" defaultOpen>
+          <Field label="Preset">
+            <SelectField value="" disabled={disabled} onChange={(key) => { const p = SHEET_PRESETS.find((x) => x.key === key); if (p) set(p.media); }} options={[{ value: '', label: 'Apply a preset…' }, ...SHEET_PRESETS.map((p) => ({ value: p.key, label: p.label }))]} />
+          </Field>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Label width"><NumberField value={media.widthMm} suffix="mm" step={0.5} min={LIMITS.mediaMinMm} max={LIMITS.mediaMaxMm} disabled={disabled} onChange={(v) => set({ widthMm: v })} /></Field>
+            <Field label="Label height"><NumberField value={media.heightMm} suffix="mm" step={0.5} min={LIMITS.mediaMinMm} max={LIMITS.mediaMaxMm} disabled={disabled} onChange={(v) => set({ heightMm: v })} /></Field>
+            <Field label="Sheet width"><NumberField value={media.pageWidthMm} suffix="mm" step={0.5} min={LIMITS.mediaMinMm} max={LIMITS.mediaMaxMm} disabled={disabled} onChange={(v) => set({ pageWidthMm: v, rollWidthMm: v })} /></Field>
+            <Field label="Sheet height"><NumberField value={media.pageHeightMm} suffix="mm" step={0.5} min={LIMITS.mediaMinMm} max={LIMITS.mediaMaxMm} disabled={disabled} onChange={(v) => set({ pageHeightMm: v })} /></Field>
+            <Field label="Labels across"><NumberField value={media.columns} step={1} min={1} max={LIMITS.columnsMax} disabled={disabled} onChange={(v) => set({ columns: Math.round(v) })} /></Field>
+            <Field label="Labels down"><NumberField value={media.rows} step={1} min={1} max={LIMITS.rowsMax} disabled={disabled} onChange={(v) => set({ rows: Math.round(v) })} /></Field>
+            <Field label="Gap across"><NumberField value={media.columnGapMm} suffix="mm" step={0.5} min={0} max={100} disabled={disabled} onChange={(v) => set({ columnGapMm: v })} /></Field>
+            <Field label="Gap down"><NumberField value={media.rowGapMm} suffix="mm" step={0.5} min={0} max={100} disabled={disabled} onChange={(v) => set({ rowGapMm: v })} /></Field>
+          </div>
+          {overSheet
+            ? <p className="text-xs text-red-600">Labels, gaps and margins need {used} × {usedHeight} mm but the sheet is {media.pageWidthMm} × {media.pageHeightMm} mm.</p>
+            : <p className="text-[11px] text-muted-foreground">{media.columns * media.rows} labels per sheet, filled left to right, then down. Uses {used} × {usedHeight} mm of the sheet.</p>}
+        </Section>
+      ) : (
       <Section title="Size & roll" defaultOpen>
         <Field label="Preset">
           <SelectField value="" disabled={disabled} onChange={(key) => { const p = PRESETS.find((x) => x.key === key); if (p) set(p.media); }} options={[{ value: '', label: 'Apply a preset…' }, ...PRESETS.map((p) => ({ value: p.key, label: p.label }))]} />
@@ -38,6 +69,7 @@ export default function MediaPanel({ template, dispatch, canEdit }) {
           </Field>
         ) : null}
       </Section>
+      )}
       <Section title="Margins & calibration" defaultOpen={false}>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Left margin"><NumberField value={media.marginLeftMm} suffix="mm" step={0.5} min={0} max={100} disabled={disabled} onChange={(v) => set({ marginLeftMm: v })} /></Field>
@@ -47,9 +79,9 @@ export default function MediaPanel({ template, dispatch, canEdit }) {
         </div>
         <p className="text-[11px] text-muted-foreground">Nudges shift the whole artwork on the page to match the printer after a test print.</p>
       </Section>
-      <Section title="Copies" defaultOpen={false}>
+      {sheet ? null : <Section title="Copies" defaultOpen={false}>
         <Field label="Copies per transaction"><NumberField value={template.copies} step={1} min={1} max={LIMITS.copiesMax} disabled={disabled} onChange={(v) => dispatch({ type: 'setCopies', copies: Math.round(v) })} /></Field>
-      </Section>
+      </Section>}
     </>
   );
 }

@@ -35,6 +35,7 @@ import { assertProductionRowsEditable, assertIssueEditable, lockSettlementLinesE
 import { perfLog, isPerfLogEnabled } from '../lib/perfLog.js';
 import { computeIssueBalancesBatch } from '../services/issueBalances.js';
 import { batchTwistId, commitConingSupply, coningBatchKey, findConingBatchCandidates, lockConingBatch, resolveConingBatchMaterial } from '../services/coningBatches.js';
+import { ConingStickerRunError, listConingStickerRun, markConingStickersPrinted } from '../services/coningStickerRun.js';
 import { correctConingIssue, coningDeliveryCorrectionLock, effectiveConingSupply } from '../services/coningCorrections.js';
 import { createCutterReceiveBatch, CutterReceiveError } from '../services/cutterReceive.js';
 import { applyTelegramCronSchedule, runPrimarySequence, runReminderSequence } from '../utils/telegramScheduler.js';
@@ -10338,6 +10339,29 @@ router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('
   } catch (err) {
     console.error('Failed to lookup coning source row', err);
     res.status(500).json({ outcome: 'not_found', error: err.message || 'Failed to lookup barcode' });
+  }
+});
+
+router.get('/api/issue_to_coning_machine/sticker_run', requirePermission('issue.coning', PERM_READ), async (req, res) => {
+  try {
+    const { dateFrom, dateTo, fromShifts, toShifts } = req.query || {};
+    res.json(await listConingStickerRun(prisma, { dateFrom, dateTo, fromShifts, toShifts }));
+  } catch (err) {
+    if (err instanceof ConingStickerRunError) return res.status(err.statusCode).json({ error: err.message });
+    console.error('Failed to load coning sticker run', err);
+    res.status(500).json({ error: 'Unable to load coning stickers' });
+  }
+});
+
+router.post('/api/issue_to_coning_machine/sticker_run/printed', requirePermission('issue.coning', PERM_WRITE), async (req, res) => {
+  try {
+    const result = await markConingStickersPrinted(prisma, req.body?.entries, req.user?.id);
+    await logCrudWithActor(req, { entityType: 'issue_to_coning_machine', entityId: 'sticker_run', action: 'stickers_printed', payload: { entries: req.body.entries } });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    if (err instanceof ConingStickerRunError) return res.status(err.statusCode).json({ error: err.message });
+    console.error('Failed to record coning sticker print', err);
+    res.status(500).json({ error: 'Unable to record the sticker print' });
   }
 });
 

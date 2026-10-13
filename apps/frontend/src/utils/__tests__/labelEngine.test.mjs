@@ -284,3 +284,29 @@ test('opacity snaps to quarters and prints as white vector hatching, never grey'
   const bytes = page.length;
   assert.ok(bytes < 200 * 1024, 'hatching keeps the page small');
 });
+
+test('an A4 sheet fills 3 × 7 labels per page in reading order and leaves null slots blank', () => {
+  const template = DEFAULT_STAGE_TEMPLATES.coning_issue_sheet;
+  const data = buildSampleData('coning_issue_sheet');
+  const slots = [null, null, ...Array.from({ length: 22 }, () => data)];
+  const artifact = buildPrintableArtifact(template, slots, { stageKey: 'coning_issue_sheet', dpi: 300, copies: 1 });
+  assert.equal(artifact.widthMm, 210);
+  assert.equal(artifact.heightMm, 297);
+  assert.equal(artifact.pages.length, 2, '24 slots on 21-label sheets');
+  const first = artifact.pages[0].html;
+  assert.equal((first.match(/class="lbw"/g) || []).length, 19, 'two blank slots on the first sheet');
+  assert.match(first, /class="lbw" style="left:137.5mm;top:8.5mm;/, 'slot 3 is the third column of row one');
+  assert.match(first, /class="lbw" style="left:7.5mm;top:248.5mm;/, 'slot 19 starts the last row');
+  assert.equal((artifact.pages[1].html.match(/class="lbw"/g) || []).length, 3);
+  assert.ok(assemblePrintDocument(artifact).includes('@page{size:210mm 297mm;margin:0}'));
+});
+
+test('sheet copies repeat each record in place and an overfull sheet is refused', () => {
+  const template = DEFAULT_STAGE_TEMPLATES.coning_issue_sheet;
+  const artifact = buildPrintableArtifact(template, [{ barcode: 'ICO-1' }, { barcode: 'ICO-2' }], { stageKey: 'coning_issue_sheet', dpi: 300, copies: 3 });
+  assert.equal(artifact.pages.length, 1);
+  const order = [...artifact.pages[0].html.matchAll(/ICO-(\d)/g)].map((m) => m[1]).filter((v, i, a) => i === 0 || v !== a[i - 1]);
+  assert.deepEqual(order, ['1', '2'], 'all copies of ICO-1 come before ICO-2');
+  assert.throws(() => buildPrintableArtifact({ ...template, media: { ...template.media, rows: 8 } }, [{}], { dpi: 300 }), /sheet height/);
+  assert.throws(() => buildPrintableArtifact(template, [null, null], { dpi: 300 }), /Nothing to print/);
+});

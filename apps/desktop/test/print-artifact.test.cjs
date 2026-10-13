@@ -19,8 +19,9 @@ test("every repository stage produces a version 2 artifact with physical page ge
   for (const [stage, template] of Object.entries(DEFAULT_STAGE_TEMPLATES)) {
     const artifact = buildPrintableArtifact(template, [buildSampleData(stage, "typical")], { stageKey: stage, dpi: 203, fonts });
     assert.equal(artifact.version, 2);
-    assert.equal(artifact.widthMm, template.media.rollWidthMm);
-    assert.equal(artifact.heightMm, template.media.heightMm + template.media.marginTopMm);
+    const sheet = template.media.kind === "sheet";
+    assert.equal(artifact.widthMm, sheet ? template.media.pageWidthMm : template.media.rollWidthMm);
+    assert.equal(artifact.heightMm, sheet ? template.media.pageHeightMm : template.media.heightMm + template.media.marginTopMm);
     assert.equal(artifact.templateSnapshot.stageKey, stage);
     const accepted = validateArtifact(artifact);
     assert.equal(accepted.pages.length, template.copies || 1, "one page per copy");

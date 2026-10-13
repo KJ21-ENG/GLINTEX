@@ -3,7 +3,6 @@ import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../../context/Invento
 import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label, Checkbox, Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from '../ui';
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
-import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
@@ -39,7 +38,6 @@ export function IssueToConing() {
     const [batchLoading, setBatchLoading] = useState(false);
     const [batchError, setBatchError] = useState('');
     const [batchEligible, setBatchEligible] = useState(false);
-    const [stickerCopies, setStickerCopies] = useState(1);
 
     useEffect(() => {
         if (!scanFeedback) return;
@@ -274,68 +272,12 @@ export function IssueToConing() {
         }));
     }
 
-    async function offerPostCommitPrint(created, snapshot) {
-        try {
-            const issue = created?.issueToConingMachine;
-            if (!issue) return;
-            const template = await loadTemplate(LABEL_STAGE_KEYS.CONING_ISSUE);
-            if (!template || !window.confirm('Print sticker for this issue?')) return;
-
-            await printStageTemplate(
-                LABEL_STAGE_KEYS.CONING_ISSUE,
-                {
-                    lotNo: issue.lotNo,
-                    barcode: issue.barcode,
-                    totalRolls: issue.rollsIssued,
-                    rollCount: issue.rollsIssued,
-                    totalWeight: (issue.receivedRowRefs || []).reduce((sum, ref) => sum + Number(ref.issueWeight || 0), 0),
-                    grossWeight: null,
-                    tareWeight: null,
-                    netWeight: (issue.receivedRowRefs || []).reduce((sum, ref) => sum + Number(ref.issueWeight || 0), 0),
-                    expectedCones: issue.expectedCones,
-                    perConeTargetG: snapshot.targetWeight,
-                    machineName: snapshot.machineName,
-                    operatorName: snapshot.operatorName,
-                    shift: snapshot.shift,
-                    itemName: snapshot.itemName,
-                    cut: snapshot.cut,
-                    yarnName: snapshot.yarnName,
-                    rollType: snapshot.rollType,
-                    coneType: snapshot.coneType,
-                    wrapperName: snapshot.wrapperName,
-                    date: snapshot.date,
-                },
-                { template, copies: snapshot.stickerCopies },
-            );
-        } catch (error) {
-            console.error('Coning issue was saved but its label could not be printed', error);
-            alert('Issue was saved, but the label could not be printed. You can reprint it from Issue History.');
-        }
-    }
-
     const handleSubmit = wrapSubmit(async () => {
         if (crates.length === 0) return;
         if (!form.targetWeight) { alert('Enter target cone weight'); return; }
         if (batchLoading || batchError) { alert(batchError || 'Wait for the batch check to finish'); return; }
         if (batchMode !== 'new' && batchCandidates.length > 1 && !selectedBatchId) { alert('Select an existing batch or uncheck Add to existing batch'); return; }
 
-        const distinctNames = (field) => Array.from(new Set(crates.map((crate) => String(crate[field] || '').trim()).filter(Boolean))).join(', ');
-        const labelSnapshot = {
-            machineName: (db.machines || []).find((machine) => machine.id === form.machineId)?.name || '',
-            operatorName: (db.operators || []).find((operator) => operator.id === form.operatorId)?.name || '',
-            coneType: (db.cone_types || []).find((cone) => cone.id === form.coneTypeId)?.name || '',
-            wrapperName: (db.wrappers || []).find((wrapper) => wrapper.id === form.wrapperId)?.name || '',
-            itemName: distinctNames('itemName'),
-            cut: distinctNames('cut'),
-            yarnName: distinctNames('yarnName'),
-            rollType: distinctNames('rollTypeName'),
-            totalRolls: coningMeta.totalRolls,
-            totalWeight: coningMeta.totalNet,
-            targetWeight: form.targetWeight,
-            shift: form.shift || '',
-            date: form.date,
-            stickerCopies,
-        };
         setSubmitting(true);
         try {
             const created = await api.createIssueToConingMachine({
@@ -363,10 +305,10 @@ export function IssueToConing() {
                 INVENTORY_INVALIDATION_KEYS.issueHistory('coning'),
             ], { source: 'createIssueToConingMachine' });
             setCrates([]);
+            // Stickers for the supervisor are printed in bulk from Summary and stickers.
             alert(created.addedToBatch
-                ? `Material added to batch ${created.issueToConingMachine.barcode}. Use this same barcode on the supervisor's stickers.`
+                ? `Material added to batch ${created.issueToConingMachine.barcode}.`
                 : `Issued to Coning successfully. Batch barcode: ${created.issueToConingMachine.barcode}`);
-            void offerPostCommitPrint(created, labelSnapshot);
         } catch (e) {
             alert(e.message);
             // Reload choices if another receiver finished the selected batch.
@@ -562,11 +504,6 @@ export function IssueToConing() {
                                         {batchMode === 'new' && <p className="text-sm text-muted-foreground">A separate batch and receiving barcode will be created. Keep its goods separate.</p>}
                                     </>
                                 ) : <p className="text-sm text-muted-foreground">{batchEligible ? 'No matching open batch. A new receiving barcode will be created.' : 'A separate batch will be created. Select worker, machine, shift, cone type and target weight to enable automatic matching.'}</p>}
-                            <div className="flex items-center gap-3">
-                                <Label htmlFor="coning-sticker-copies">Supervisor sticker copies</Label>
-                                <Input id="coning-sticker-copies" type="number" min="1" max="100" value={stickerCopies}
-                                    onChange={(event) => setStickerCopies(Math.min(100, Math.max(1, Number(event.target.value) || 1)))} className="w-20" />
-                            </div>
                         </div>
                     )}
                     <div className="mt-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4">

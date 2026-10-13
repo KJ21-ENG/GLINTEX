@@ -9,6 +9,7 @@ export const LABEL_STAGE_KEYS = {
   HOLO_ISSUE: 'holo_issue',
   HOLO_RECEIVE: 'holo_receive',
   CONING_ISSUE: 'coning_issue',
+  CONING_ISSUE_SHEET: 'coning_issue_sheet',
   CONING_RECEIVE: 'coning_receive',
   CONING_RECEIVE_SMALL: 'coning_receive_small',
 };
@@ -17,7 +18,7 @@ export const STAGE_GROUPS = [
   { key: 'inbound', label: 'Inbound', stages: [LABEL_STAGE_KEYS.INBOUND] },
   { key: 'cutter', label: 'Cutter', stages: [LABEL_STAGE_KEYS.CUTTER_ISSUE, LABEL_STAGE_KEYS.CUTTER_ISSUE_SMALL, LABEL_STAGE_KEYS.CUTTER_RECEIVE] },
   { key: 'holo', label: 'Holo', stages: [LABEL_STAGE_KEYS.HOLO_ISSUE, LABEL_STAGE_KEYS.HOLO_RECEIVE] },
-  { key: 'coning', label: 'Coning', stages: [LABEL_STAGE_KEYS.CONING_ISSUE, LABEL_STAGE_KEYS.CONING_RECEIVE, LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL] },
+  { key: 'coning', label: 'Coning', stages: [LABEL_STAGE_KEYS.CONING_ISSUE, LABEL_STAGE_KEYS.CONING_ISSUE_SHEET, LABEL_STAGE_KEYS.CONING_RECEIVE, LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL] },
 ];
 
 export const STAGE_LABELS = {
@@ -28,6 +29,7 @@ export const STAGE_LABELS = {
   [LABEL_STAGE_KEYS.HOLO_ISSUE]: 'Issue to holo',
   [LABEL_STAGE_KEYS.HOLO_RECEIVE]: 'Receive from holo',
   [LABEL_STAGE_KEYS.CONING_ISSUE]: 'Issue to coning',
+  [LABEL_STAGE_KEYS.CONING_ISSUE_SHEET]: 'Issue to coning · A4 sheet',
   [LABEL_STAGE_KEYS.CONING_RECEIVE]: 'Receive from coning',
   [LABEL_STAGE_KEYS.CONING_RECEIVE_SMALL]: 'Receive from coning · small',
 };
@@ -151,6 +153,31 @@ export const STAGE_VARIABLES = {
     { key: 'date', label: 'Date' },
     { key: 'barcode', label: 'Issue Barcode' },
     { key: 'shift', label: 'Shift' },
+  ],
+  // Printed in bulk for the coning supervisor, one sticker per finished container.
+  [LABEL_STAGE_KEYS.CONING_ISSUE_SHEET]: [
+    { key: 'lotNo', label: 'Lot No' },
+    { key: 'itemName', label: 'Item Name' },
+    { key: 'cut', label: 'Cut' },
+    { key: 'yarnName', label: 'Yarn' },
+    { key: 'twist', label: 'Twist' },
+    { key: 'rollType', label: 'Roll Type' },
+    { key: 'coneType', label: 'Cone Type' },
+    { key: 'wrapperName', label: 'Wrapper' },
+    { key: 'totalRolls', label: 'Total Rolls' },
+    { key: 'rollCount', label: 'Roll Count' },
+    { key: 'totalWeight', label: 'Total Weight' },
+    { key: 'grossWeight', label: 'Gross Weight' },
+    { key: 'tareWeight', label: 'Tare Weight' },
+    { key: 'netWeight', label: 'Net Weight' },
+    { key: 'expectedCones', label: 'Expected Cones' },
+    { key: 'perConeTargetG', label: 'Target g/cone' },
+    { key: 'machineName', label: 'Machine' },
+    { key: 'operatorName', label: 'Operator' },
+    { key: 'date', label: 'Date' },
+    { key: 'barcode', label: 'Issue Barcode' },
+    { key: 'shift', label: 'Shift' },
+    { key: 'crates', label: 'Crates issued' },
   ],
   [LABEL_STAGE_KEYS.CONING_RECEIVE]: [
     { key: 'barcodeNumber', label: 'Barcode Number (text only)' },

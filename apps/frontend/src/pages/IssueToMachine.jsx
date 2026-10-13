@@ -7,7 +7,9 @@ import { OnMachineTable } from '../components/issue';
 import { IssueHistory } from './IssueHistory';
 import { Card, CardHeader, CardTitle, CardContent, Button } from '../components/ui';
 import { sendSummaryNotification, downloadSummaryPdf } from '../api/client';
-import { Send, Calendar, Download } from 'lucide-react';
+import { Send, Calendar, Download, Printer } from 'lucide-react';
+import ConingStickerRunDialog from '../components/issue/ConingStickerRunDialog';
+import { morningRange } from '../utils/coningStickerRun';
 import { Dialog, DialogContent } from '../components/ui/Dialog';
 import { useStagePermission } from '../hooks/usePermission';
 import AccessDenied from '../components/common/AccessDenied';
@@ -44,6 +46,13 @@ export function IssueToMachine() {
   const [summaryDateTo, setSummaryDateTo] = useState(getYesterdayISO);
   const [summaryFromShifts, setSummaryFromShifts] = useState(['Day', 'Night']);
   const [summaryToShifts, setSummaryToShifts] = useState(['Day', 'Night']);
+  const [stickerRunRange, setStickerRunRange] = useState(null);
+  const applyRange = ({ dateFrom, dateTo, fromShifts, toShifts }) => {
+    setSummaryDateFrom(dateFrom);
+    setSummaryDateTo(dateTo);
+    setSummaryFromShifts(fromShifts);
+    setSummaryToShifts(toShifts);
+  };
 
   useEffect(() => {
     if (canRead && stage === 'cutter') {
@@ -150,8 +159,16 @@ export function IssueToMachine() {
       </div>
 
       <Dialog open={summaryActionOpen} onOpenChange={setSummaryActionOpen}>
-        <DialogContent title="Send / Download Summary" onOpenChange={setSummaryActionOpen}>
+        <DialogContent title={stage === 'coning' ? 'Summary and stickers' : 'Send / Download Summary'} onOpenChange={setSummaryActionOpen}>
           <div className="space-y-4 my-3 text-left">
+            {stage === 'coning' && (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                Quick pick:
+                <button type="button" onClick={() => applyRange(morningRange())} className="rounded-full border border-dashed border-primary/50 bg-primary/5 px-2.5 py-1 font-medium text-primary hover:bg-primary/10">
+                  Supervisor's morning set · yesterday Night + today Day
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* From Column */}
               <div className="space-y-3 p-3 rounded-lg border bg-muted/20">
@@ -251,9 +268,33 @@ export function IssueToMachine() {
               <Download className="h-4 w-4" />
               {downloadingSum ? 'Downloading...' : 'Download PDF'}
             </Button>
+            {stage === 'coning' && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSummaryActionOpen(false);
+                  setStickerRunRange({ dateFrom: summaryDateFrom, dateTo: summaryDateTo, fromShifts: summaryFromShifts, toShifts: summaryToShifts });
+                }}
+                disabled={sendingSum || downloadingSum || summaryFromShifts.length === 0 || summaryToShifts.length === 0}
+                className="flex-1 flex items-center gap-2 justify-center"
+              >
+                <Printer className="h-4 w-4" />
+                Print stickers
+              </Button>
+            )}
           </div>
         </DialogContent>
       </Dialog>
+
+      {stage === 'coning' && (
+        <ConingStickerRunDialog
+          open={Boolean(stickerRunRange)}
+          range={stickerRunRange}
+          canMarkPrinted={canWrite}
+          onOpenChange={(value) => { if (!value) setStickerRunRange(null); }}
+          onBack={() => { setStickerRunRange(null); setSummaryActionOpen(true); }}
+        />
+      )}
 
       {/* Process Specific Form */}
       {readOnly ? (

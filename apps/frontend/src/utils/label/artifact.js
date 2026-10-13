@@ -1,6 +1,6 @@
 // Printable artifact, version 2: self-contained HTML pages in millimetres plus the fonts
 // they need. The Electron queue validates and prints it; the designer previews it.
-import { normalizeTemplate, usedRollWidthMm, fontFamilyCss, LIMITS } from './model.js';
+import { normalizeTemplate, usedRollWidthMm, usedSheetHeightMm, labelsPerPage, fontFamilyCss, LIMITS } from './model.js';
 import { layoutLabel, createEstimateMeasurer } from './layout.js';
 import { renderLabelMarkup, renderPage, pageGeometry, assemblePrintDocument, BASE_CSS } from './html.js';
 
@@ -19,7 +19,10 @@ export const normalizeCopies = (value) => {
 };
 
 export const validateMedia = (media) => {
-  if (usedRollWidthMm(media) > media.rollWidthMm + 0.001) throw new Error('Columns, gaps and left margin exceed the roll width');
+  if (media.kind === 'sheet') {
+    if (usedRollWidthMm(media) > media.pageWidthMm + 0.001) throw new Error('Columns, gaps and left margin exceed the sheet width');
+    if (usedSheetHeightMm(media) > media.pageHeightMm + 0.001) throw new Error('Rows, gaps and top margin exceed the sheet height');
+  } else if (usedRollWidthMm(media) > media.rollWidthMm + 0.001) throw new Error('Columns, gaps and left margin exceed the roll width');
   if (media.widthMm < LIMITS.mediaMinMm || media.heightMm < LIMITS.mediaMinMm) throw new Error('Label size is too small');
   return media;
 };
@@ -38,18 +41,27 @@ export const buildPrintableArtifact = (templateInput, dataArray = [{}], options 
   const nudgeY = Number(options.offsetYMm) || 0;
   const media = { ...template.media, offsetXMm: template.media.offsetXMm + nudgeX, offsetYMm: template.media.offsetYMm + nudgeY };
   const rows = [];
+  // Each entry of `rows` is one printed page. On a sheet, copies repeat each record in place
+  // (one sticker per container), and a null record leaves its slot blank so a part-used
+  // sheet can be finished first.
+  const sheet = media.kind === 'sheet';
+  const perPage = labelsPerPage(media);
+  const records = sheet ? dataArray.flatMap((data) => Array.from({ length: data == null ? 1 : copies }, () => data)) : dataArray;
+  const pageCopies = sheet ? 1 : copies;
   if (media.columnMode === 'sequence') {
-    for (let i = 0; i < dataArray.length; i += media.columns) rows.push(dataArray.slice(i, i + media.columns));
+    for (let i = 0; i < records.length; i += perPage) rows.push(records.slice(i, i + perPage));
   } else {
-    for (const data of dataArray) rows.push(Array.from({ length: media.columns }, () => data));
+    for (const data of records) rows.push(Array.from({ length: media.columns }, () => data));
   }
-  if (rows.length * copies > MAX_PAGES) throw new Error(`Split label jobs into batches of at most ${MAX_PAGES} pages`);
+  if (sheet && !records.some((data) => data != null)) throw new Error('Nothing to print');
+  if (rows.length * pageCopies > MAX_PAGES) throw new Error(`Split label jobs into batches of at most ${MAX_PAGES} pages`);
   const geometry = pageGeometry(media);
   const pages = [];
   const warnings = [];
   let projectedBytes = 0;
   for (const row of rows) {
     const inners = row.map((data) => {
+      if (data == null) return null;
       const layout = layoutLabel(template, data, measurer, { dpi });
       for (const el of layout.elements) {
         if (el.layout?.error) warnings.push(`${el.id}: ${el.layout.error}`);
@@ -57,12 +69,12 @@ export const buildPrintableArtifact = (templateInput, dataArray = [{}], options 
       }
       return renderLabelMarkup(layout, fontFamilyCss);
     });
-    while (inners.length < media.columns) inners.push(null);
+    while (inners.length < perPage) inners.push(null);
     const html = renderPage(media, inners);
     if (html.length > PAGE_HTML_MAX) throw new Error('A label page is larger than 2 MB; use a smaller image');
-    projectedBytes += html.length * copies;
+    projectedBytes += html.length * pageCopies;
     if (projectedBytes > JOB_HTML_MAX) throw new Error('Label job is larger than 18 MB; split the batch or use a smaller image');
-    for (let copy = 0; copy < copies; copy += 1) pages.push({ html });
+    for (let copy = 0; copy < pageCopies; copy += 1) pages.push({ html });
   }
   return {
     version: ARTIFACT_VERSION,
@@ -74,7 +86,7 @@ export const buildPrintableArtifact = (templateInput, dataArray = [{}], options 
     pages,
     warnings: [...new Set(warnings)],
     templateSnapshot: { stageKey: options.stageKey || 'calibration', template },
-    profileSnapshot: { dpi, rowGapMm: media.rowGapMm, columns: media.columns, copies, columnMode: media.columnMode, offsetXMm: nudgeX, offsetYMm: nudgeY },
+    profileSnapshot: { dpi, mediaKind: media.kind, rowGapMm: media.rowGapMm, columns: media.columns, rows: media.rows, copies, columnMode: media.columnMode, offsetXMm: nudgeX, offsetYMm: nudgeY },
   };
 };
 

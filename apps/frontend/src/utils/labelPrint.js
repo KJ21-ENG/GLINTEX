@@ -205,6 +205,14 @@ export const printStageTemplatesBatch = async (stageKey, dataArray = [], options
   const template = options.template ? toV2Template(options.template) : await loadTemplate(stageKey, { apiBase: options.apiBase });
   if (!template) throw new Error('Label template not found');
   const copies = options.copies || template.copies || 1;
+  // Sheets go to an office printer, not the workstation's label printer: let the operator
+  // pick it in the system print dialog. 300 dpi suits laser and inkjet printers.
+  if (template.media?.kind === 'sheet') {
+    const artifact = await buildPrintableArtifact(template, dataArray, { stageKey, copies, dpi: 300 });
+    const result = await printArtifactInBrowser(artifact);
+    if (!result.success) throw new Error(result.error || 'Sheet print failed');
+    return result;
+  }
   if (hasDesktopPrinting()) {
     const status = await window.glintexDesktop.printers.status();
     if (!status.profile) throw new Error('Configure the Windows printer in Workstation setup first');

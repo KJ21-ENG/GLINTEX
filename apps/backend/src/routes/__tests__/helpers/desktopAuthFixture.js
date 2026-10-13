@@ -7,7 +7,7 @@ import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import * as auth from '../../../utils/auth.js';
 import * as permissions from '../../../utils/permissions.js';
-export const TEMPLATE_STAGES = ['inbound', 'cutter_issue', 'cutter_issue_small', 'holo_issue', 'coning_issue', 'cutter_receive', 'holo_receive', 'coning_receive', 'coning_receive_small'];
+export const TEMPLATE_STAGES = ['inbound', 'cutter_issue', 'cutter_issue_small', 'holo_issue', 'coning_issue', 'coning_issue_sheet', 'cutter_receive', 'holo_receive', 'coning_receive', 'coning_receive_small'];
 const routesSource = readFileSync(new URL('../../index.js', import.meta.url), 'utf8');
 const middlewareSource = readFileSync(new URL('../../../middleware/auth.js', import.meta.url), 'utf8').replace(/^import .*;\n/gm, '').replace(/export /g, '');
 function section(start, end) {

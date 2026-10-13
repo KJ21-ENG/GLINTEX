@@ -24,10 +24,14 @@ export const TEXT_ALIGNS = ['left', 'center', 'right'];
 export const TEXT_VALIGNS = ['top', 'middle', 'bottom'];
 export const TEXT_OVERFLOWS = ['wrap', 'shrink', 'wrap-shrink', 'clip'];
 export const COLUMN_MODES = ['repeat', 'sequence'];
+// Roll: one row of labels per page, fed by a label printer. Sheet: a fixed page (A4) holding
+// rows × columns labels, printed through the system print dialog on an office printer.
+export const MEDIA_KINDS = ['roll', 'sheet'];
 export const QR_EC_LEVELS = ['L', 'M', 'Q', 'H'];
 export const ELEMENT_TYPES = ['text', 'barcode', 'qr', 'line', 'rect', 'image'];
 
 export const DEFAULT_MEDIA = Object.freeze({
+  kind: 'roll',
   widthMm: 75,       // label width across the roll
   heightMm: 125,     // label length along the feed
   orientation: 'landscape',
@@ -40,12 +44,22 @@ export const DEFAULT_MEDIA = Object.freeze({
   offsetXMm: 0,      // calibration nudge of the whole artwork on the page
   offsetYMm: 0,
   columnMode: 'repeat',
+  pageWidthMm: 210,  // sheet only
+  pageHeightMm: 297, // sheet only
+  rows: 1,           // sheet only: label rows per page
+});
+
+export const A4_SHEET_MEDIA = Object.freeze({
+  kind: 'sheet', widthMm: 65, heightMm: 40, orientation: 'portrait', pageWidthMm: 210, pageHeightMm: 297,
+  rollWidthMm: 210, columns: 3, rows: 7, columnGapMm: 0, rowGapMm: 0, marginLeftMm: 7.5, marginTopMm: 8.5,
+  offsetXMm: 0, offsetYMm: 0, columnMode: 'sequence',
 });
 
 export const LIMITS = Object.freeze({
   mediaMinMm: 5,
   mediaMaxMm: 500,
   columnsMax: 8,
+  rowsMax: 30,
   fontMinPt: 3,
   fontMaxPt: 120,
   moduleMinMm: 0.1,
@@ -82,7 +96,9 @@ export const canvasSize = (media) => (
 );
 
 export const normalizeMedia = (raw = {}) => {
+  const kind = pick(raw.kind, MEDIA_KINDS, DEFAULT_MEDIA.kind);
   const media = {
+    kind,
     widthMm: round(num(raw.widthMm, DEFAULT_MEDIA.widthMm, LIMITS.mediaMinMm, LIMITS.mediaMaxMm)),
     heightMm: round(num(raw.heightMm, DEFAULT_MEDIA.heightMm, LIMITS.mediaMinMm, LIMITS.mediaMaxMm)),
     orientation: pick(raw.orientation, ORIENTATIONS, DEFAULT_MEDIA.orientation),
@@ -95,12 +111,24 @@ export const normalizeMedia = (raw = {}) => {
     offsetXMm: round(num(raw.offsetXMm, DEFAULT_MEDIA.offsetXMm, -50, 50)),
     offsetYMm: round(num(raw.offsetYMm, DEFAULT_MEDIA.offsetYMm, -50, 50)),
     columnMode: pick(raw.columnMode, COLUMN_MODES, DEFAULT_MEDIA.columnMode),
+    pageWidthMm: round(num(raw.pageWidthMm, DEFAULT_MEDIA.pageWidthMm, LIMITS.mediaMinMm, LIMITS.mediaMaxMm)),
+    pageHeightMm: round(num(raw.pageHeightMm, DEFAULT_MEDIA.pageHeightMm, LIMITS.mediaMinMm, LIMITS.mediaMaxMm)),
+    rows: Math.round(num(raw.rows, DEFAULT_MEDIA.rows, 1, LIMITS.rowsMax)),
   };
+  if (kind === 'sheet') {
+    // A sheet fills its labels in reading order; the page width stands in for the roll width.
+    media.columnMode = 'sequence';
+    media.rollWidthMm = media.pageWidthMm;
+  } else {
+    media.rows = 1;
+  }
   if (media.rollWidthMm < media.widthMm) media.rollWidthMm = media.widthMm;
   return media;
 };
 
 export const usedRollWidthMm = (media) => media.marginLeftMm + media.widthMm * media.columns + media.columnGapMm * (media.columns - 1);
+export const usedSheetHeightMm = (media) => media.marginTopMm + media.heightMm * media.rows + media.rowGapMm * (media.rows - 1);
+export const labelsPerPage = (media) => (media.kind === 'sheet' ? media.columns * media.rows : media.columns);
 
 export const ELEMENT_DEFAULTS = {
   text: {

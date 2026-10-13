@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeTemplate } from '../src/utils/label/model.js';
+import { DEFAULT_STAGE_TEMPLATES } from '../src/utils/label/defaults.js';
 
 const L75 = { widthMm: 75, heightMm: 125, orientation: 'landscape', rollWidthMm: 75, columns: 1, columnGapMm: 2, rowGapMm: 2, marginLeftMm: 0, marginTopMm: 0, offsetXMm: 0, offsetYMm: 0, columnMode: 'repeat' };
 const F = 'inter';
@@ -155,6 +156,9 @@ T.coning_receive_small = { version: 2, media: { widthMm: 15.8, heightMm: 15, ori
   { id: 'qr', name: 'QR code', type: 'qr', x: 2.7, y: 0.2, value: '@barcode', sizeMm: 10.4, ecLevel: 'M' },
   base('code', 0, 10.8, 15.8, 2.4, '@barcodeNumber', { fontSizePt: 4, align: 'center', overflow: 'shrink', minFontSizePt: 3, paddingMm: 0, lineHeight: 1 }),
 ]};
+
+// New in the version 2 designer, so production starts from the factory design.
+T.coning_issue_sheet = DEFAULT_STAGE_TEMPLATES.coning_issue_sheet;
 
 const refined = Object.fromEntries(Object.entries(T).map(([k, v]) => [k, normalizeTemplate(v)]));
 const here = path.dirname(fileURLToPath(import.meta.url));

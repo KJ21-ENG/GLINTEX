@@ -324,7 +324,7 @@ export default function LabelDesigner() {
         <section ref={canvasAreaRef} className="flex flex-col min-h-0 min-w-0" aria-label="Design canvas">
           <DesignCanvas template={state.template} layout={layout} markup={markup} css={css} zoom={zoom} selectedIds={state.selectedIds} warnings={warnings} snap={snap} showGrid={showGrid} loading={state.loading} stageLabel={getStageLabel(stageKey)} dispatch={dispatch} onZoom={zoomBy} onOpenInspector={() => { setSideTab('element'); setEditRequest((n) => n + 1); }} />
           <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5 border-t border-border/70 bg-background text-[11px] text-muted-foreground">
-            <span>Label {canvas.widthMm} × {canvas.heightMm} mm as you read it · prints on {state.template.media.widthMm} × {state.template.media.heightMm} mm{state.template.media.columns > 1 ? ` · ${state.template.media.columns} across` : ''}</span>
+            <span>Label {canvas.widthMm} × {canvas.heightMm} mm as you read it · prints on {state.template.media.widthMm} × {state.template.media.heightMm} mm{state.template.media.kind === 'sheet' ? ` · ${state.template.media.pageWidthMm} × ${state.template.media.pageHeightMm} mm sheet, ${state.template.media.columns} × ${state.template.media.rows}` : state.template.media.columns > 1 ? ` · ${state.template.media.columns} across` : ''}</span>
             <span>Preview is the exact printed artwork · {printerDpi} dpi</span>
             {warnings.length ? <span className="text-amber-700">{warnings.length} {warnings.length === 1 ? 'warning' : 'warnings'}</span> : null}
             {state.selectedIds.length ? <span>{state.selectedIds.length} selected</span> : null}

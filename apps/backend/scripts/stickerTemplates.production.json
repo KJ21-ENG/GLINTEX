@@ -7,6 +7,7 @@
    "stageKey": "v2:inbound",
    "dimensions": {
     "version": 2,
+    "kind": "roll",
     "widthMm": 75,
     "heightMm": 125,
     "orientation": "landscape",
@@ -18,11 +19,15 @@
     "marginTopMm": 0,
     "offsetXMm": 0,
     "offsetYMm": 0,
-    "columnMode": "repeat"
+    "columnMode": "repeat",
+    "pageWidthMm": 210,
+    "pageHeightMm": 297,
+    "rows": 1
    },
    "content": {
     "version": 2,
     "media": {
+     "kind": "roll",
      "widthMm": 75,
      "heightMm": 125,
      "orientation": "landscape",
@@ -34,7 +39,10 @@
      "marginTopMm": 0,
      "offsetXMm": 0,
      "offsetYMm": 0,
-     "columnMode": "repeat"
+     "columnMode": "repeat",
+     "pageWidthMm": 210,
+     "pageHeightMm": 297,
+     "rows": 1
     },
     "copies": 1,
     "elements": [
@@ -317,6 +325,7 @@
    "stageKey": "v2:cutter_issue",
    "dimensions": {
     "version": 2,
+    "kind": "roll",
     "widthMm": 75,
     "heightMm": 125,
     "orientation": "landscape",
@@ -328,11 +337,15 @@
     "marginTopMm": 0,
     "offsetXMm": 0,
     "offsetYMm": 0,
-    "columnMode": "repeat"
+    "columnMode": "repeat",
+    "pageWidthMm": 210,
+    "pageHeightMm": 297,
+    "rows": 1
    },
    "content": {
     "version": 2,
     "media": {
+     "kind": "roll",
      "widthMm": 75,
      "heightMm": 125,
      "orientation": "landscape",
@@ -344,7 +357,10 @@
      "marginTopMm": 0,
      "offsetXMm": 0,
      "offsetYMm": 0,
-     "columnMode": "repeat"
+     "columnMode": "repeat",
+     "pageWidthMm": 210,
+     "pageHeightMm": 297,
+     "rows": 1
     },
     "copies": 1,
     "elements": [
@@ -739,6 +755,7 @@
    "stageKey": "v2:coning_issue",
    "dimensions": {
     "version": 2,
+    "kind": "roll",
     "widthMm": 75,
     "heightMm": 125,
     "orientation": "landscape",
@@ -750,11 +767,15 @@
     "marginTopMm": 0,
     "offsetXMm": 0,
     "offsetYMm": 0,
-    "columnMode": "repeat"
+    "columnMode": "repeat",
+    "pageWidthMm": 210,
+    "pageHeightMm": 297,
+    "rows": 1
    },
    "content": {
     "version": 2,
     "media": {
+     "kind": "roll",
      "widthMm": 75,
      "heightMm": 125,
      "orientation": "landscape",
@@ -766,7 +787,10 @@
      "marginTopMm": 0,
      "offsetXMm": 0,
      "offsetYMm": 0,
-     "columnMode": "repeat"
+     "columnMode": "repeat",
+     "pageWidthMm": 210,
+     "pageHeightMm": 297,
+     "rows": 1
     },
     "copies": 1,
     "elements": [
@@ -1427,6 +1451,7 @@
    "stageKey": "v2:coning_receive",
    "dimensions": {
     "version": 2,
+    "kind": "roll",
     "widthMm": 75,
     "heightMm": 125,
     "orientation": "landscape",
@@ -1438,11 +1463,15 @@
     "marginTopMm": 0,
     "offsetXMm": 0,
     "offsetYMm": 0,
-    "columnMode": "repeat"
+    "columnMode": "repeat",
+    "pageWidthMm": 210,
+    "pageHeightMm": 297,
+    "rows": 1
    },
    "content": {
     "version": 2,
     "media": {
+     "kind": "roll",
      "widthMm": 75,
      "heightMm": 125,
      "orientation": "landscape",
@@ -1454,7 +1483,10 @@
      "marginTopMm": 0,
      "offsetXMm": 0,
      "offsetYMm": 0,
-     "columnMode": "repeat"
+     "columnMode": "repeat",
+     "pageWidthMm": 210,
+     "pageHeightMm": 297,
+     "rows": 1
     },
     "copies": 1,
     "elements": [
@@ -2059,6 +2091,7 @@
    "stageKey": "v2:holo_receive",
    "dimensions": {
     "version": 2,
+    "kind": "roll",
     "widthMm": 75,
     "heightMm": 125,
     "orientation": "landscape",
@@ -2070,11 +2103,15 @@
     "marginTopMm": 0,
     "offsetXMm": 0,
     "offsetYMm": 0,
-    "columnMode": "repeat"
+    "columnMode": "repeat",
+    "pageWidthMm": 210,
+    "pageHeightMm": 297,
+    "rows": 1
    },
    "content": {
     "version": 2,
     "media": {
+     "kind": "roll",
      "widthMm": 75,
      "heightMm": 125,
      "orientation": "landscape",
@@ -2086,7 +2123,10 @@
      "marginTopMm": 0,
      "offsetXMm": 0,
      "offsetYMm": 0,
-     "columnMode": "repeat"
+     "columnMode": "repeat",
+     "pageWidthMm": 210,
+     "pageHeightMm": 297,
+     "rows": 1
     },
     "copies": 2,
     "elements": [
@@ -2789,6 +2829,7 @@
    "stageKey": "v2:holo_issue",
    "dimensions": {
     "version": 2,
+    "kind": "roll",
     "widthMm": 75,
     "heightMm": 125,
     "orientation": "landscape",
@@ -2800,11 +2841,15 @@
     "marginTopMm": 0,
     "offsetXMm": 0,
     "offsetYMm": 0,
-    "columnMode": "repeat"
+    "columnMode": "repeat",
+    "pageWidthMm": 210,
+    "pageHeightMm": 297,
+    "rows": 1
    },
    "content": {
     "version": 2,
     "media": {
+     "kind": "roll",
      "widthMm": 75,
      "heightMm": 125,
      "orientation": "landscape",
@@ -2816,7 +2861,10 @@
      "marginTopMm": 0,
      "offsetXMm": 0,
      "offsetYMm": 0,
-     "columnMode": "repeat"
+     "columnMode": "repeat",
+     "pageWidthMm": 210,
+     "pageHeightMm": 297,
+     "rows": 1
     },
     "copies": 2,
     "elements": [
@@ -3519,6 +3567,7 @@
    "stageKey": "v2:cutter_receive",
    "dimensions": {
     "version": 2,
+    "kind": "roll",
     "widthMm": 75,
     "heightMm": 125,
     "orientation": "landscape",
@@ -3530,11 +3579,15 @@
     "marginTopMm": 0,
     "offsetXMm": 0,
     "offsetYMm": 0,
-    "columnMode": "repeat"
+    "columnMode": "repeat",
+    "pageWidthMm": 210,
+    "pageHeightMm": 297,
+    "rows": 1
    },
    "content": {
     "version": 2,
     "media": {
+     "kind": "roll",
      "widthMm": 75,
      "heightMm": 125,
      "orientation": "landscape",
@@ -3546,7 +3599,10 @@
      "marginTopMm": 0,
      "offsetXMm": 0,
      "offsetYMm": 0,
-     "columnMode": "repeat"
+     "columnMode": "repeat",
+     "pageWidthMm": 210,
+     "pageHeightMm": 297,
+     "rows": 1
     },
     "copies": 2,
     "elements": [
@@ -4249,6 +4305,7 @@
    "stageKey": "v2:cutter_issue_small",
    "dimensions": {
     "version": 2,
+    "kind": "roll",
     "widthMm": 50,
     "heightMm": 25,
     "orientation": "portrait",
@@ -4260,11 +4317,15 @@
     "marginTopMm": 0,
     "offsetXMm": 1,
     "offsetYMm": -1,
-    "columnMode": "repeat"
+    "columnMode": "repeat",
+    "pageWidthMm": 210,
+    "pageHeightMm": 297,
+    "rows": 1
    },
    "content": {
     "version": 2,
     "media": {
+     "kind": "roll",
      "widthMm": 50,
      "heightMm": 25,
      "orientation": "portrait",
@@ -4276,7 +4337,10 @@
      "marginTopMm": 0,
      "offsetXMm": 1,
      "offsetYMm": -1,
-     "columnMode": "repeat"
+     "columnMode": "repeat",
+     "pageWidthMm": 210,
+     "pageHeightMm": 297,
+     "rows": 1
     },
     "copies": 1,
     "elements": [
@@ -4307,6 +4371,7 @@
    "stageKey": "v2:coning_receive_small",
    "dimensions": {
     "version": 2,
+    "kind": "roll",
     "widthMm": 15.8,
     "heightMm": 15,
     "orientation": "portrait",
@@ -4318,11 +4383,15 @@
     "marginTopMm": 0,
     "offsetXMm": 1.3,
     "offsetYMm": 1.7,
-    "columnMode": "repeat"
+    "columnMode": "repeat",
+    "pageWidthMm": 210,
+    "pageHeightMm": 297,
+    "rows": 1
    },
    "content": {
     "version": 2,
     "media": {
+     "kind": "roll",
      "widthMm": 15.8,
      "heightMm": 15,
      "orientation": "portrait",
@@ -4334,7 +4403,10 @@
      "marginTopMm": 0,
      "offsetXMm": 1.3,
      "offsetYMm": 1.7,
-     "columnMode": "repeat"
+     "columnMode": "repeat",
+     "pageWidthMm": 210,
+     "pageHeightMm": 297,
+     "rows": 1
     },
     "copies": 5,
     "elements": [
@@ -4379,6 +4451,268 @@
       "paddingMm": 0,
       "uppercase": false,
       "letterSpacingPt": 0
+     }
+    ]
+   }
+  },
+  {
+   "stage": "coning_issue_sheet",
+   "stageKey": "v2:coning_issue_sheet",
+   "dimensions": {
+    "version": 2,
+    "kind": "sheet",
+    "widthMm": 65,
+    "heightMm": 40,
+    "orientation": "portrait",
+    "rollWidthMm": 210,
+    "columns": 3,
+    "columnGapMm": 0,
+    "rowGapMm": 0,
+    "marginLeftMm": 7.5,
+    "marginTopMm": 8.5,
+    "offsetXMm": 0,
+    "offsetYMm": 0,
+    "columnMode": "sequence",
+    "pageWidthMm": 210,
+    "pageHeightMm": 297,
+    "rows": 7
+   },
+   "content": {
+    "version": 2,
+    "media": {
+     "kind": "sheet",
+     "widthMm": 65,
+     "heightMm": 40,
+     "orientation": "portrait",
+     "rollWidthMm": 210,
+     "columns": 3,
+     "columnGapMm": 0,
+     "rowGapMm": 0,
+     "marginLeftMm": 7.5,
+     "marginTopMm": 8.5,
+     "offsetXMm": 0,
+     "offsetYMm": 0,
+     "columnMode": "sequence",
+     "pageWidthMm": 210,
+     "pageHeightMm": 297,
+     "rows": 7
+    },
+    "copies": 1,
+    "elements": [
+     {
+      "id": "worker",
+      "type": "text",
+      "name": "Worker",
+      "rotation": 0,
+      "locked": false,
+      "hidden": false,
+      "opacity": 1,
+      "x": 0,
+      "y": 0,
+      "w": 46,
+      "h": 8,
+      "text": "@operatorName",
+      "fontFamily": "inter",
+      "fontSizePt": 12,
+      "bold": true,
+      "italic": false,
+      "underline": false,
+      "align": "left",
+      "valign": "middle",
+      "overflow": "shrink",
+      "minFontSizePt": 4,
+      "lineHeight": 1.12,
+      "invert": true,
+      "paddingMm": 1.2,
+      "uppercase": true,
+      "letterSpacingPt": 0
+     },
+     {
+      "id": "shift",
+      "type": "text",
+      "name": "Shift",
+      "rotation": 0,
+      "locked": false,
+      "hidden": false,
+      "opacity": 1,
+      "x": 46,
+      "y": 0,
+      "w": 19,
+      "h": 8,
+      "text": "@shift",
+      "fontFamily": "inter",
+      "fontSizePt": 11,
+      "bold": true,
+      "italic": false,
+      "underline": false,
+      "align": "center",
+      "valign": "middle",
+      "overflow": "shrink",
+      "minFontSizePt": 4,
+      "lineHeight": 1.12,
+      "invert": true,
+      "paddingMm": 0.8,
+      "uppercase": true,
+      "letterSpacingPt": 0
+     },
+     {
+      "id": "item",
+      "type": "text",
+      "name": "Item",
+      "rotation": 0,
+      "locked": false,
+      "hidden": false,
+      "opacity": 1,
+      "x": 1.5,
+      "y": 8.8,
+      "w": 62,
+      "h": 5.4,
+      "text": "@itemName (@cut)",
+      "fontFamily": "inter",
+      "fontSizePt": 9.5,
+      "bold": true,
+      "italic": false,
+      "underline": false,
+      "align": "left",
+      "valign": "middle",
+      "overflow": "wrap-shrink",
+      "minFontSizePt": 4,
+      "lineHeight": 1,
+      "invert": false,
+      "paddingMm": 0.6,
+      "uppercase": false,
+      "letterSpacingPt": 0
+     },
+     {
+      "id": "yarn",
+      "type": "text",
+      "name": "Yarn",
+      "rotation": 0,
+      "locked": false,
+      "hidden": false,
+      "opacity": 1,
+      "x": 1.5,
+      "y": 14.2,
+      "w": 40,
+      "h": 4.4,
+      "text": "@yarnName · @twist",
+      "fontFamily": "inter",
+      "fontSizePt": 7.5,
+      "bold": false,
+      "italic": false,
+      "underline": false,
+      "align": "left",
+      "valign": "middle",
+      "overflow": "shrink",
+      "minFontSizePt": 4,
+      "lineHeight": 1.12,
+      "invert": false,
+      "paddingMm": 0.3,
+      "uppercase": false,
+      "letterSpacingPt": 0
+     },
+     {
+      "id": "machine",
+      "type": "text",
+      "name": "Machine",
+      "rotation": 0,
+      "locked": false,
+      "hidden": false,
+      "opacity": 1,
+      "x": 41.5,
+      "y": 14.2,
+      "w": 22,
+      "h": 4.4,
+      "text": "M/C @machineName",
+      "fontFamily": "inter",
+      "fontSizePt": 7.5,
+      "bold": true,
+      "italic": false,
+      "underline": false,
+      "align": "right",
+      "valign": "middle",
+      "overflow": "wrap-shrink",
+      "minFontSizePt": 3.5,
+      "lineHeight": 1,
+      "invert": false,
+      "paddingMm": 0.3,
+      "uppercase": false,
+      "letterSpacingPt": 0
+     },
+     {
+      "id": "cone",
+      "type": "text",
+      "name": "Cone",
+      "rotation": 0,
+      "locked": false,
+      "hidden": false,
+      "opacity": 1,
+      "x": 1.5,
+      "y": 18.6,
+      "w": 40,
+      "h": 4.4,
+      "text": "@coneType · @perConeTargetG g",
+      "fontFamily": "inter",
+      "fontSizePt": 7.5,
+      "bold": false,
+      "italic": false,
+      "underline": false,
+      "align": "left",
+      "valign": "middle",
+      "overflow": "shrink",
+      "minFontSizePt": 4,
+      "lineHeight": 1.12,
+      "invert": false,
+      "paddingMm": 0.3,
+      "uppercase": false,
+      "letterSpacingPt": 0
+     },
+     {
+      "id": "date",
+      "type": "text",
+      "name": "Date",
+      "rotation": 0,
+      "locked": false,
+      "hidden": false,
+      "opacity": 1,
+      "x": 41.5,
+      "y": 18.6,
+      "w": 22,
+      "h": 4.4,
+      "text": "@date",
+      "fontFamily": "inter",
+      "fontSizePt": 7.5,
+      "bold": true,
+      "italic": false,
+      "underline": false,
+      "align": "right",
+      "valign": "middle",
+      "overflow": "shrink",
+      "minFontSizePt": 4,
+      "lineHeight": 1.12,
+      "invert": false,
+      "paddingMm": 0.3,
+      "uppercase": false,
+      "letterSpacingPt": 0
+     },
+     {
+      "id": "barcode",
+      "type": "barcode",
+      "name": "Barcode",
+      "rotation": 0,
+      "locked": false,
+      "hidden": false,
+      "opacity": 1,
+      "x": 2,
+      "y": 23.6,
+      "value": "@barcode",
+      "symbology": "code128",
+      "moduleMm": 0.3,
+      "barHeightMm": 10,
+      "showText": true,
+      "textSizePt": 7,
+      "quietZoneMm": 2,
+      "maxWidthMm": 61
      }
     ]
    }

@@ -1,3 +1,4 @@
+import { askForQuantity } from '../utils/inputPrompt';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ConingSupplyHistory } from '../components/issue/ConingSupplyHistory';
 import { INVENTORY_INVALIDATION_KEYS, useInventory } from '../context/InventoryContext';
@@ -989,13 +990,8 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
       if (process !== 'cutter') return;
 
       // Ask for quantity
-      const qtyInput = prompt('Enter quantity of stickers to print:', '1');
-      if (qtyInput === null) return; // User cancelled
-      const qty = parseInt(qtyInput, 10);
-      if (!qty || qty < 1) {
-        alert('Please enter a valid quantity (1 or more)');
-        return;
-      }
+      const qty = await askForQuantity({ title: 'Print small stickers' });
+      if (qty === null) return; // Cancelled
 
       const stageKey = LABEL_STAGE_KEYS.CUTTER_ISSUE_SMALL;
       const itemName = row.itemName || db.items?.find(i => i.id === row.itemId)?.name || '';

@@ -1,3 +1,4 @@
+import { askForInput } from '../../utils/inputPrompt';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Save, Edit2, X, KeyRound, RefreshCw } from 'lucide-react';
 import { Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui';
@@ -461,9 +462,14 @@ export default function UserManagement() {
   }
 
   async function handleResetPassword(target) {
-    const password = window.prompt(`New password for ${target.username} (min 6 chars):`);
+    const password = await askForInput({
+      title: `Reset password for ${target.username}`,
+      label: 'New password (at least 6 characters)',
+      type: 'password',
+      confirmLabel: 'Set password',
+      validate: (value) => (String(value).length < 6 ? 'Password must be at least 6 characters' : null),
+    });
     if (!password) return;
-    if (password.length < 6) return alert('Password must be at least 6 characters');
     setLoading(true);
     setError(null);
     try {

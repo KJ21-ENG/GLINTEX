@@ -8,10 +8,12 @@ import "@fontsource/ibm-plex-sans";
 import "@fontsource/ibm-plex-sans/700.css";
 // Label text is measured with these faces; print embeds the same files, so bold must be real here too.
 import App from "./app/App.jsx";
+import InputPromptHost from "./components/common/InputPromptHost.jsx";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <App />
+    <InputPromptHost />
   </React.StrictMode>
 );

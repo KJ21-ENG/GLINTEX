@@ -1,6 +1,14 @@
+import { computeIssueBalancesBatch } from './issueBalances.js';
+
 // Morning sticker run for coning issues: the issuer prints every batch barcode of a date/shift
-// range in one go and hands the stack to the coning supervisor.
+// range in one go and hands the stack to the coning supervisor. Unused stickers are thrown away
+// at the end of the shift; batches with material still to receive are carried over and get
+// fresh stickers in the next run.
 const SHIFTS = ['Day', 'Night'];
+// Batches older than this are not looked at for carry-over; older than STALE_DAYS are flagged.
+const CARRY_LOOKBACK_DAYS = 14;
+export const STALE_DAYS = 2;
+const PENDING_EPSILON_KG = 0.001;
 const MAX_ROWS = 500;
 const MAX_COPIES = 100;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -70,22 +78,92 @@ async function rollTypeNamesByIssue(client, issues) {
   return result;
 }
 
+const ISSUE_SELECT = {
+  id: true, date: true, shift: true, barcode: true, lotNo: true, itemId: true, cutId: true, yarnId: true, twistId: true,
+  machineId: true, operatorId: true, rollsIssued: true, expectedCones: true, requiredPerConeNetWeight: true,
+  receivedRowRefs: true, coningBatchOpen: true, coningBatchEnabled: true, coningBatchRevision: true,
+  stickerPrintedAt: true, stickerPrintedCopies: true, stickerPrintedCrates: true, stickerPrintedRevision: true,
+  stickerCarryPrintedFor: true, stickerCarryPrintedAt: true, stickerCarryPrintedCopies: true,
+};
+
+const shiftRank = (shift) => (shift === 'Night' ? 1 : 0);
+const dayNumber = (iso) => Math.round(Date.parse(`${iso}T00:00:00Z`) / 86400000);
+const isoDaysBefore = (iso, days) => new Date(Date.parse(`${iso}T00:00:00Z`) - days * 86400000).toISOString().slice(0, 10);
+
+// A shift that ended before the range starts: an earlier date, or the Day shift of the first
+// date when the range starts with that date's Night shift.
+export const isBeforeRange = (issue, { dateFrom, fromShifts }) => {
+  const from = normalizeShifts(fromShifts);
+  if (issue.date < dateFrom) return true;
+  if (issue.date > dateFrom) return false;
+  const startRank = Math.min(...from.map(shiftRank));
+  return Boolean(issue.shift) && shiftRank(issue.shift) < startRank;
+};
+
+// Containers still to come: the material left over the average container received so far.
+export const estimateContainers = (pendingWeight, receivedWeight, receivedContainers) => {
+  if (!(receivedContainers > 0) || !(receivedWeight > 0)) return null;
+  return Math.max(1, Math.ceil(pendingWeight / (receivedWeight / receivedContainers)));
+};
+
 export async function listConingStickerRun(client, params) {
   const where = stickerRunWhere(params);
   const issues = await client.issueToConingMachine.findMany({
     where,
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
     take: MAX_ROWS + 1,
-    select: {
-      id: true, date: true, shift: true, barcode: true, lotNo: true, itemId: true, cutId: true, yarnId: true, twistId: true,
-      machineId: true, operatorId: true, rollsIssued: true, expectedCones: true, requiredPerConeNetWeight: true,
-      receivedRowRefs: true, coningBatchOpen: true, coningBatchEnabled: true, coningBatchRevision: true,
-      stickerPrintedAt: true, stickerPrintedCopies: true, stickerPrintedCrates: true, stickerPrintedRevision: true,
-    },
+    select: ISSUE_SELECT,
   });
   const truncated = issues.length > MAX_ROWS;
   if (truncated) issues.length = MAX_ROWS;
+  const rows = (await describeIssues(client, issues)).map((row, index) => ({ ...row, status: stickerStatus(issues[index]) }));
+  // Apps from before carry-over (desktop 1.2.7 and older) do not ask for it and would misread it.
+  const carryOver = params.includeCarryOver ? await listCarryOver(client, params, new Set(issues.map((issue) => issue.id))) : [];
+  return { rows: [...carryOver, ...rows], truncated };
+}
 
+async function listCarryOver(client, params, inRangeIds) {
+  const candidates = (await client.issueToConingMachine.findMany({
+    where: { isDeleted: false, date: { gte: isoDaysBefore(params.dateFrom, CARRY_LOOKBACK_DAYS), lte: params.dateFrom } },
+    orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+    take: MAX_ROWS,
+    select: ISSUE_SELECT,
+  })).filter((issue) => !inRangeIds.has(issue.id) && isBeforeRange(issue, params)
+    && (!issue.coningBatchEnabled || issue.coningBatchOpen));
+  if (!candidates.length) return [];
+  const balances = await computeIssueBalancesBatch(client, 'coning', candidates);
+  const open = candidates.filter((issue) => Number(balances.get(issue.id)?.pendingWeight || 0) > PENDING_EPSILON_KG);
+  if (!open.length) return [];
+  const received = await client.receiveFromConingMachineRow.groupBy({
+    by: ['issueId'], where: { issueId: { in: open.map((issue) => issue.id) }, isDeleted: false },
+    _count: { _all: true }, _sum: { netWeight: true },
+  });
+  const receivedById = new Map(received.map((r) => [r.issueId, { containers: r._count._all, weight: Number(r._sum.netWeight || 0) }]));
+  const described = await describeIssues(client, open);
+  return described.map((row, index) => {
+    const issue = open[index];
+    const pendingWeight = Number(Number(balances.get(issue.id).pendingWeight).toFixed(3));
+    const got = receivedById.get(issue.id) || { containers: 0, weight: 0 };
+    const ageDays = dayNumber(params.dateTo) - dayNumber(issue.date);
+    const printed = issue.stickerCarryPrintedFor === params.dateTo;
+    return {
+      ...row,
+      carryOver: true,
+      status: printed ? 'carry_printed' : 'carry_over',
+      pendingWeight,
+      receivedWeight: Number(got.weight.toFixed(3)),
+      receivedContainers: got.containers,
+      estimatedContainers: estimateContainers(pendingWeight, got.weight, got.containers),
+      ageDays,
+      stale: ageDays > STALE_DAYS,
+      printedAt: printed ? issue.stickerCarryPrintedAt : null,
+      printedCopies: printed ? issue.stickerCarryPrintedCopies : 0,
+    };
+  });
+}
+
+async function describeIssues(client, issues) {
+  if (!issues.length) return [];
   const refsById = new Map(issues.map((issue) => [issue.id, refsOf(issue.receivedRowRefs)]));
   const firstRef = (issue) => refsById.get(issue.id)[0] || {};
   const [items, cuts, yarns, twists, machines, operators, coneTypes, wrappers, rollTypes] = await Promise.all([
@@ -126,17 +204,18 @@ export async function listConingStickerRun(client, params) {
       perConeTargetG: issue.requiredPerConeNetWeight,
       batchOpen: issue.coningBatchEnabled ? issue.coningBatchOpen : null,
       revision: issue.coningBatchRevision,
-      status: stickerStatus(issue),
+      carryOver: false,
       printedAt: issue.stickerPrintedAt,
       printedCopies: issue.stickerPrintedCopies,
       printedCrates: issue.stickerPrintedCrates,
     };
   });
-  return { rows, truncated };
+  return rows;
 }
 
-export async function markConingStickersPrinted(client, entries, actorUserId) {
+export async function markConingStickersPrinted(client, entries, actorUserId, printedFor) {
   if (!Array.isArray(entries) || !entries.length) throw new ConingStickerRunError('Choose at least one barcode');
+  if (entries.some((entry) => entry?.carryOver) && !DATE_RE.test(printedFor || '')) throw new ConingStickerRunError('Carried-over stickers need the date they were printed for');
   if (entries.length > MAX_ROWS) throw new ConingStickerRunError('Too many barcodes in one print');
   const byId = new Map();
   for (const entry of entries) {
@@ -145,7 +224,7 @@ export async function markConingStickersPrinted(client, entries, actorUserId) {
     if (typeof entry?.id !== 'string' || !Number.isInteger(copies) || copies < 1 || copies > MAX_COPIES || !Number.isInteger(revision)) {
       throw new ConingStickerRunError('Each barcode needs between 1 and 100 copies');
     }
-    byId.set(entry.id, { copies, revision });
+    byId.set(entry.id, { copies, revision, carryOver: entry.carryOver === true });
   }
   const issues = await client.issueToConingMachine.findMany({
     where: { id: { in: [...byId.keys()] }, isDeleted: false },
@@ -156,7 +235,15 @@ export async function markConingStickersPrinted(client, entries, actorUserId) {
   // Record the revision the printed stickers showed, so a batch that grew after the list loaded
   // still shows as changed instead of silently counting as printed.
   await Promise.all(issues.map((issue) => {
-    const { copies, revision } = byId.get(issue.id);
+    const { copies, revision, carryOver } = byId.get(issue.id);
+    // A carry-over reprint is recorded against the day it was printed for, so the original
+    // print record stays and the batch can carry over again tomorrow if still not finished.
+    if (carryOver) {
+      return client.issueToConingMachine.update({
+        where: { id: issue.id },
+        data: { stickerCarryPrintedFor: printedFor, stickerCarryPrintedAt: now, stickerCarryPrintedCopies: copies },
+      });
+    }
     const printedRevision = Math.min(revision, issue.coningBatchRevision);
     return client.issueToConingMachine.update({
       where: { id: issue.id },

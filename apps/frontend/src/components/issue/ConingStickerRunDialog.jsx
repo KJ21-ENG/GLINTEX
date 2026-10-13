@@ -7,7 +7,7 @@ import { getConingStickerRun, markConingStickersPrinted } from '../../api/client
 import { LABEL_STAGE_KEYS, buildPrintableArtifact, loadTemplateVariants, printStageTemplatesBatch } from '../../utils/labelPrint';
 import { labelsPerPage } from '../../utils/label/model';
 import { MAX_PAGES } from '../../utils/label/artifact';
-import { DEFAULT_SPARE, buildStickerSlots, compareRunRows, isPending, sheetCount, shiftGroupKey, suggestedCopies } from '../../utils/coningStickerRun';
+import { DEFAULT_SPARE, buildStickerSlots, compareRunRows, isPending, selectedByDefault, sheetCount, shiftGroupKey, suggestedCopies } from '../../utils/coningStickerRun';
 
 const STAGE = LABEL_STAGE_KEYS.CONING_ISSUE;
 const VARIANT_KEY = 'glintex.coningStickerVariant';
@@ -29,7 +29,12 @@ const rangeText = ({ dateFrom, dateTo, fromShifts, toShifts }) => (
     : `${formatDate(dateFrom)} (${fromShifts.join(', ')}) → ${formatDate(dateTo)} (${toShifts.join(', ')})`
 );
 
+const kg = (value) => `${Number(value || 0).toFixed(1)} kg`;
+
 function StatusPill({ row }) {
+  if (row.status === 'carry_over' && row.stale) return <span className="whitespace-nowrap rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800" title="Older than 2 days: finish the batch or mark the rest as wastage">Check · {kg(row.pendingWeight)} left</span>;
+  if (row.status === 'carry_over') return <span className="whitespace-nowrap rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800">C/O · {kg(row.pendingWeight)} left</span>;
+  if (row.status === 'carry_printed') return <span className="whitespace-nowrap rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800">C/O printed {formatTime(row.printedAt)} ×{row.printedCopies}</span>;
   if (row.status === 'not_printed') return <span className="whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Not printed</span>;
   if (row.status === 'changed') {
     const grew = row.crates > row.printedCrates;
@@ -73,7 +78,7 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
       // Last choice on this computer, else the first sheet variant, else the design in use.
       setVariantId((current) => [current, readVariantChoice(), set.variants.find((v) => isSheet(v.template))?.id, set.activeId]
         .find((id) => id && set.variants.some((v) => v.id === id)));
-      setSelected(new Set(list.filter(isPending).map((row) => row.id)));
+      setSelected(new Set(list.filter(selectedByDefault).map((row) => row.id)));
       setCopyOverrides({});
     } catch (err) {
       if (seq === loadSeq.current) setError(err.message || 'Unable to load coning stickers');
@@ -140,7 +145,7 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
     if (variant.factory) { setNotice(`The "${variant.name}" variant is not saved yet. Open Settings › Label Designer › Issue to coning, check it and press Save.`); return; }
     setBusy(true);
     setNotice('');
-    const entries = selectedRows.map((row) => ({ id: row.id, copies: copiesOf(row), revision: row.revision }));
+    const entries = selectedRows.map((row) => ({ id: row.id, copies: copiesOf(row), revision: row.revision, carryOver: Boolean(row.carryOver) }));
     try {
       const printTemplate = printableTemplate(template);
       if (sheet) {
@@ -165,7 +170,7 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
     if (!confirmPrint) return;
     setBusy(true);
     try {
-      await markConingStickersPrinted(confirmPrint.entries);
+      await markConingStickersPrinted(confirmPrint.entries, range.dateTo);
       setNotice(`${confirmPrint.stickers} stickers marked as printed.`);
       setConfirmPrint(null);
       setView('list');
@@ -271,7 +276,7 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
 
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
                 <div className="max-h-[52vh] overflow-auto rounded-lg border">
-                  <table className="w-full min-w-[820px] text-sm">
+                  <table className="w-full min-w-[900px] text-sm">
                     <thead className="sticky top-0 z-10 bg-background">
                       <tr className="border-b text-left text-xs text-muted-foreground">
                         <th className="w-8 p-2"><input type="checkbox" aria-label="Select all shown" checked={allVisibleSelected} onChange={(e) => toggleAll(e.target.checked)} className="h-4 w-4" /></th>
@@ -300,13 +305,15 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
                         return (
                           <React.Fragment key={row.id}>
                             {header && (
-                              <tr className={night ? 'bg-slate-900 text-white' : 'bg-muted'}>
-                                <td colSpan={9} className="px-2 py-1.5 text-xs font-bold tracking-wide">{(row.shift || 'No shift').toUpperCase()} SHIFT · {formatDate(row.date)}</td>
+                              <tr className={row.carryOver ? 'bg-sky-100 text-sky-900' : night ? 'bg-slate-900 text-white' : 'bg-muted'}>
+                                <td colSpan={9} className="px-2 py-1.5 text-xs font-bold tracking-wide">{row.carryOver
+                                  ? 'CARRIED OVER · material still to receive, stickers print with C/O · Check = older than 2 days: finish the batch or mark the rest as wastage'
+                                  : `${(row.shift || 'No shift').toUpperCase()} SHIFT · ${formatDate(row.date)}`}</td>
                               </tr>
                             )}
                             <tr className={`border-b last:border-0 hover:bg-muted/40 ${!selected.has(row.id) ? 'text-muted-foreground' : ''}`}>
                               <td className="p-2"><input type="checkbox" aria-label={`Select ${row.barcode}`} checked={selected.has(row.id)} onChange={(e) => toggle(row.id, e.target.checked)} className="h-4 w-4" /></td>
-                              <td className="p-2 font-semibold">{row.operatorName || '—'}</td>
+                              <td className="p-2 font-semibold">{row.operatorName || '—'}{row.carryOver && <span className="block text-xs font-normal text-muted-foreground">{row.shift || 'No shift'} {formatDate(row.date)}</span>}</td>
                               <td className="p-2">{row.machineName || '—'}</td>
                               <td className="p-2 font-mono text-xs whitespace-nowrap">{row.barcode}</td>
                               <td className="p-2">{row.itemName}{row.cut ? ` (${row.cut})` : ''}{row.twist ? ` · ${row.twist}` : ''}</td>

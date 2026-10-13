@@ -35,3 +35,28 @@ test('marking printed records the revision the operator saw, never a newer one',
   await assert.rejects(markConingStickersPrinted(client, [{ id: 'a', copies: 0, revision: 1 }]), /between 1 and 100/);
   await assert.rejects(markConingStickersPrinted(client, [{ id: 'a', copies: 2, revision: 1 }, { id: 'b', copies: 2, revision: 1 }]), /deleted/);
 });
+
+test('carry-over covers shifts that ended before the range and estimates containers from what was received', async () => {
+  const { isBeforeRange, estimateContainers } = await import('../coningStickerRun.js');
+  const range = { dateFrom: '2026-10-12', fromShifts: 'Night' };
+  assert.equal(isBeforeRange({ date: '2026-10-11', shift: 'Night' }, range), true);
+  assert.equal(isBeforeRange({ date: '2026-10-12', shift: 'Day' }, range), true, 'same date, earlier shift');
+  assert.equal(isBeforeRange({ date: '2026-10-12', shift: 'Night' }, range), false);
+  assert.equal(isBeforeRange({ date: '2026-10-12', shift: 'Day' }, { dateFrom: '2026-10-12', fromShifts: ['Day', 'Night'] }), false);
+  assert.equal(isBeforeRange({ date: '2026-10-12', shift: null }, range), false, 'no shift belongs to its whole date, which is in range');
+  assert.equal(estimateContainers(12, 60, 6), 2, '10 kg per container so far');
+  assert.equal(estimateContainers(0.4, 60, 6), 1);
+  assert.equal(estimateContainers(5, 0, 0), null, 'nothing received yet');
+});
+
+test('a carry-over print is recorded for its day and leaves the original print record alone', async () => {
+  const updates = [];
+  const client = { issueToConingMachine: {
+    findMany: async () => [{ id: 'a', receivedRowRefs: [], coningBatchRevision: 1 }],
+    update: async (args) => { updates.push(args); return args; },
+  } };
+  await markConingStickersPrinted(client, [{ id: 'a', copies: 3, revision: 1, carryOver: true }], 'u', '2026-10-13');
+  assert.deepEqual(Object.keys(updates[0].data).sort(), ['stickerCarryPrintedAt', 'stickerCarryPrintedCopies', 'stickerCarryPrintedFor']);
+  assert.equal(updates[0].data.stickerCarryPrintedFor, '2026-10-13');
+  await assert.rejects(markConingStickersPrinted(client, [{ id: 'a', copies: 3, revision: 1, carryOver: true }], 'u'), /printed for/);
+});

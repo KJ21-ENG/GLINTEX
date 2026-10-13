@@ -10344,8 +10344,8 @@ router.get('/api/issue_to_coning_machine/source-row/lookup', requirePermission('
 
 router.get('/api/issue_to_coning_machine/sticker_run', requirePermission('issue.coning', PERM_READ), async (req, res) => {
   try {
-    const { dateFrom, dateTo, fromShifts, toShifts } = req.query || {};
-    res.json(await listConingStickerRun(prisma, { dateFrom, dateTo, fromShifts, toShifts }));
+    const { dateFrom, dateTo, fromShifts, toShifts, includeCarryOver } = req.query || {};
+    res.json(await listConingStickerRun(prisma, { dateFrom, dateTo, fromShifts, toShifts, includeCarryOver: includeCarryOver === '1' }));
   } catch (err) {
     if (err instanceof ConingStickerRunError) return res.status(err.statusCode).json({ error: err.message });
     console.error('Failed to load coning sticker run', err);
@@ -10355,7 +10355,7 @@ router.get('/api/issue_to_coning_machine/sticker_run', requirePermission('issue.
 
 router.post('/api/issue_to_coning_machine/sticker_run/printed', requirePermission('issue.coning', PERM_WRITE), async (req, res) => {
   try {
-    const result = await markConingStickersPrinted(prisma, req.body?.entries, req.user?.id);
+    const result = await markConingStickersPrinted(prisma, req.body?.entries, req.user?.id, req.body?.printedFor);
     await logCrudWithActor(req, { entityType: 'issue_to_coning_machine', entityId: 'sticker_run', action: 'stickers_printed', payload: { entries: req.body.entries } });
     res.json({ ok: true, ...result });
   } catch (err) {

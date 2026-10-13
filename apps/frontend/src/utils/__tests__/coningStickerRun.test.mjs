@@ -33,3 +33,22 @@ test('last night prints before this morning, worker by worker, each shift on a f
 test('morning range is yesterday Night to today Day in local time', () => {
   assert.deepEqual(morningRange(new Date(2026, 9, 13, 0, 30)), { dateFrom: '2026-10-12', dateTo: '2026-10-13', fromShifts: ['Night'], toShifts: ['Day'] });
 });
+
+test('carried-over batches print first on their own sheet, marked C/O, with copies from what is left', async () => {
+  const { selectedByDefault, stickerData } = await import('../coningStickerRun.js');
+  const carry = row({ barcode: 'ICO-9', date: '2026-10-11', shift: 'Night', carryOver: true, status: 'carry_over', estimatedContainers: 2, crates: 6 });
+  const stale = { ...carry, barcode: 'ICO-8', stale: true };
+  const today = row({ barcode: 'ICO-10', crates: 1 });
+  assert.deepEqual([today, carry].sort(compareRunRows).map((r) => r.barcode), ['ICO-9', 'ICO-10']);
+  assert.equal(suggestedCopies(carry), 3, 'two containers left plus one spare');
+  assert.equal(suggestedCopies({ ...carry, estimatedContainers: null }, 2), 8, 'nothing received yet: as a new barcode');
+  assert.equal(selectedByDefault(carry), true);
+  assert.equal(selectedByDefault(stale), false, 'stale carry-overs wait for a check');
+  assert.equal(selectedByDefault({ ...carry, status: 'carry_printed' }), false);
+  assert.equal(stickerData(carry).shift, 'Night C/O');
+  assert.equal(stickerData(today).shift, 'Day');
+  const slots = buildStickerSlots([today, carry], { copiesOf: suggestedCopies, perPage: 21 });
+  assert.equal(slots[0].barcode, 'ICO-9');
+  assert.ok(slots.slice(3, 21).every((s) => s === null), 'carry-overs keep their own sheet');
+  assert.equal(slots[21].barcode, 'ICO-10');
+});

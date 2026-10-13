@@ -411,6 +411,9 @@ model IssueToConingMachine {
   stickerPrintedCrates     Int                           @default(0)
   stickerPrintedRevision   Int                           @default(0)
   stickerPrintedByUserId   String?
+  stickerCarryPrintedFor   String?
+  stickerCarryPrintedAt    DateTime?
+  stickerCarryPrintedCopies Int                          @default(0)
   supplies                 ConingIssueSupply[]
   corrections              ConingIssueCorrection[]
   isDeleted                Boolean                       @default(false)

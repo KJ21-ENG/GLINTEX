@@ -2,35 +2,44 @@
 // fill the sheets. Pure functions so the dialog and the tests share one rule.
 
 export const DEFAULT_SPARE = 2;
-export const PENDING_STATUSES = ['not_printed', 'changed'];
+export const PENDING_STATUSES = ['not_printed', 'changed', 'carry_over'];
 const SHIFT_ORDER = { Day: 0, Night: 1, '': 2 };
 
 export const isPending = (row) => PENDING_STATUSES.includes(row.status);
 
+// Selected by default: everything not yet printed, except carry-overs old enough to check first.
+export const selectedByDefault = (row) => isPending(row) && !row.stale;
+
 // New barcode: one per issued crate plus spares. Batch that grew after printing: only the new
-// crates. Already printed: one, for a lost or torn sticker.
+// crates. Carried over: the containers its remaining material should fill, plus one spare.
+// Already printed: one, for a lost or torn sticker.
 export const suggestedCopies = (row, spare = DEFAULT_SPARE) => {
+  if (row.status === 'carry_over') return row.estimatedContainers ? row.estimatedContainers + 1 : Math.max(1, Number(row.crates || 0) + Number(spare || 0));
   if (row.status === 'not_printed') return Math.max(1, Number(row.crates || 0) + Number(spare || 0));
   if (row.status === 'changed') return Math.max(1, Number(row.crates || 0) - Number(row.printedCrates || 0));
   return 1;
 };
 
-// Chronological shifts (12th Night before 13th Day), then worker, so each worker's stickers sit together.
+// Carried-over batches first, then chronological shifts (12th Night before 13th Day), then
+// worker, so each worker's stickers sit together.
 export const compareRunRows = (a, b) => (
-  String(a.date).localeCompare(String(b.date))
+  Number(Boolean(b.carryOver)) - Number(Boolean(a.carryOver))
+  || String(a.date).localeCompare(String(b.date))
   || (SHIFT_ORDER[a.shift] ?? 2) - (SHIFT_ORDER[b.shift] ?? 2)
   || String(a.operatorName).localeCompare(String(b.operatorName))
   || String(a.machineName).localeCompare(String(b.machineName))
   || String(a.barcode).localeCompare(String(b.barcode))
 );
 
-export const shiftGroupKey = (row) => `${row.date}|${row.shift || ''}`;
+export const shiftGroupKey = (row) => (row.carryOver ? 'carry' : `${row.date}|${row.shift || ''}`);
 
 export const stickerData = (row) => ({
   barcode: row.barcode,
   lotNo: row.lotNo,
   date: row.date,
-  shift: row.shift || 'No shift',
+  // C/O rides on the shift, which every coning issue design prints in its top band, so it
+  // shows on saved designs and older apps without a new variable.
+  shift: row.carryOver ? `${row.shift || 'No shift'} C/O` : (row.shift || 'No shift'),
   operatorName: row.operatorName,
   machineName: row.machineName,
   itemName: row.itemName,

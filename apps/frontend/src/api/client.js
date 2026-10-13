@@ -201,10 +201,10 @@ export async function getReceiveCrateStats(pieceId) {
 }
 export async function createIssueToHoloMachine(payload) { return await request('/api/issue_to_holo_machine', { method: 'POST', body: payload }); }
 export async function getConingStickerRun({ dateFrom, dateTo, fromShifts = [], toShifts = [] }) {
-  const params = new URLSearchParams({ dateFrom, dateTo, fromShifts: fromShifts.join(','), toShifts: toShifts.join(',') });
+  const params = new URLSearchParams({ dateFrom, dateTo, fromShifts: fromShifts.join(','), toShifts: toShifts.join(','), includeCarryOver: '1' });
   return await request(`/api/issue_to_coning_machine/sticker_run?${params.toString()}`);
 }
-export async function markConingStickersPrinted(entries) { return await request('/api/issue_to_coning_machine/sticker_run/printed', { method: 'POST', body: { entries } }); }
+export async function markConingStickersPrinted(entries, printedFor) { return await request('/api/issue_to_coning_machine/sticker_run/printed', { method: 'POST', body: { entries, printedFor } }); }
 export async function getConingBatchCandidates(payload) { return await request('/api/issue_to_coning_machine/batch_candidates', { method: 'POST', body: payload }); }
 export async function finishConingBatch(id) { return await request(`/api/issue_to_coning_machine/${encodeURIComponent(id)}/finish_batch`, { method: 'POST' }); }
 export async function reopenConingBatch(id) { return await request(`/api/issue_to_coning_machine/${encodeURIComponent(id)}/reopen_batch`, { method: 'POST' }); }

@@ -161,7 +161,9 @@ export const resolveElementText = (el, data) => {
     const value = substituted || data?.barcode || '';
     return new RegExp(PLACEHOLDER_PATTERN.source).test(value) ? '' : value;
   }
-  return el.uppercase ? substituted.toUpperCase() : substituted;
+  // An empty variable at either end leaves a stray space that would shift centred text.
+  const text = substituted.replace(/^[ \t]+|[ \t]+$/g, '');
+  return el.uppercase ? text.toUpperCase() : text;
 };
 
 export const layoutLabel = (templateInput, data = {}, measurer, options = {}) => {

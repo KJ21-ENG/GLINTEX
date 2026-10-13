@@ -4,13 +4,13 @@
 // falls back to the operating system print dialog on the very same document.
 import { LABEL_STAGE_KEYS, STAGE_VARIABLES, STAGE_LABELS, STAGE_GROUPS, getStageVariables, getStageLabel } from './label/stages.js';
 import { toV2Template } from './label/migrate.js';
-import { DEFAULT_STAGE_TEMPLATES, getDefaultTemplate, CALIBRATION_TEMPLATE } from './label/defaults.js';
+import { DEFAULT_STAGE_TEMPLATES, FACTORY_VARIANTS, getDefaultTemplate, CALIBRATION_TEMPLATE } from './label/defaults.js';
 import { buildPrintableArtifact as buildArtifact, artifactToDocument, normalizeCopies, ARTIFACT_VERSION } from './label/artifact.js';
 import { substitutePlaceholders } from './label/placeholders.js';
 import { normalizeTemplate, cloneTemplate } from './label/model.js';
 
 export { LABEL_STAGE_KEYS, STAGE_VARIABLES, STAGE_LABELS, STAGE_GROUPS, getStageVariables, getStageLabel };
-export { DEFAULT_STAGE_TEMPLATES, getDefaultTemplate, CALIBRATION_TEMPLATE };
+export { DEFAULT_STAGE_TEMPLATES, FACTORY_VARIANTS, getDefaultTemplate, CALIBRATION_TEMPLATE };
 export { substitutePlaceholders, normalizeCopies, toV2Template, normalizeTemplate, cloneTemplate, artifactToDocument, ARTIFACT_VERSION };
 
 // Same resolution as api/client.js: Vite only substitutes the exact `import.meta.env` token.
@@ -82,6 +82,15 @@ export const newVariantId = () => `v-${Date.now().toString(36)}-${Math.random().
 
 // Returns { variants: [{ id, name, template }], activeId, origin } where origin describes
 // the design in use: 'saved', 'legacy' (old designer) or 'default' (factory design).
+// Until a stage's variants are saved, its factory variants are offered too, marked `factory`:
+// they print only after someone saves them in the designer.
+const withFactoryVariants = (stageKey, variants) => [
+  ...variants,
+  ...(FACTORY_VARIANTS[stageKey] || [])
+    .filter((extra) => !variants.some((variant) => variant.id === extra.id))
+    .map((extra) => ({ id: extra.id, name: extra.name, template: getDefaultTemplate(stageKey, extra.id), factory: true })),
+];
+
 export const loadTemplateVariants = async (stageKey, options = {}) => {
   const apiBase = options.apiBase || API_BASE_DEFAULT;
   if (!stageKey) throw new Error('Missing label stage');
@@ -94,10 +103,10 @@ export const loadTemplateVariants = async (stageKey, options = {}) => {
   }
   try {
     const { template, origin } = await loadTemplateWithOrigin(stageKey, options);
-    return { variants: [{ ...STANDARD_VARIANT, template }], activeId: STANDARD_VARIANT.id, origin };
+    return { variants: withFactoryVariants(stageKey, [{ ...STANDARD_VARIANT, template }]), activeId: STANDARD_VARIANT.id, origin };
   } catch (error) {
     if (error.status !== 404) throw error;
-    return { variants: [{ ...STANDARD_VARIANT, template: getDefaultTemplate(stageKey) }], activeId: STANDARD_VARIANT.id, origin: 'default' };
+    return { variants: withFactoryVariants(stageKey, [{ ...STANDARD_VARIANT, template: getDefaultTemplate(stageKey) }]), activeId: STANDARD_VARIANT.id, origin: 'default' };
   }
 };
 

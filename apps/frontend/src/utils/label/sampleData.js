@@ -32,11 +32,11 @@ export const SAMPLE_VARIANTS = [
 const STAGE_BARCODES = {
   typical: {
     inbound: 'INB-182-004', cutter_issue: 'ICU-182-004', cutter_issue_small: 'ICU-182-004', cutter_receive: 'RCU-182-004-C001',
-    holo_issue: 'IHO-240', holo_receive: 'RHO-240-C001', coning_issue: 'ICO-240', coning_issue_sheet: 'ICO-240', coning_receive: 'RCO-240-C001', coning_receive_small: 'RCO-240-C001',
+    holo_issue: 'IHO-240', holo_receive: 'RHO-240-C001', coning_issue: 'ICO-240', coning_receive: 'RCO-240-C001', coning_receive_small: 'RCO-240-C001',
   },
   long: {
     inbound: 'INB-18234-012', cutter_issue: 'ICU-18234-012', cutter_issue_small: 'ICU-18234-012', cutter_receive: 'RCU-18234-012-C003',
-    holo_issue: 'IHO-24012', holo_receive: 'RHO-24012-C012', coning_issue: 'ICO-24012', coning_issue_sheet: 'ICO-24012', coning_receive: 'RCO-24012-C012', coning_receive_small: 'RCO-24012-C012',
+    holo_issue: 'IHO-24012', holo_receive: 'RHO-24012-C012', coning_issue: 'ICO-24012', coning_receive: 'RCO-24012-C012', coning_receive_small: 'RCO-24012-C012',
   },
 };
 

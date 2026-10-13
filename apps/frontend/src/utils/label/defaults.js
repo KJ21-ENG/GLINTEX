@@ -107,22 +107,6 @@ export const DEFAULT_STAGE_TEMPLATES = {
     ],
   },
 
-  // The supervisor matches stickers to containers by worker name, so it leads in a black band.
-  [LABEL_STAGE_KEYS.CONING_ISSUE_SHEET]: {
-    version: 2, media: MEDIA_A4_64x38, copies: 1,
-    // 1 mm clear of the die-cut edge: office printers place the sheet to about a millimetre.
-    elements: [
-      text('worker', 1, 1, 44, 7, '@operatorName', { fontSizePt: 11.5, invert: true, uppercase: true, overflow: 'shrink', minFontSizePt: 4, paddingMm: 1 }),
-      text('shift', 45, 1, 18, 7, '@shift', { fontSizePt: 10, invert: true, uppercase: true, align: 'center', overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.6 }),
-      text('item', 1, 8.6, 62, 5, '@itemName (@cut)', { fontSizePt: 9, overflow: 'wrap-shrink', minFontSizePt: 4, lineHeight: 1 }),
-      text('yarn', 1, 13.6, 39, 4.2, '@yarnName · @twist', { fontSizePt: 7.5, bold: false, overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
-      text('machine', 40, 13.6, 23, 4.2, 'M/C @machineName', { fontSizePt: 7.5, align: 'right', overflow: 'wrap-shrink', minFontSizePt: 3.5, lineHeight: 1, paddingMm: 0.3 }),
-      text('cone', 1, 17.8, 39, 4.2, '@coneType · @perConeTargetG g', { fontSizePt: 7.5, bold: false, overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
-      text('date', 40, 17.8, 23, 4.2, '@date', { fontSizePt: 7.5, align: 'right', overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
-      barcode('barcode', 2, 22.4, { moduleMm: 0.3, barHeightMm: 9.5, textSizePt: 7, quietZoneMm: 2, maxWidthMm: 60 }),
-    ],
-  },
-
   [LABEL_STAGE_KEYS.CONING_RECEIVE]: {
     version: 2, media: MEDIA_75x125, copies: 1,
     elements: [
@@ -159,8 +143,31 @@ export const DEFAULT_STAGE_TEMPLATES = {
   },
 };
 
-export const getDefaultTemplate = (stageKey) => {
-  const def = DEFAULT_STAGE_TEMPLATES[stageKey];
+// Further factory variants a stage offers next to its standard design. The coning supervisor's
+// stickers come off A4 office sheets; the worker name leads in a black band so a sticker is
+// matched to its container at a glance.
+const CONING_ISSUE_A4 = {
+  version: 2, media: MEDIA_A4_64x38, copies: 1,
+  // 1 mm clear of the die-cut edge: office printers place the sheet to about a millimetre.
+  elements: [
+    text('worker', 1, 1, 44, 7, '@operatorName', { fontSizePt: 11.5, invert: true, uppercase: true, overflow: 'shrink', minFontSizePt: 4, paddingMm: 1 }),
+    text('shift', 45, 1, 18, 7, '@shift', { fontSizePt: 10, invert: true, uppercase: true, align: 'center', overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.6 }),
+    text('item', 1, 8.6, 62, 5, '@itemName (@cut)', { fontSizePt: 9, overflow: 'wrap-shrink', minFontSizePt: 4, lineHeight: 1 }),
+    text('yarn', 1, 13.6, 39, 4.2, '@yarnName · @twist', { fontSizePt: 7.5, bold: false, overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
+    text('machine', 40, 13.6, 23, 4.2, 'M/C @machineName', { fontSizePt: 7.5, align: 'right', overflow: 'wrap-shrink', minFontSizePt: 3.5, lineHeight: 1, paddingMm: 0.3 }),
+    text('cone', 1, 17.8, 39, 4.2, '@coneType · @perConeTargetG g', { fontSizePt: 7.5, bold: false, overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
+    text('date', 40, 17.8, 23, 4.2, '@date', { fontSizePt: 7.5, align: 'right', overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
+    barcode('barcode', 2, 22.4, { moduleMm: 0.3, barHeightMm: 9.5, textSizePt: 7, quietZoneMm: 2, maxWidthMm: 60 }),
+  ],
+};
+
+export const FACTORY_VARIANTS = {
+  [LABEL_STAGE_KEYS.CONING_ISSUE]: [{ id: 'a4-sheet', name: 'A4 sheet', template: CONING_ISSUE_A4 }],
+};
+
+// The factory design of a stage, or of one of its factory variants.
+export const getDefaultTemplate = (stageKey, variantId) => {
+  const def = (FACTORY_VARIANTS[stageKey] || []).find((variant) => variant.id === variantId)?.template || DEFAULT_STAGE_TEMPLATES[stageKey];
   return def ? normalizeTemplate(JSON.parse(JSON.stringify(def))) : null;
 };
 

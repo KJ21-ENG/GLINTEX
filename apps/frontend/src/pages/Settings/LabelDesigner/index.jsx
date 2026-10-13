@@ -204,7 +204,7 @@ export default function LabelDesigner() {
   };
 
   const applyFactoryDesign = () => {
-    dispatch({ type: 'replaceTemplate', template: getDefaultTemplate(stageKey) });
+    dispatch({ type: 'replaceTemplate', template: getDefaultTemplate(stageKey, currentVariantId) });
     notify('info', 'Factory design loaded. Press Save to keep it.');
   };
   const handleReset = () => setConfirm({ kind: 'factory' });

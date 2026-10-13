@@ -8,7 +8,7 @@ import { layoutLabel, createEstimateMeasurer, wrapParagraph, quantizeToDots } fr
 import { renderLabelMarkup, renderPage, rotationTransform, assemblePrintDocument, mm } from '../label/html.js';
 import { buildPrintableArtifact, artifactToDocument } from '../label/artifact.js';
 import { substitutePlaceholders, listPlaceholders } from '../label/placeholders.js';
-import { DEFAULT_STAGE_TEMPLATES, CALIBRATION_TEMPLATE } from '../label/defaults.js';
+import { DEFAULT_STAGE_TEMPLATES, FACTORY_VARIANTS, CALIBRATION_TEMPLATE, getDefaultTemplate } from '../label/defaults.js';
 import { LABEL_STAGE_KEYS, STAGE_VARIABLES } from '../label/stages.js';
 import { buildSampleData } from '../label/sampleData.js';
 import { fontFamilyCss } from '../label/model.js';
@@ -286,10 +286,10 @@ test('opacity snaps to quarters and prints as white vector hatching, never grey'
 });
 
 test('an A4 sheet fills 3 × 7 labels per page in reading order and leaves null slots blank', () => {
-  const template = DEFAULT_STAGE_TEMPLATES.coning_issue_sheet;
-  const data = buildSampleData('coning_issue_sheet');
+  const template = getDefaultTemplate('coning_issue', 'a4-sheet');
+  const data = buildSampleData('coning_issue');
   const slots = [null, null, ...Array.from({ length: 22 }, () => data)];
-  const artifact = buildPrintableArtifact(template, slots, { stageKey: 'coning_issue_sheet', dpi: 300, copies: 1 });
+  const artifact = buildPrintableArtifact(template, slots, { stageKey: 'coning_issue', dpi: 300, copies: 1 });
   assert.equal(artifact.widthMm, 210);
   assert.equal(artifact.heightMm, 297);
   assert.equal(artifact.pages.length, 2, '24 slots on 21-label sheets');
@@ -302,8 +302,8 @@ test('an A4 sheet fills 3 × 7 labels per page in reading order and leaves null 
 });
 
 test('sheet copies repeat each record in place and an overfull sheet is refused', () => {
-  const template = DEFAULT_STAGE_TEMPLATES.coning_issue_sheet;
-  const artifact = buildPrintableArtifact(template, [{ barcode: 'ICO-1' }, { barcode: 'ICO-2' }], { stageKey: 'coning_issue_sheet', dpi: 300, copies: 3 });
+  const template = getDefaultTemplate('coning_issue', 'a4-sheet');
+  const artifact = buildPrintableArtifact(template, [{ barcode: 'ICO-1' }, { barcode: 'ICO-2' }], { stageKey: 'coning_issue', dpi: 300, copies: 3 });
   assert.equal(artifact.pages.length, 1);
   const order = [...artifact.pages[0].html.matchAll(/ICO-(\d)/g)].map((m) => m[1]).filter((v, i, a) => i === 0 || v !== a[i - 1]);
   assert.deepEqual(order, ['1', '2'], 'all copies of ICO-1 come before ICO-2');
@@ -323,4 +323,21 @@ test('a QR code can print its value underneath, and saved QR codes without the s
   const markup = renderLabelMarkup(layoutLabel(tpl({ showText: true }), { barcode: 'ICO-240' }, measurer, { dpi: 300 }), fontFamilyCss);
   assert.match(markup, />ICO-240</);
   assert.doesNotMatch(renderLabelMarkup(layoutLabel(tpl({}), { barcode: 'ICO-240' }, measurer, { dpi: 300 }), fontFamilyCss), />ICO-240</);
+});
+
+test('factory variants render without warnings and use only their stage variables', () => {
+  for (const [stage, extras] of Object.entries(FACTORY_VARIANTS)) {
+    const used = new Set(STAGE_VARIABLES[stage].map((v) => v.key));
+    for (const extra of extras) {
+      for (const variant of ['typical', 'long']) {
+        const artifact = buildPrintableArtifact(extra.template, [buildSampleData(stage, variant)], { stageKey: stage, dpi: 300 });
+        assert.deepEqual(artifact.warnings, [], `${stage} ${extra.id} ${variant}: ${artifact.warnings.join(', ')}`);
+      }
+      for (const el of extra.template.elements) {
+        for (const key of listPlaceholders(el.text || el.value || '')) assert.ok(used.has(key), `${stage} ${extra.id} uses unknown variable @${key}`);
+      }
+      assert.equal(getDefaultTemplate(stage, extra.id).media.kind, extra.template.media.kind, 'factory reset of a variant restores that variant');
+    }
+  }
+  assert.equal(getDefaultTemplate('coning_issue', 'standard').media.kind, 'roll');
 });

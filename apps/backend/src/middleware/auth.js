@@ -107,6 +107,7 @@ const STICKER_TEMPLATE_PERMISSIONS = {
   cutter_issue_small: 'issue.cutter',
   holo_issue: 'issue.holo',
   coning_issue: 'issue.coning',
+  // Merged into coning_issue variants in 1.2.7; kept readable for desktop apps from before the merge.
   coning_issue_sheet: 'issue.coning',
   cutter_receive: 'receive.cutter',
   holo_receive: 'receive.holo',

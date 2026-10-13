@@ -34,7 +34,7 @@ import { normalizeSide } from '../services/contractorPayments/calc.js';
 import { assertProductionRowsEditable, assertIssueEditable, lockSettlementLinesExclusive, lockItemNamesExclusive } from '../services/contractorPayments/service.js';
 import { perfLog, isPerfLogEnabled } from '../lib/perfLog.js';
 import { computeIssueBalancesBatch } from '../services/issueBalances.js';
-import { commitConingSupply, coningBatchKey, findConingBatchCandidates, lockConingBatch, resolveConingBatchMaterial } from '../services/coningBatches.js';
+import { batchTwistId, commitConingSupply, coningBatchKey, findConingBatchCandidates, lockConingBatch, resolveConingBatchMaterial } from '../services/coningBatches.js';
 import { correctConingIssue, coningDeliveryCorrectionLock, effectiveConingSupply } from '../services/coningCorrections.js';
 import { createCutterReceiveBatch, CutterReceiveError } from '../services/cutterReceive.js';
 import { applyTelegramCronSchedule, runPrimarySequence, runReminderSequence } from '../utils/telegramScheduler.js';
@@ -10296,7 +10296,8 @@ router.post('/api/issue_to_coning_machine/batch_candidates', requirePermission('
     if (ids.length > 200) return res.status(400).json({ error: 'Too many source crates' });
     const material = await resolveConingBatchMaterial(prisma, ids);
     const single = (values) => values.length === 1 ? values[0] : null;
-    const key = material.complete ? coningBatchKey({ ...body, itemId: single(material.itemIds), cutId: single(material.cutIds), yarnId: single(material.yarnIds) }) : null;
+    const twistId = batchTwistId(material, typeof body.twistId === 'string' ? body.twistId : null);
+    const key = material.complete && twistId !== undefined ? coningBatchKey({ ...body, itemId: single(material.itemIds), cutId: single(material.cutIds), yarnId: single(material.yarnIds), twistId }) : null;
     const candidates = await findConingBatchCandidates(prisma, key, material.ancestorIssueIds);
     res.json({ candidates, eligible: Boolean(key) });
   } catch (err) {

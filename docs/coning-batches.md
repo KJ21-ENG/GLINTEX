@@ -8,9 +8,13 @@ pool throughout receiving. There is no second batch-number format.
 
 After scanning source crates and selecting the issue parameters, the application
 checks for an open batch with the same issue date, shift, worker, machine, item,
-traced cut, yarn, cone type, wrapper and target net weight per cone. Twist, source
-lot and box are not matching criteria. Missing material lineage or required
-parameters disables automatic matching.
+traced cut, yarn, twist, cone type, wrapper and target net weight per cone. Source
+lot and box are not matching criteria. Twist is traced from the source crates like
+cut and yarn (the issue form's twist is the fallback), so S and Z twist never share a
+batch; a single issue that itself mixes twists cannot join or start a shared batch.
+Twist was added on 2026-10-13 after mixed batches ICO-5252 and ICO-5255 had to be
+deleted and re-issued. Missing material lineage or required parameters disables
+automatic matching.
 
 If one batch matches, **Add to existing batch** is selected automatically. The
 screen shows its ICO number and the previous, additional and combined weights.

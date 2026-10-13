@@ -67,27 +67,36 @@ export async function resolveConingBatchMaterial(client, rowIds, visited = new S
   return { complete, itemIds: [...items], cutIds: [...cuts], yarnIds: [...yarns], twistIds: [...twists], ancestorIssueIds: [...ancestors] };
 }
 
-export function coningBatchKey({ date, shift, operatorId, machineId, itemId, cutId, yarnId, coneTypeId, wrapperId, requiredPerConeNetWeight }) {
+// Twist identifies the pool: the floor never mixes S and Z twist on one coning batch
+// (2026-10-12, ICO-5252 and ICO-5255 had to be deleted and re-issued). Box does not.
+export function coningBatchKey({ date, shift, operatorId, machineId, itemId, cutId, yarnId, twistId, coneTypeId, wrapperId, requiredPerConeNetWeight }) {
   const weight = Number(requiredPerConeNetWeight);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !String(shift || '').trim()
     || !operatorId || !machineId || !itemId || !cutId || !yarnId || !coneTypeId || !Number.isFinite(weight) || weight <= 0) return null;
-  // Twist and box deliberately do not identify a physical production pool.
   return createHash('sha256').update(JSON.stringify([
     date, String(shift).trim().toLowerCase(), operatorId, machineId, itemId, cutId, yarnId,
-    coneTypeId, wrapperId || null, weight,
+    coneTypeId, wrapperId || null, weight, twistId || null,
   ])).digest('hex');
+}
+
+// The twist a delivery is matched on: traced from its source crates like cut and yarn,
+// else the twist chosen on the issue form. A delivery that itself mixes twists cannot
+// join or start a shared batch (undefined disables matching).
+export function batchTwistId(material, fallbackTwistId) {
+  if (material.twistIds.length > 1) return undefined;
+  return material.twistIds[0] || fallbackTwistId || null;
 }
 
 export async function findConingBatchCandidates(client, key, excludeIssueIds = []) {
   if (!key) return [];
   const issues = await client.issueToConingMachine.findMany({
     where: { isDeleted: false, coningBatchEnabled: true, coningBatchOpen: true, coningBatchKey: key, id: { notIn: excludeIssueIds } },
-    include: { machine: { select: { name: true } }, operator: { select: { name: true } }, _count: { select: { supplies: true } } },
+    include: { machine: { select: { name: true } }, operator: { select: { name: true } }, twist: { select: { name: true } }, _count: { select: { supplies: true } } },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
   const balances = await computeIssueBalancesBatch(client, 'coning', issues);
   return issues.map((issue) => ({ id: issue.id, barcode: issue.barcode, date: issue.date, shift: issue.shift,
-    machineName: issue.machine?.name || '', operatorName: issue.operator?.name || '',
+    machineName: issue.machine?.name || '', operatorName: issue.operator?.name || '', twistName: issue.twist?.name || '',
     issuedWeight: sumWeight(refsOf(issue.receivedRowRefs)), pendingWeight: balances.get(issue.id)?.pendingWeight || 0,
     supplyCount: issue._count.supplies, createdAt: issue.createdAt }));
 }
@@ -139,8 +148,9 @@ export async function commitConingSupply(client, { issueData, crates, mode = 'ne
   const material = await resolveConingBatchMaterial(client, ids);
   const single = (values) => values.length === 1 ? values[0] : null;
   const uniformPackaging = crates.every((ref) => ref.coneTypeId === crates[0]?.coneTypeId && ref.wrapperId === crates[0]?.wrapperId);
-  const key = material.complete && uniformPackaging ? coningBatchKey({ ...issueData, cutId: single(material.cutIds), yarnId: single(material.yarnIds),
-    coneTypeId: crates[0]?.coneTypeId, wrapperId: crates[0]?.wrapperId }) : null;
+  const twistId = batchTwistId(material, issueData.twistId);
+  const key = material.complete && uniformPackaging && twistId !== undefined ? coningBatchKey({ ...issueData, cutId: single(material.cutIds), yarnId: single(material.yarnIds),
+    twistId, coneTypeId: crates[0]?.coneTypeId, wrapperId: crates[0]?.wrapperId }) : null;
   const candidates = mode === 'new' ? [] : await findConingBatchCandidates(client, key, material.ancestorIssueIds);
   let target = null;
   if (mode === 'existing') {

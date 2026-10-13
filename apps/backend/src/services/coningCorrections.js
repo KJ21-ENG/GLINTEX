@@ -1,5 +1,5 @@
 import { assertIssueEditable } from './contractorPayments/service.js';
-import { ConingBatchError, coningBatchKey, lockConingBatch, mergeConingSourceRefs, resolveConingBatchMaterial } from './coningBatches.js';
+import { ConingBatchError, batchTwistId, coningBatchKey, lockConingBatch, mergeConingSourceRefs, resolveConingBatchMaterial } from './coningBatches.js';
 
 const EPSILON = 1e-6;
 const roundKg = (value) => Number(Number(value).toFixed(3));
@@ -135,8 +135,9 @@ async function batchIdentity(client, issue, refs) {
   const material = await resolveConingBatchMaterial(client, refs.map((ref) => ref.rowId));
   const uniform = refs.every((ref) => ref.coneTypeId === refs[0]?.coneTypeId && ref.wrapperId === refs[0]?.wrapperId);
   const single = (ids) => ids.length === 1 ? ids[0] : null;
-  return { material, key: material.complete && uniform ? coningBatchKey({ ...issue,
-    cutId: single(material.cutIds), yarnId: single(material.yarnIds),
+  const twistId = batchTwistId(material, issue.twistId);
+  return { material, key: material.complete && uniform && twistId !== undefined ? coningBatchKey({ ...issue,
+    cutId: single(material.cutIds), yarnId: single(material.yarnIds), twistId,
     coneTypeId: refs[0]?.coneTypeId, wrapperId: refs[0]?.wrapperId,
   }) : null };
 }

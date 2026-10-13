@@ -554,7 +554,7 @@ export function IssueToConing() {
                                         )}
                                         {batchMode !== 'new' && selectedBatch && (
                                             <div className="text-sm space-y-1">
-                                                <p>{selectedBatch.operatorName} · {selectedBatch.machineName} · {selectedBatch.shift}</p>
+                                                <p>{selectedBatch.operatorName} · {selectedBatch.machineName} · {selectedBatch.shift}{selectedBatch.twistName ? ` · ${selectedBatch.twistName}` : ''}</p>
                                                 <p>Previously issued: {formatKg(selectedBatch.issuedWeight)} kg · Adding: {formatKg(coningMeta.totalNet)} kg · Combined: {formatKg(selectedBatch.issuedWeight + coningMeta.totalNet)} kg</p>
                                                 <p>Supervisor stickers will use <strong>{selectedBatch.barcode}</strong>.</p>
                                             </div>

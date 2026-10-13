@@ -60,20 +60,37 @@ if (!url) {
     return { item, yarn, cut, cone, wrapper, box, twistA, twistB, base, source, crate, issue, candidates, receive };
   }
 
-  test('batch key excludes twist and box, but separates all required specifications', () => {
-    const fields = { date: '2026-10-08', shift: 'Day', operatorId: 'worker', machineId: 'machine', itemId: 'item', cutId: 'cut', yarnId: 'yarn', coneTypeId: 'cone', wrapperId: 'wrap', requiredPerConeNetWeight: 125 };
-    assert.equal(coningBatchKey(fields), coningBatchKey({ ...fields, twistId: 'different', boxId: 'other', shift: ' day ' }));
-    for (const field of ['date', 'shift', 'operatorId', 'machineId', 'itemId', 'cutId', 'yarnId', 'coneTypeId', 'wrapperId', 'requiredPerConeNetWeight']) {
+  test('batch key separates twist and every required specification, but not box', () => {
+    const fields = { date: '2026-10-08', shift: 'Day', operatorId: 'worker', machineId: 'machine', itemId: 'item', cutId: 'cut', yarnId: 'yarn', twistId: 'z', coneTypeId: 'cone', wrapperId: 'wrap', requiredPerConeNetWeight: 125 };
+    assert.equal(coningBatchKey(fields), coningBatchKey({ ...fields, boxId: 'other', shift: ' day ' }));
+    for (const field of ['date', 'shift', 'operatorId', 'machineId', 'itemId', 'cutId', 'yarnId', 'twistId', 'coneTypeId', 'wrapperId', 'requiredPerConeNetWeight']) {
       const changed = field === 'date' ? '2026-10-09' : field === 'requiredPerConeNetWeight' ? 250 : 'other';
       assert.notEqual(coningBatchKey(fields), coningBatchKey({ ...fields, [field]: changed }), field);
     }
     assert.equal(coningBatchKey({ ...fields, operatorId: null }), null);
   });
 
-  test('same-shift different twists and lots share one receiving barcode and preserve both supplies', async () => {
+  test('different twists never share a batch: the second issue gets its own barcode', async () => {
+    const f = await scenario();
+    const zSource = await f.source(36.612, f.twistA.id, '167');
+    const sSource = await f.source(36.310, f.twistB.id, '167');
+    const z = await f.issue(zSource);
+    const match = await f.candidates(sSource);
+    assert.deepEqual(match.candidates, [], 'an S-twist issue must not be offered the open Z-twist batch');
+    assert.equal(match.eligible, true);
+    const s = await f.issue(sSource);
+    assert.equal(s.addedToBatch, false);
+    assert.notEqual(s.issueToConingMachine.id, z.issueToConingMachine.id);
+    assert.equal(s.issueToConingMachine.twistId, f.twistB.id);
+    assert.equal((await prisma.issueToConingMachine.findUnique({ where: { id: z.issueToConingMachine.id } })).twistId, f.twistA.id, 'the first batch keeps its twist');
+    const forced = await api('post', createPath, { ...f.base, crates: [f.crate(await f.source(10, f.twistB.id, '167'))], batchMode: 'existing', batchId: z.issueToConingMachine.id });
+    assert.equal(forced.status, 409, 'choosing a batch of another twist explicitly is refused too');
+  });
+
+  test('same-shift same-twist issues from different lots share one receiving barcode and preserve both supplies', async () => {
     const f = await scenario();
     const firstSource = await f.source(36.612);
-    const secondSource = await f.source(36.310, f.twistB.id, '161');
+    const secondSource = await f.source(36.310, f.twistA.id, '161');
     const first = await f.issue(firstSource);
     const match = await f.candidates(secondSource);
     assert.equal(match.candidates.length, 1);
@@ -91,7 +108,8 @@ if (!url) {
     assert.equal(lookup.body.issueBalance.originalWeight, 72.922);
     assert.deepEqual(new Set(lookup.body.lotNos), new Set(['160', '161']));
     assert.match(lookup.body.twistName, /Z /);
-    assert.match(lookup.body.twistName, /S /);
+    assert.doesNotMatch(lookup.body.twistName, /S /);
+    assert.match(match.candidates[0].twistName, /Z /);
     const saved = await f.receive(first.issueToConingMachine.id, 40);
     assert.equal(saved.status, 200, saved.text);
     assert.equal(saved.body.pieceTotal.totalCones, 20);
@@ -317,7 +335,7 @@ if (!url) {
   test('batch-wide specification corrections survive delivery corrections and future top-ups with a stable ICO', async () => {
     const f = await scenario();
     const a = await f.source();
-    const b = await f.source(40, f.twistB.id, '161');
+    const b = await f.source(40, f.twistA.id, '161');
     const first = await f.issue(a);
     const second = await f.issue(b);
     const originals = await prisma.coningIssueSupply.findMany({ where: { issueId: first.issueToConingMachine.id }, orderBy: { id: 'asc' } });
@@ -518,7 +536,9 @@ if (!url) {
     assert.equal(detail.supplies[0].current.receivedRowRefs[0].rowId, newRow.id);
     assert.equal(detail.issueBalance.originalWeight, 30);
     assert.equal((await f.candidates(await f.source())).candidates.length, 0);
-    const matching = await f.source(40, f.twistA.id, 'next', { cutId: cut.id });
+    // Matching follows the replaced lineage: its cut and its twist.
+    assert.equal((await f.candidates(await f.source(40, f.twistA.id, 'other-twist', { cutId: cut.id }))).candidates.length, 0);
+    const matching = await f.source(40, f.twistB.id, 'next', { cutId: cut.id });
     assert.equal((await f.candidates(matching)).candidates[0].id, issue.id);
     await prisma.receiveFromHoloMachineRow.update({ where: { id: oldRow.id }, data: { dispatchedCount: 1, dispatchedWeight: 30 } });
     const rejected = await correct(issue, first.supply, [f.crate(oldRow, 20, 1)]);

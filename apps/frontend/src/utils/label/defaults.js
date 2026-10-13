@@ -3,8 +3,8 @@ import { LABEL_STAGE_KEYS } from './stages.js';
 import { normalizeTemplate } from './model.js';
 
 const MEDIA_75x125 = { kind: 'roll', widthMm: 75, heightMm: 125, orientation: 'landscape', rollWidthMm: 75, columns: 1, columnGapMm: 2, rowGapMm: 2, marginLeftMm: 0, marginTopMm: 0, offsetXMm: 0, offsetYMm: 0, columnMode: 'repeat', pageWidthMm: 210, pageHeightMm: 297, rows: 1 };
-// A4 office label sheet: 3 across × 7 down of 65 × 40 mm.
-const MEDIA_A4_65x40 = { kind: 'sheet', widthMm: 65, heightMm: 40, orientation: 'portrait', pageWidthMm: 210, pageHeightMm: 297, rollWidthMm: 210, columns: 3, rows: 7, columnGapMm: 0, rowGapMm: 0, marginLeftMm: 7.5, marginTopMm: 8.5, offsetXMm: 0, offsetYMm: 0, columnMode: 'sequence' };
+// A4 office label sheet: 3 across × 7 down of 64 × 38 mm, measured on the factory's sheets.
+const MEDIA_A4_64x38 = { kind: 'sheet', widthMm: 64, heightMm: 38, orientation: 'portrait', pageWidthMm: 210, pageHeightMm: 297, rollWidthMm: 210, columns: 3, rows: 7, columnGapMm: 1.75, rowGapMm: 1.3, marginLeftMm: 7.5, marginTopMm: 10.5, offsetXMm: 0, offsetYMm: 0, columnMode: 'sequence' };
 const MEDIA_50x25_2UP = { kind: 'roll', widthMm: 50, heightMm: 25, orientation: 'portrait', rollWidthMm: 105, columns: 2, columnGapMm: 2, rowGapMm: 2, marginLeftMm: 1.5, marginTopMm: 0, offsetXMm: 0, offsetYMm: 0, columnMode: 'repeat', pageWidthMm: 210, pageHeightMm: 297, rows: 1 };
 
 // Human names for the Elements list: 'rule-bottom' -> 'Rule bottom'.
@@ -109,16 +109,17 @@ export const DEFAULT_STAGE_TEMPLATES = {
 
   // The supervisor matches stickers to containers by worker name, so it leads in a black band.
   [LABEL_STAGE_KEYS.CONING_ISSUE_SHEET]: {
-    version: 2, media: MEDIA_A4_65x40, copies: 1,
+    version: 2, media: MEDIA_A4_64x38, copies: 1,
+    // 1 mm clear of the die-cut edge: office printers place the sheet to about a millimetre.
     elements: [
-      text('worker', 0, 0, 46, 8, '@operatorName', { fontSizePt: 12, invert: true, uppercase: true, overflow: 'shrink', minFontSizePt: 4, paddingMm: 1.2 }),
-      text('shift', 46, 0, 19, 8, '@shift', { fontSizePt: 11, invert: true, uppercase: true, align: 'center', overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.8 }),
-      text('item', 1.5, 8.8, 62, 5.4, '@itemName (@cut)', { fontSizePt: 9.5, overflow: 'wrap-shrink', minFontSizePt: 4, lineHeight: 1 }),
-      text('yarn', 1.5, 14.2, 40, 4.4, '@yarnName · @twist', { fontSizePt: 7.5, bold: false, overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
-      text('machine', 41.5, 14.2, 22, 4.4, 'M/C @machineName', { fontSizePt: 7.5, align: 'right', overflow: 'wrap-shrink', minFontSizePt: 3.5, lineHeight: 1, paddingMm: 0.3 }),
-      text('cone', 1.5, 18.6, 40, 4.4, '@coneType · @perConeTargetG g', { fontSizePt: 7.5, bold: false, overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
-      text('date', 41.5, 18.6, 22, 4.4, '@date', { fontSizePt: 7.5, align: 'right', overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
-      barcode('barcode', 2, 23.6, { moduleMm: 0.3, barHeightMm: 10, textSizePt: 7, quietZoneMm: 2, maxWidthMm: 61 }),
+      text('worker', 1, 1, 44, 7, '@operatorName', { fontSizePt: 11.5, invert: true, uppercase: true, overflow: 'shrink', minFontSizePt: 4, paddingMm: 1 }),
+      text('shift', 45, 1, 18, 7, '@shift', { fontSizePt: 10, invert: true, uppercase: true, align: 'center', overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.6 }),
+      text('item', 1, 8.6, 62, 5, '@itemName (@cut)', { fontSizePt: 9, overflow: 'wrap-shrink', minFontSizePt: 4, lineHeight: 1 }),
+      text('yarn', 1, 13.6, 39, 4.2, '@yarnName · @twist', { fontSizePt: 7.5, bold: false, overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
+      text('machine', 40, 13.6, 23, 4.2, 'M/C @machineName', { fontSizePt: 7.5, align: 'right', overflow: 'wrap-shrink', minFontSizePt: 3.5, lineHeight: 1, paddingMm: 0.3 }),
+      text('cone', 1, 17.8, 39, 4.2, '@coneType · @perConeTargetG g', { fontSizePt: 7.5, bold: false, overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
+      text('date', 40, 17.8, 23, 4.2, '@date', { fontSizePt: 7.5, align: 'right', overflow: 'shrink', minFontSizePt: 4, paddingMm: 0.3 }),
+      barcode('barcode', 2, 22.4, { moduleMm: 0.3, barHeightMm: 9.5, textSizePt: 7, quietZoneMm: 2, maxWidthMm: 60 }),
     ],
   },
 

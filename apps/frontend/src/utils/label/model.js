@@ -50,8 +50,8 @@ export const DEFAULT_MEDIA = Object.freeze({
 });
 
 export const A4_SHEET_MEDIA = Object.freeze({
-  kind: 'sheet', widthMm: 65, heightMm: 40, orientation: 'portrait', pageWidthMm: 210, pageHeightMm: 297,
-  rollWidthMm: 210, columns: 3, rows: 7, columnGapMm: 0, rowGapMm: 0, marginLeftMm: 7.5, marginTopMm: 8.5,
+  kind: 'sheet', widthMm: 64, heightMm: 38, orientation: 'portrait', pageWidthMm: 210, pageHeightMm: 297,
+  rollWidthMm: 210, columns: 3, rows: 7, columnGapMm: 1.75, rowGapMm: 1.3, marginLeftMm: 7.5, marginTopMm: 10.5,
   offsetXMm: 0, offsetYMm: 0, columnMode: 'sequence',
 });
 

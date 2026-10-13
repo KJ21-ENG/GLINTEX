@@ -8,7 +8,7 @@ const PRESETS = [
   { key: '100x50', label: '100 × 50 mm roll', media: { kind: 'roll', columnMode: 'repeat', widthMm: 100, heightMm: 50, orientation: 'portrait', rollWidthMm: 100, columns: 1, columnGapMm: 2, rowGapMm: 2, marginLeftMm: 0, marginTopMm: 0 } },
 ];
 const SHEET_PRESETS = [
-  { key: 'a4-65x40', label: 'A4 · 3 × 7 · 65 × 40 mm', media: A4_SHEET_MEDIA },
+  { key: 'a4-64x38', label: 'A4 · 3 × 7 · 64 × 38 mm', media: A4_SHEET_MEDIA },
 ];
 
 export default function MediaPanel({ template, dispatch, canEdit }) {

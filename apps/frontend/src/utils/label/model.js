@@ -137,7 +137,8 @@ export const ELEMENT_DEFAULTS = {
     invert: false, paddingMm: 0.5, uppercase: false, letterSpacingPt: 0,
   },
   barcode: { value: '@barcode', symbology: 'code128', moduleMm: 0.375, barHeightMm: 10, showText: true, textSizePt: 7, quietZoneMm: 2.5, maxWidthMm: 0 },
-  qr: { value: '@barcode', sizeMm: 15, ecLevel: 'M' },
+  // Saved QR codes without the setting keep printing without text; the designer turns it on for new ones.
+  qr: { value: '@barcode', sizeMm: 15, ecLevel: 'M', showText: false, textSizePt: 6 },
   line: { lengthMm: 30, thicknessMm: 0.4, direction: 'horizontal' },
   rect: { strokeMm: 0.3, fill: false, radiusMm: 0 },
   image: { src: '', fit: 'contain' },
@@ -201,6 +202,8 @@ export const normalizeElement = (raw = {}, index = 0) => {
       value: str(raw.value, d.value).slice(0, 500) || d.value,
       sizeMm: round(num(raw.sizeMm, d.sizeMm, 4, 200)),
       ecLevel: pick(raw.ecLevel, QR_EC_LEVELS, d.ecLevel),
+      showText: bool(raw.showText, d.showText),
+      textSizePt: round(num(raw.textSizePt, d.textSizePt, LIMITS.fontMinPt, 40), 1),
     };
   }
   if (type === 'line') {

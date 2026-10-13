@@ -79,15 +79,19 @@ export const renderBarcodeElement = (el, fontFamilyCss) => {
   return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(box, el.rotation, '')}">${svg}${text}</div>`;
 };
 
-export const renderQrElement = (el) => {
+export const renderQrElement = (el, fontFamilyCss) => {
   const { layout, box } = el;
   const m = layout.moduleMm;
+  const left = layout.symbolLeft || 0;
   const rects = [];
   layout.rows.forEach((runs, y) => {
-    for (const run of runs) rects.push(`<rect x="${round3(run.x * m)}" y="${round3(y * m)}" width="${round3(run.w * m)}" height="${round3(m)}"/>`);
+    for (const run of runs) rects.push(`<rect x="${round3(left + run.x * m)}" y="${round3(y * m)}" width="${round3(run.w * m)}" height="${round3(m)}"/>`);
   });
   const svg = `<svg class="sym" style="width:${mm(box.w)};height:${mm(box.h)}" viewBox="0 0 ${round3(box.w)} ${round3(box.h)}" shape-rendering="crispEdges" fill="#000" xmlns="http://www.w3.org/2000/svg">${rects.join('')}</svg>`;
-  return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(box, el.rotation, '')}">${svg}</div>`;
+  const text = layout.textLine
+    ? lineHtml(layout.textLine, { lineHeightMm: layout.textLine.lineHeightMm, sizePt: layout.textLine.fontSizePt, family: fontFamilyCss('inter'), bold: false, italic: false, letterSpacingPt: 0, underline: false })
+    : '';
+  return `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(box, el.rotation, '')}">${svg}${text}</div>`;
 };
 
 export const renderLineElement = (el) => `<div class="el" data-id="${esc(el.id)}" style="${elementStyle(el.box, el.rotation, 'background:#000;')}"></div>`;
@@ -109,7 +113,7 @@ const round3 = (v) => Math.round(Number(v) * 1000) / 1000;
 const renderElement = (el, fontFamilyCss) => {
   if (el.type === 'text') return renderTextElement(el, fontFamilyCss);
   if (el.type === 'barcode') return renderBarcodeElement(el, fontFamilyCss);
-  if (el.type === 'qr') return renderQrElement(el);
+  if (el.type === 'qr') return renderQrElement(el, fontFamilyCss);
   if (el.type === 'line') return renderLineElement(el);
   if (el.type === 'rect') return renderRectElement(el);
   if (el.type === 'image') return renderImageElement(el);

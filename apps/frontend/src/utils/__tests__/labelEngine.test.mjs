@@ -310,3 +310,17 @@ test('sheet copies repeat each record in place and an overfull sheet is refused'
   assert.throws(() => buildPrintableArtifact({ ...template, media: { ...template.media, rows: 8 } }, [{}], { dpi: 300 }), /sheet height/);
   assert.throws(() => buildPrintableArtifact(template, [null, null], { dpi: 300 }), /Nothing to print/);
 });
+
+test('a QR code can print its value underneath, and saved QR codes without the setting stay as they were', () => {
+  const tpl = (qr) => ({ version: 2, media: { widthMm: 40, heightMm: 30, orientation: 'portrait' }, elements: [{ id: 'q', type: 'qr', x: 2, y: 2, sizeMm: 15, value: '@barcode', ...qr }] });
+  const saved = layoutLabel(tpl({}), { barcode: 'ICO-240' }, measurer, { dpi: 300 }).elements[0];
+  assert.equal(saved.showText, false, 'old designs keep printing without text');
+  assert.equal(saved.layout.textLine, null);
+  assert.equal(saved.box.h, saved.box.w);
+  const shown = layoutLabel(tpl({ showText: true, textSizePt: 6 }), { barcode: 'ICO-240' }, measurer, { dpi: 300 }).elements[0];
+  assert.equal(shown.layout.textLine.text, 'ICO-240');
+  assert.ok(shown.box.h > saved.box.h, 'the box grows to hold the text');
+  const markup = renderLabelMarkup(layoutLabel(tpl({ showText: true }), { barcode: 'ICO-240' }, measurer, { dpi: 300 }), fontFamilyCss);
+  assert.match(markup, />ICO-240</);
+  assert.doesNotMatch(renderLabelMarkup(layoutLabel(tpl({}), { barcode: 'ICO-240' }, measurer, { dpi: 300 }), fontFamilyCss), />ICO-240</);
+});

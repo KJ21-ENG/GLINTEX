@@ -136,13 +136,21 @@ const layoutBarcode = (el, value, dpi, measurer) => {
   return { w, h, moduleMm, narrowed, overflowing, bars, barHeightMm: el.barHeightMm, textLine, error: encoded.ok ? null : encoded.error, value };
 };
 
-const layoutQr = (el, value, dpi) => {
+const layoutQr = (el, value, dpi, measurer) => {
   const encoded = value ? encodeQr(value, el.ecLevel) : { ok: false, error: 'No QR value', size: 0, pixels: [] };
   const size = encoded.size || 21;
   // Whole printer dots per module; the printed symbol is the nearest size that allows it.
   const moduleMm = quantizeToDots(el.sizeMm / size, dpi);
   const sizeMm = moduleMm * size;
-  return { w: sizeMm, h: sizeMm, moduleMm, modules: size, rows: encoded.ok ? qrRuns(encoded.size, encoded.pixels) : [], error: encoded.ok ? null : encoded.error, value };
+  // The value printed under the symbol, as under a barcode, so a person can read the code.
+  const textPt = el.showText && value ? el.textSizePt : 0;
+  const textFont = { family: fontFamilyCss('inter'), sizePt: textPt, bold: false, italic: false, letterSpacingPt: 0 };
+  const tw = textPt ? measurer.measure(value, textFont) : 0;
+  const w = Math.max(sizeMm, tw);
+  const symbolLeft = (w - sizeMm) / 2;
+  const textLine = textPt ? { text: value, x: (w - tw) / 2, y: sizeMm + textPt * PT_TO_MM * 0.1, w: tw, fontSizePt: textPt, lineHeightMm: textPt * PT_TO_MM * 1.1 } : null;
+  const h = sizeMm + (textPt ? textPt * PT_TO_MM * 1.2 : 0);
+  return { w, h, moduleMm, modules: size, symbolLeft, textLine, rows: encoded.ok ? qrRuns(encoded.size, encoded.pixels) : [], error: encoded.ok ? null : encoded.error, value };
 };
 
 export const resolveElementText = (el, data) => {
@@ -168,7 +176,7 @@ export const layoutLabel = (templateInput, data = {}, measurer, options = {}) =>
       return { ...el, box: elementBox(el, layout), layout };
     }
     if (el.type === 'qr') {
-      const layout = layoutQr(el, text, dpi);
+      const layout = layoutQr(el, text, dpi, measurer);
       return { ...el, box: elementBox(el, layout), layout };
     }
     return { ...el, box: elementBox(el) };

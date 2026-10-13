@@ -80,7 +80,7 @@ export function designerReducer(state, action) {
     case 'replaceTemplate':
       return withTemplate(state, () => action.template, { history: action.history !== false });
     case 'addElement': {
-      const element = createElement(action.elementType, { ...ELEMENT_DEFAULTS[action.elementType], ...(action.overrides || {}) });
+      const element = createElement(action.elementType, { ...ELEMENT_DEFAULTS[action.elementType], ...(action.elementType === 'qr' ? { showText: true } : {}), ...(action.overrides || {}) });
       const next = withTemplate(state, (t) => ({ ...t, elements: [...t.elements, element] }));
       return { ...next, selectedIds: [element.id] };
     }

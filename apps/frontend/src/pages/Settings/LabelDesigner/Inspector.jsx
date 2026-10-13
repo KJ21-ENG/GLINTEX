@@ -164,7 +164,9 @@ export default function Inspector({ template, selectedIds, variables, warnings, 
             <div className="grid grid-cols-2 gap-2">
               <Field label="Size"><NumberField value={el.sizeMm} suffix="mm" step={0.5} min={4} max={200} disabled={disabled} onChange={(v) => updateOne({ sizeMm: v })} /></Field>
               <Field label="Error correction"><SelectField value={el.ecLevel} disabled={disabled} onChange={(v) => updateOne({ ecLevel: v })} options={QR_EC_LEVELS.map((l) => ({ value: l, label: { L: 'L · 7%', M: 'M · 15%', Q: 'Q · 25%', H: 'H · 30%' }[l] }))} /></Field>
+              <Field label="Text size"><NumberField value={el.textSizePt} suffix="pt" step={0.5} min={LIMITS.fontMinPt} max={40} disabled={disabled || !el.showText} onChange={(v) => updateOne({ textSizePt: v })} /></Field>
             </div>
+            <Toggle checked={el.showText} disabled={disabled} onChange={(v) => updateOne({ showText: v })} label="Print the value under the code" />
             <p className="text-[11px] text-muted-foreground">Keep about 2 mm clear around the code for reliable scanning.</p>
           </Section>
         ) : null}

@@ -4422,7 +4422,9 @@
       "y": 0.2,
       "value": "@barcode",
       "sizeMm": 10.4,
-      "ecLevel": "M"
+      "ecLevel": "M",
+      "showText": false,
+      "textSizePt": 6
      },
      {
       "id": "code",

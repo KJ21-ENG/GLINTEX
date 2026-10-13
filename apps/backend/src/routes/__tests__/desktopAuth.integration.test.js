@@ -46,3 +46,12 @@ test('production secure-cookie option is preserved without changing SameSite or 
     else process.env.COOKIE_SECURE = previous;
   }
 });
+
+test('the session check is never answered from a saved copy, so a damaged client cache cannot block printing', async () => {
+  const f = await fixture(); const cookie = await login(f.app);
+  const first = await request(f.app).get('/api/auth/me').set('Cookie', cookie).expect(200);
+  assert.equal(first.headers['cache-control'], 'no-store');
+  assert.equal(first.headers.etag, undefined, 'no validator to revalidate against');
+  const again = await request(f.app).get('/api/auth/me').set('Cookie', cookie).set('If-None-Match', '*').expect(200);
+  assert.equal(again.body.user.username, 'test-operator');
+});

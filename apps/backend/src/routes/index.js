@@ -2075,7 +2075,11 @@ router.use('/api/desktop/releases', createDesktopReleaseRouter({ authenticate: r
 router.use(requireAuth);
 
 router.get('/api/auth/me', async (req, res) => {
-  res.json({ ok: true, user: req.user });
+  // Always a full, unsaved answer. The desktop app checks this before every print; a workstation
+  // whose saved copy was damaged kept getting "304, use your saved copy" and could not print.
+  // res.end skips Express's ETag, so no client is ever told to reuse a stored response.
+  res.set('Cache-Control', 'no-store');
+  res.type('json').end(JSON.stringify({ ok: true, user: req.user }));
 });
 
 router.post('/api/auth/logout', async (req, res) => {

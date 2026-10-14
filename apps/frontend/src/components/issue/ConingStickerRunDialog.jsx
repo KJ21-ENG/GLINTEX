@@ -62,6 +62,8 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
   const [busy, setBusy] = useState(false);
   const [confirmPrint, setConfirmPrint] = useState(null);
   const [notice, setNotice] = useState('');
+  // Carried-over batches sit in their own section, collapsed until someone opens it.
+  const [carryOpen, setCarryOpen] = useState(false);
   const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
@@ -78,7 +80,9 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
       // Last choice on this computer, else the first sheet variant, else the design in use.
       setVariantId((current) => [current, readVariantChoice(), set.variants.find((v) => isSheet(v.template))?.id, set.activeId]
         .find((id) => id && set.variants.some((v) => v.id === id)));
-      setSelected(new Set(list.filter(selectedByDefault).map((row) => row.id)));
+      // Only the selected date's barcodes start ticked; carried-over ones are added deliberately.
+      setSelected(new Set(list.filter((row) => selectedByDefault(row) && !row.carryOver).map((row) => row.id)));
+      setCarryOpen(false);
       setCopyOverrides({});
     } catch (err) {
       if (seq === loadSeq.current) setError(err.message || 'Unable to load coning stickers');
@@ -115,10 +119,14 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
     if (value) next.add(id); else next.delete(id);
     return next;
   });
-  const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((row) => selected.has(row.id));
-  const toggleAll = (value) => setSelected((prev) => {
+  const carryRows = useMemo(() => visibleRows.filter((row) => row.carryOver), [visibleRows]);
+  const dateRows = useMemo(() => visibleRows.filter((row) => !row.carryOver), [visibleRows]);
+  const allSelectedIn = (list) => list.length > 0 && list.every((row) => selected.has(row.id));
+  const selectedCountIn = (list) => list.filter((row) => selected.has(row.id)).length;
+  // Each section has its own select-all; neither touches the other's barcodes.
+  const toggleAllIn = (list, value) => setSelected((prev) => {
     const next = new Set(prev);
-    visibleRows.forEach((row) => (value ? next.add(row.id) : next.delete(row.id)));
+    list.forEach((row) => (value ? next.add(row.id) : next.delete(row.id)));
     return next;
   });
 
@@ -279,7 +287,7 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
                   <table className="w-full min-w-[900px] text-sm">
                     <thead className="sticky top-0 z-10 bg-background">
                       <tr className="border-b text-left text-xs text-muted-foreground">
-                        <th className="w-8 p-2"><input type="checkbox" aria-label="Select all shown" checked={allVisibleSelected} onChange={(e) => toggleAll(e.target.checked)} className="h-4 w-4" /></th>
+                        <th className="w-8 p-2"><input type="checkbox" aria-label="Select all barcodes of the selected date" title="Select all barcodes of the selected date (carried over has its own)" checked={allSelectedIn(dateRows)} disabled={!dateRows.length} onChange={(e) => toggleAllIn(dateRows, e.target.checked)} className="h-4 w-4" /></th>
                         <th className="p-2">Worker</th>
                         <th className="p-2">Machine</th>
                         <th className="p-2">Barcode</th>
@@ -297,21 +305,35 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
                           {rows.length ? 'Every barcode in this range is printed. Choose All to reprint one.' : 'No coning issues in this range.'}
                         </td></tr>
                       )}
-                      {!loading && visibleRows.map((row) => {
+                      {!loading && carryRows.length > 0 && (
+                        <tr className="border-b bg-sky-100 text-sky-900">
+                          <td className="p-2 align-middle">
+                            <input type="checkbox" aria-label="Select all carried-over barcodes" checked={allSelectedIn(carryRows)} onChange={(e) => toggleAllIn(carryRows, e.target.checked)} className="h-4 w-4" />
+                          </td>
+                          <td colSpan={8} className="p-0">
+                            <button type="button" aria-expanded={carryOpen} onClick={() => setCarryOpen((v) => !v)} className="flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 px-2 py-2 text-left text-xs">
+                              <ChevronRight className={`h-4 w-4 shrink-0 transition-transform ${carryOpen ? 'rotate-90' : ''}`} />
+                              <span className="font-bold tracking-wide whitespace-nowrap">CARRIED OVER ({carryRows.length})</span>
+                              <span className="font-semibold whitespace-nowrap">· {selectedCountIn(carryRows)} of {carryRows.length} selected</span>
+                              <span className="ml-auto shrink-0 font-semibold underline">{carryOpen ? 'Hide' : 'Show'}</span>
+                              <span className="basis-full pl-6 font-normal">Material still to receive; stickers print with C/O. Check = older than 2 days: finish the batch or mark the rest as wastage.</span>
+                            </button>
+                          </td>
+                        </tr>
+                      )}
+                      {!loading && [...(carryOpen ? carryRows : []), ...dateRows].map((row) => {
                         const group = shiftGroupKey(row);
-                        const header = group !== lastGroup;
+                        const header = !row.carryOver && group !== lastGroup;
                         lastGroup = group;
                         const night = row.shift === 'Night';
                         return (
                           <React.Fragment key={row.id}>
                             {header && (
-                              <tr className={row.carryOver ? 'bg-sky-100 text-sky-900' : night ? 'bg-slate-900 text-white' : 'bg-muted'}>
-                                <td colSpan={9} className="px-2 py-1.5 text-xs font-bold tracking-wide">{row.carryOver
-                                  ? 'CARRIED OVER · material still to receive, stickers print with C/O · Check = older than 2 days: finish the batch or mark the rest as wastage'
-                                  : `${(row.shift || 'No shift').toUpperCase()} SHIFT · ${formatDate(row.date)}`}</td>
+                              <tr className={night ? 'bg-slate-900 text-white' : 'bg-muted'}>
+                                <td colSpan={9} className="px-2 py-1.5 text-xs font-bold tracking-wide">{`${(row.shift || 'No shift').toUpperCase()} SHIFT · ${formatDate(row.date)}`}</td>
                               </tr>
                             )}
-                            <tr className={`border-b last:border-0 hover:bg-muted/40 ${!selected.has(row.id) ? 'text-muted-foreground' : ''}`}>
+                            <tr className={`border-b last:border-0 hover:bg-muted/40 ${row.carryOver ? 'bg-sky-50/60' : ''} ${!selected.has(row.id) ? 'text-muted-foreground' : ''}`}>
                               <td className="p-2"><input type="checkbox" aria-label={`Select ${row.barcode}`} checked={selected.has(row.id)} onChange={(e) => toggle(row.id, e.target.checked)} className="h-4 w-4" /></td>
                               <td className="p-2 font-semibold">{row.operatorName || '—'}{row.carryOver && <span className="block text-xs font-normal text-muted-foreground">{row.shift || 'No shift'} {formatDate(row.date)}</span>}</td>
                               <td className="p-2">{row.machineName || '—'}</td>
@@ -329,6 +351,9 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
                           </React.Fragment>
                         );
                       })}
+                      {!loading && dateRows.length === 0 && carryRows.length > 0 && (
+                        <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">No barcodes of the selected date to print. Carried-over batches are in the section above.</td></tr>
+                      )}
                     </tbody>
                   </table>
                 </div>

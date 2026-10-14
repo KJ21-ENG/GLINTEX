@@ -80,8 +80,10 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
       // Last choice on this computer, else the first sheet variant, else the design in use.
       setVariantId((current) => [current, readVariantChoice(), set.variants.find((v) => isSheet(v.template))?.id, set.activeId]
         .find((id) => id && set.variants.some((v) => v.id === id)));
-      // Only the selected date's barcodes start ticked; carried-over ones are added deliberately.
-      setSelected(new Set(list.filter((row) => selectedByDefault(row) && !row.carryOver).map((row) => row.id)));
+      // Ticked by default: everything still needing a sticker today, including fresh carried-over
+      // batches (C/O, up to 2 days old); 'Check' batches stay unticked until someone looks at them.
+      // The collapsed band shows how many carried-over barcodes are selected.
+      setSelected(new Set(list.filter(selectedByDefault).map((row) => row.id)));
       setCarryOpen(false);
       setCopyOverrides({});
     } catch (err) {

@@ -23,6 +23,11 @@ export function useInfiniteScrollSentinel({
     if (typeof IntersectionObserver === 'undefined') return;
 
     const rootEl = rootRef?.current ?? root ?? null;
+    // A new observer is created whenever loading finishes (enabled goes false -> true).
+    // Arm it: if the bottom is still in view after a page arrived, the next page must load
+    // without the user scrolling away and back (the list used to stop part-way).
+    armedRef.current = true;
+    let retryTimer = null;
     const obs = new IntersectionObserver(
       (entries) => {
         const hit = entries.some(e => e.isIntersecting);
@@ -32,18 +37,26 @@ export function useInfiniteScrollSentinel({
         }
         // Only fire once per "enter" to avoid jittery repeated triggers while the sentinel stays visible.
         if (!armedRef.current) return;
+        // Throttle intersection bursts, but retry instead of dropping the request.
+        const wait = 250 - (Date.now() - (lastHitRef.current || 0));
+        if (wait > 0) {
+          if (!retryTimer) retryTimer = setTimeout(() => {
+            retryTimer = null;
+            const record = obs.takeRecords();
+            const stillVisible = record.length ? record.some(e => e.isIntersecting) : true;
+            if (stillVisible && armedRef.current) { armedRef.current = false; lastHitRef.current = Date.now(); onLoadMoreRef.current?.(); }
+          }, wait);
+          return;
+        }
         armedRef.current = false;
-        // Throttle intersection bursts (helps avoid scroll jitter / rapid-fire fetch triggers).
-        const now = Date.now();
-        if (now - (lastHitRef.current || 0) < 250) return;
-        lastHitRef.current = now;
+        lastHitRef.current = Date.now();
         onLoadMoreRef.current?.();
       },
       { root: rootEl, rootMargin, threshold: 0.01 },
     );
 
     obs.observe(el);
-    return () => obs.disconnect();
+    return () => { if (retryTimer) clearTimeout(retryTimer); obs.disconnect(); };
     // Intentionally exclude onLoadMore — it's read from the ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, root, rootRef, rootMargin]);

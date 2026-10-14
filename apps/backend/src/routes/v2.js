@@ -88,8 +88,8 @@ function decodeStockLotKey(raw) {
   }
 }
 
-function encodeCursor({ createdAt, id }) {
-  const payload = { createdAt, id };
+function encodeCursor({ createdAt, id, date }) {
+  const payload = date === undefined ? { createdAt, id } : { date, createdAt, id };
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
 }
 
@@ -99,7 +99,7 @@ function decodeCursor(raw) {
     const decoded = Buffer.from(String(raw), 'base64').toString('utf8');
     const parsed = JSON.parse(decoded);
     if (!parsed || !parsed.createdAt || !parsed.id) return null;
-    return { createdAt: parsed.createdAt, id: parsed.id };
+    return typeof parsed.date === 'string' ? { date: parsed.date, createdAt: parsed.createdAt, id: parsed.id } : { createdAt: parsed.createdAt, id: parsed.id };
   } catch {
     return null;
   }
@@ -2550,6 +2550,50 @@ function buildOnMachineSummaryFromItems(items = []) {
 
 // Load the full filtered set, build items, apply in-memory computed filters, then paginate +
 // summarize. Used by the on-machine list/export when derived-field filters are active.
+// On-machine lists are shown newest issue date first (the Date column), then by entry time.
+// Paging happens after the "still on the machine" check, so every page is full and the
+// order holds across pages; the cursor carries the issue date as well.
+function compareOnMachine(a, b, order = 'desc') {
+  const dir = order === 'asc' ? 1 : -1;
+  const da = String(a?.date || '');
+  const db = String(b?.date || '');
+  if (da !== db) return (da < db ? -1 : 1) * dir;
+  const ta = toTimeMs(a?.createdAt) ?? 0;
+  const tb = toTimeMs(b?.createdAt) ?? 0;
+  if (ta !== tb) return (ta < tb ? -1 : 1) * dir;
+  const ia = String(a?.id || '');
+  const ib = String(b?.id || '');
+  if (ia === ib) return 0;
+  return (ia < ib ? -1 : 1) * dir;
+}
+
+function pageSortedOnMachine(refs, cursor, order, limit) {
+  const sorted = [...refs].sort((a, b) => compareOnMachine(a, b, order));
+  let start = 0;
+  if (cursor) {
+    start = sorted.findIndex((ref) => compareOnMachine(ref, cursor, order) > 0);
+    if (start < 0) start = sorted.length;
+  }
+  const rest = sorted.slice(start);
+  const page = rest.slice(0, limit);
+  const hasMore = rest.length > limit;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last ? encodeCursor({ date: String(last.date || ''), createdAt: last.createdAt, id: last.id }) : null;
+  return { page, hasMore, nextCursor };
+}
+
+async function pageOnMachineIssues({ process, pendingRefs, cursor, order, limit, summary }) {
+  const { page, hasMore, nextCursor } = pageSortedOnMachine(pendingRefs, cursor, order, limit);
+  const ids = page.map((ref) => ref.id);
+  const rows = ids.length
+    ? await issueModelForProcess(process).findMany({ where: { id: { in: ids } }, include: onMachineIncludesForProcess(process) })
+    : [];
+  const built = await buildOnMachineItems(process, rows);
+  const byId = new Map(built.map((item) => [item.id, item]));
+  const items = ids.map((id) => byId.get(id)).filter(Boolean);
+  return { items, hasMore, nextCursor, summary };
+}
+
 async function buildOnMachineComputedResult({ process, whereAllFiltered, computedFilters, cursor, order, limit, isFirstPage }) {
   const model = issueModelForProcess(process);
   const allRaw = await model.findMany({
@@ -2559,11 +2603,7 @@ async function buildOnMachineComputedResult({ process, whereAllFiltered, compute
   });
   const allItems = (await buildOnMachineItems(process, allRaw))
     .filter((it) => matchesComputedFilters(it, computedFilters));
-  const pageCandidates = applyCursorToSortedItems(allItems, cursor, order);
-  const hasMore = pageCandidates.length > limit;
-  const items = pageCandidates.slice(0, limit);
-  const lastInPage = items[items.length - 1];
-  const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
+  const { page: items, hasMore, nextCursor } = pageSortedOnMachine(allItems, cursor, order, limit);
   const summary = isFirstPage ? buildOnMachineSummaryFromItems(allItems) : null;
   return { items, hasMore, nextCursor, summary };
 }
@@ -2579,12 +2619,9 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
   const order = normalizeOrder(req.query.order);
 
   try {
-    const cursorWhere = buildCursorWhere(cursor, order);
     // whereAllFiltered = all filters WITHOUT cursor (for summary across entire dataset)
     const whereAllFiltered = await buildOnMachineWhere({ process, filters, dateFrom, dateTo, search });
 
-    // where = all filters + cursor (for paginated results)
-    const where = applyCursorWhere(whereAllFiltered, cursorWhere);
 
     // isFirstPage — only compute summary on the first page to avoid repeating expensive work
     const isFirstPage = !cursor;
@@ -2599,22 +2636,15 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
     }
 
     if (process === 'cutter') {
-      const issuesRaw = await prisma.issueToCutterMachine.findMany({
-        where,
-        include: onMachineIncludesForProcess(process),
-        orderBy: [{ createdAt: order }, { id: order }],
-        take: limit + 1,
-      });
-      const hasMore = issuesRaw.length > limit;
-      const page = issuesRaw.slice(0, limit);
-      const items = await buildOnMachineCutterItems(page);
 
-      // Compute grand-total summary on first page only
+      // One light pass over every filtered issue: the footer totals and the list of
+      // issues still on the machine (with their dates) for date-ordered paging.
+      const pendingRefs = [];
       let summary = null;
-      if (isFirstPage) {
+      {
         const allIssues = await prisma.issueToCutterMachine.findMany({
           where: whereAllFiltered,
-          select: { id: true, totalWeight: true, pieceIds: true },
+          select: { id: true, totalWeight: true, pieceIds: true, date: true, createdAt: true },
         });
         const allIds = allIssues.map(i => i.id);
         const allTb = await fetchTakeBackTotalsByIssueIds('cutter', allIds);
@@ -2639,6 +2669,8 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
           const waste = Number(allWasteMap.get(issue.id) || 0);
           const pend = Math.max(0, net - recv - waste);
           if (pend <= 0.001) continue; // skip fully accounted issues
+
+          pendingRefs.push({ id: issue.id, date: issue.date, createdAt: issue.createdAt });
           s.originalIssuedWeight += orig;
           s.takeBackWeight += tbW;
           s.netIssuedWeight += net;
@@ -2647,32 +2679,23 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
           s.pendingWeight += pend;
           s.totalCount += 1;
         }
-        summary = s;
+        if (isFirstPage) summary = s;
       }
 
-      const lastInPage = page[page.length - 1];
-      const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
-      res.json({ items, hasMore, nextCursor, summary });
+      res.json(await pageOnMachineIssues({ process, pendingRefs, cursor, order, limit, summary }));
       return;
     }
 
     if (process === 'holo') {
-      const issuesRaw = await prisma.issueToHoloMachine.findMany({
-        where,
-        include: onMachineIncludesForProcess(process),
-        orderBy: [{ createdAt: order }, { id: order }],
-        take: limit + 1,
-      });
-      const hasMore = issuesRaw.length > limit;
-      const page = issuesRaw.slice(0, limit);
-      const items = await buildOnMachineHoloItems(page);
 
-      // Compute grand-total summary on first page only
+      // One light pass over every filtered issue: the footer totals and the list of
+      // issues still on the machine (with their dates) for date-ordered paging.
+      const pendingRefs = [];
       let summary = null;
-      if (isFirstPage) {
+      {
         const allIssues = await prisma.issueToHoloMachine.findMany({
           where: whereAllFiltered,
-          select: { id: true, metallicBobbinsWeight: true },
+          select: { id: true, metallicBobbinsWeight: true, date: true, createdAt: true },
         });
         const allIds = allIssues.map(i => i.id);
         const allTb = await fetchTakeBackTotalsByIssueIds('holo', allIds);
@@ -2705,6 +2728,8 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
           const waste = Number(allWasteMap.get(issue.id) || 0);
           const pend = Math.max(0, net - recv - waste);
           if (pend <= 0.001) continue;
+
+          pendingRefs.push({ id: issue.id, date: issue.date, createdAt: issue.createdAt });
           s.originalIssuedWeight += orig;
           s.takeBackWeight += tbW;
           s.netIssuedWeight += net;
@@ -2713,32 +2738,23 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
           s.pendingWeight += pend;
           s.totalCount += 1;
         }
-        summary = s;
+        if (isFirstPage) summary = s;
       }
 
-      const lastInPage = page[page.length - 1];
-      const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
-      res.json({ items, hasMore, nextCursor, summary });
+      res.json(await pageOnMachineIssues({ process, pendingRefs, cursor, order, limit, summary }));
       return;
     }
 
     // coning
-    const issuesRaw = await prisma.issueToConingMachine.findMany({
-      where,
-      include: onMachineIncludesForProcess(process),
-      orderBy: [{ createdAt: order }, { id: order }],
-      take: limit + 1,
-    });
-    const hasMore = issuesRaw.length > limit;
-    const page = issuesRaw.slice(0, limit);
-    const items = await buildOnMachineConingItems(page);
 
-    // Compute grand-total summary on first page only
+    // One light pass over every filtered issue: the footer totals and the list of
+    // issues still on the machine (with their dates) for date-ordered paging.
+    const pendingRefs = [];
     let summary = null;
-    if (isFirstPage) {
+    {
       const allIssues = await prisma.issueToConingMachine.findMany({
         where: whereAllFiltered,
-        select: { id: true, receivedRowRefs: true },
+        select: { id: true, receivedRowRefs: true, date: true, createdAt: true },
       });
       const allIds = allIssues.map(i => i.id);
       const allTb = await fetchTakeBackTotalsByIssueIds('coning', allIds);
@@ -2775,6 +2791,8 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
         const waste = Number(allWasteMap.get(issue.id) || 0);
         const pend = Math.max(0, net - recv - waste);
         if (pend <= 0.001) continue;
+
+        pendingRefs.push({ id: issue.id, date: issue.date, createdAt: issue.createdAt });
         s.originalIssuedWeight += orig;
         s.takeBackWeight += tbW;
         s.netIssuedWeight += net;
@@ -2784,12 +2802,10 @@ router.get('/on-machine/:process', requireAuth, requireStageReadPermission(issue
         s.rollsIssued += rolls;
         s.totalCount += 1;
       }
-      summary = s;
+      if (isFirstPage) summary = s;
     }
 
-    const lastInPage = page[page.length - 1];
-    const nextCursor = hasMore && lastInPage ? encodeCursor({ createdAt: lastInPage.createdAt, id: lastInPage.id }) : null;
-    res.json({ items, hasMore, nextCursor, summary });
+    res.json(await pageOnMachineIssues({ process, pendingRefs, cursor, order, limit, summary }));
   } catch (err) {
     console.error('v2 on-machine error', err);
     res.status(500).json({ error: err.message || 'Failed to load on-machine' });

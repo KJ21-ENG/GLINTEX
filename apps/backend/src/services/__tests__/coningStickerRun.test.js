@@ -60,3 +60,37 @@ test('a carry-over print is recorded for its day and leaves the original print r
   assert.equal(updates[0].data.stickerCarryPrintedFor, '2026-10-13');
   await assert.rejects(markConingStickersPrinted(client, [{ id: 'a', copies: 3, revision: 1, carryOver: true }], 'u'), /printed for/);
 });
+
+test('a reprint never replaces the original print; extra crates add copies; every print is logged', async () => {
+  const { printKind, isOpeningStockEntry } = await import('../coningStickerRun.js');
+  const printedAt = new Date('2026-10-16T04:30:00Z');
+  const original = { id: 'a', receivedRowRefs: [{ rowId: 'r1' }, { rowId: 'r2' }], coningBatchRevision: 2, stickerPrintedAt: printedAt, stickerPrintedCopies: 7, stickerPrintedRevision: 2 };
+  assert.equal(printKind(original, {}), 'reprint');
+  assert.equal(printKind({ ...original, coningBatchRevision: 3 }, {}), 'top_up');
+  assert.equal(printKind({ ...original, stickerPrintedAt: null }, {}), 'first');
+  assert.equal(printKind({ stickerCarryPrintedFor: '2026-10-16' }, { carryOver: true, printedFor: '2026-10-16' }), 'carry_reprint');
+  assert.equal(printKind({ stickerCarryPrintedFor: '2026-10-15' }, { carryOver: true, printedFor: '2026-10-16' }), 'carry_over');
+
+  const run = async (issue, entry) => {
+    const updates = []; const logs = [];
+    const client = {
+      issueToConingMachine: { findMany: async () => [issue], update: async (args) => { updates.push(args); return args; } },
+      coningStickerPrint: { create: async (args) => { logs.push(args.data); return args.data; } },
+      $transaction: async (fn) => fn(client),
+    };
+    await markConingStickersPrinted(client, [entry], 'u', '2026-10-16');
+    return { updates, logs };
+  };
+  const reprint = await run(original, { id: 'a', copies: 1, revision: 2 });
+  assert.equal(reprint.updates.length, 0, 'the 10:00 ×7 record stays');
+  assert.deepEqual(reprint.logs.map((l) => [l.kind, l.copies]), [['reprint', 1]]);
+  const topUp = await run({ ...original, receivedRowRefs: [...original.receivedRowRefs, { rowId: 'r3' }], coningBatchRevision: 3 }, { id: 'a', copies: 1, revision: 3 });
+  assert.equal(topUp.updates[0].data.stickerPrintedCopies, 8, '7 + 1 for the added crate');
+  assert.equal(topUp.updates[0].data.stickerPrintedAt, undefined, 'original print time kept');
+  assert.equal(topUp.updates[0].data.stickerPrintedCrates, 3);
+  assert.equal(topUp.logs[0].kind, 'top_up');
+
+  assert.equal(isOpeningStockEntry({ note: 'Opening Stock', receivedRowRefs: [{ coneTypeId: 'c', wrapperId: null }] }), true);
+  assert.equal(isOpeningStockEntry({ note: 'Opening Stock', receivedRowRefs: [{ rowId: 'holo-row' }] }), false, 'a real issue keeps its stickers');
+  assert.equal(isOpeningStockEntry({ note: null, receivedRowRefs: [] }), false);
+});

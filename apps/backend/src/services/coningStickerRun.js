@@ -83,8 +83,13 @@ const ISSUE_SELECT = {
   machineId: true, operatorId: true, rollsIssued: true, expectedCones: true, requiredPerConeNetWeight: true,
   receivedRowRefs: true, coningBatchOpen: true, coningBatchEnabled: true, coningBatchRevision: true,
   stickerPrintedAt: true, stickerPrintedCopies: true, stickerPrintedCrates: true, stickerPrintedRevision: true,
-  stickerCarryPrintedFor: true, stickerCarryPrintedAt: true, stickerCarryPrintedCopies: true,
+  stickerCarryPrintedFor: true, stickerCarryPrintedAt: true, stickerCarryPrintedCopies: true, note: true,
 };
+
+// Opening-stock coning receives create a placeholder issue (note "Opening Stock", no source
+// crate) only so the receive has a barcode. Nothing was issued to a worker, so no sticker.
+export const isOpeningStockEntry = (issue) => issue.note === 'Opening Stock'
+  && !refsOf(issue.receivedRowRefs).some((ref) => ref && ref.rowId);
 
 const shiftRank = (shift) => (shift === 'Night' ? 1 : 0);
 const dayNumber = (iso) => Math.round(Date.parse(`${iso}T00:00:00Z`) / 86400000);
@@ -116,7 +121,11 @@ export async function listConingStickerRun(client, params) {
   });
   const truncated = issues.length > MAX_ROWS;
   if (truncated) issues.length = MAX_ROWS;
-  const rows = (await describeIssues(client, issues)).map((row, index) => ({ ...row, status: stickerStatus(issues[index]) }));
+  const stickered = issues.filter((issue) => !isOpeningStockEntry(issue));
+  const reprints = await reprintSummary(client, stickered.map((issue) => issue.id));
+  const rows = (await describeIssues(client, stickered)).map((row, index) => ({
+    ...row, status: stickerStatus(stickered[index]), ...(reprints.get(row.id) || { reprintCopies: 0, lastReprintAt: null }),
+  }));
   // Apps from before carry-over (desktop 1.2.7 and older) do not ask for it and would misread it.
   const carryOver = params.includeCarryOver ? await listCarryOver(client, params, new Set(issues.map((issue) => issue.id))) : [];
   return { rows: [...carryOver, ...rows], truncated };
@@ -128,7 +137,7 @@ async function listCarryOver(client, params, inRangeIds) {
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
     take: MAX_ROWS,
     select: ISSUE_SELECT,
-  })).filter((issue) => !inRangeIds.has(issue.id) && isBeforeRange(issue, params)
+  })).filter((issue) => !inRangeIds.has(issue.id) && !isOpeningStockEntry(issue) && isBeforeRange(issue, params)
     && (!issue.coningBatchEnabled || issue.coningBatchOpen));
   if (!candidates.length) return [];
   const balances = await computeIssueBalancesBatch(client, 'coning', candidates);
@@ -140,6 +149,7 @@ async function listCarryOver(client, params, inRangeIds) {
   });
   const receivedById = new Map(received.map((r) => [r.issueId, { containers: r._count._all, weight: Number(r._sum.netWeight || 0) }]));
   const described = await describeIssues(client, open);
+  const reprints = await reprintSummary(client, open.map((issue) => issue.id));
   return described.map((row, index) => {
     const issue = open[index];
     const pendingWeight = Number(Number(balances.get(issue.id).pendingWeight).toFixed(3));
@@ -158,8 +168,26 @@ async function listCarryOver(client, params, inRangeIds) {
       stale: ageDays > STALE_DAYS,
       printedAt: printed ? issue.stickerCarryPrintedAt : null,
       printedCopies: printed ? issue.stickerCarryPrintedCopies : 0,
+      ...(reprints.get(issue.id) || { reprintCopies: 0, lastReprintAt: null }),
     };
   });
+}
+
+// Reprints never replace the original print record; they are listed beside it.
+async function reprintSummary(client, issueIds) {
+  if (!issueIds.length || !client.coningStickerPrint) return new Map();
+  const logs = await client.coningStickerPrint.findMany({
+    where: { issueId: { in: issueIds }, kind: { in: ['reprint', 'carry_reprint'] } },
+    select: { issueId: true, copies: true, createdAt: true },
+  });
+  const out = new Map();
+  for (const log of logs) {
+    const acc = out.get(log.issueId) || { reprintCopies: 0, lastReprintAt: null };
+    acc.reprintCopies += log.copies;
+    if (!acc.lastReprintAt || log.createdAt > acc.lastReprintAt) acc.lastReprintAt = log.createdAt;
+    out.set(log.issueId, acc);
+  }
+  return out;
 }
 
 async function describeIssues(client, issues) {
@@ -213,6 +241,32 @@ async function describeIssues(client, issues) {
   return rows;
 }
 
+// What a confirmed print was, decided from the record rather than the screen, so an older app
+// cannot overwrite the original print: first print, extra copies for crates added after it,
+// a reprint of stickers already printed, or the day's carry-over stickers.
+export const printKind = (issue, { carryOver, printedFor }) => {
+  if (carryOver) return issue.stickerCarryPrintedFor === printedFor ? 'carry_reprint' : 'carry_over';
+  if (!issue.stickerPrintedAt) return 'first';
+  return issue.coningBatchRevision > issue.stickerPrintedRevision ? 'top_up' : 'reprint';
+};
+
+const printUpdate = (issue, kind, { copies, revision, printedFor, now, actorUserId }) => {
+  const crates = refsOf(issue.receivedRowRefs).length;
+  // The revision the printed stickers showed, so a batch that grew after the list loaded
+  // still shows as changed instead of silently counting as printed.
+  const printedRevision = Math.min(revision, issue.coningBatchRevision);
+  if (kind === 'first') {
+    return { stickerPrintedAt: now, stickerPrintedCopies: copies, stickerPrintedCrates: crates, stickerPrintedRevision: printedRevision, stickerPrintedByUserId: actorUserId || null };
+  }
+  if (kind === 'top_up') {
+    return { stickerPrintedCopies: (issue.stickerPrintedCopies || 0) + copies, stickerPrintedCrates: crates, stickerPrintedRevision: printedRevision };
+  }
+  if (kind === 'carry_over') {
+    return { stickerCarryPrintedFor: printedFor, stickerCarryPrintedAt: now, stickerCarryPrintedCopies: copies };
+  }
+  return null;
+};
+
 export async function markConingStickersPrinted(client, entries, actorUserId, printedFor) {
   if (!Array.isArray(entries) || !entries.length) throw new ConingStickerRunError('Choose at least one barcode');
   if (entries.some((entry) => entry?.carryOver) && !DATE_RE.test(printedFor || '')) throw new ConingStickerRunError('Carried-over stickers need the date they were printed for');
@@ -228,33 +282,28 @@ export async function markConingStickersPrinted(client, entries, actorUserId, pr
   }
   const issues = await client.issueToConingMachine.findMany({
     where: { id: { in: [...byId.keys()] }, isDeleted: false },
-    select: { id: true, receivedRowRefs: true, coningBatchRevision: true },
+    select: {
+      id: true, receivedRowRefs: true, coningBatchRevision: true, stickerPrintedAt: true, stickerPrintedCopies: true,
+      stickerPrintedRevision: true, stickerCarryPrintedFor: true,
+    },
   });
   if (issues.length !== byId.size) throw new ConingStickerRunError('Some barcodes were deleted. Reload the list.', 409);
   const now = new Date();
-  // Record the revision the printed stickers showed, so a batch that grew after the list loaded
-  // still shows as changed instead of silently counting as printed.
-  await Promise.all(issues.map((issue) => {
-    const { copies, revision, carryOver } = byId.get(issue.id);
-    // A carry-over reprint is recorded against the day it was printed for, so the original
-    // print record stays and the batch can carry over again tomorrow if still not finished.
-    if (carryOver) {
-      return client.issueToConingMachine.update({
-        where: { id: issue.id },
-        data: { stickerCarryPrintedFor: printedFor, stickerCarryPrintedAt: now, stickerCarryPrintedCopies: copies },
-      });
+  const kinds = {};
+  const run = typeof client.$transaction === 'function' ? (fn) => client.$transaction(fn) : (fn) => fn(client);
+  await run(async (tx) => {
+    for (const issue of issues) {
+      const { copies, revision, carryOver } = byId.get(issue.id);
+      const kind = printKind(issue, { carryOver, printedFor });
+      kinds[kind] = (kinds[kind] || 0) + 1;
+      const data = printUpdate(issue, kind, { copies, revision, printedFor, now, actorUserId });
+      if (data) await tx.issueToConingMachine.update({ where: { id: issue.id }, data });
+      if (tx.coningStickerPrint) {
+        await tx.coningStickerPrint.create({ data: {
+          issueId: issue.id, kind, copies, printedFor: carryOver ? printedFor : null, createdByUserId: actorUserId || null,
+        } });
+      }
     }
-    const printedRevision = Math.min(revision, issue.coningBatchRevision);
-    return client.issueToConingMachine.update({
-      where: { id: issue.id },
-      data: {
-        stickerPrintedAt: now,
-        stickerPrintedCopies: copies,
-        stickerPrintedCrates: refsOf(issue.receivedRowRefs).length,
-        stickerPrintedRevision: printedRevision,
-        stickerPrintedByUserId: actorUserId || null,
-      },
-    });
-  }));
-  return { printedAt: now, count: issues.length };
+  });
+  return { printedAt: now, count: issues.length, kinds };
 }

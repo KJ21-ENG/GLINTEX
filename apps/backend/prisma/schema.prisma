@@ -415,6 +415,7 @@ model IssueToConingMachine {
   stickerCarryPrintedAt    DateTime?
   stickerCarryPrintedCopies Int                          @default(0)
   supplies                 ConingIssueSupply[]
+  stickerPrints            ConingStickerPrint[]
   corrections              ConingIssueCorrection[]
   isDeleted                Boolean                       @default(false)
   deletedAt                DateTime?
@@ -1328,4 +1329,19 @@ model AgentAccessLog {
   @@index([agentId, createdAt])
   @@index([resource, createdAt])
   @@index([outcome, createdAt])
+}
+
+// Every confirmed coning sticker print: first, top-up (crates added after printing), reprint,
+// carry-over and carry-over reprint. The issue keeps the original print; reprints only log here.
+model ConingStickerPrint {
+  id              String               @id @default(cuid())
+  issueId         String
+  issue           IssueToConingMachine @relation(fields: [issueId], references: [id])
+  kind            String
+  copies          Int
+  printedFor      String?
+  createdAt       DateTime             @default(now())
+  createdByUserId String?
+
+  @@index([issueId, createdAt])
 }

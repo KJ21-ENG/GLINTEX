@@ -31,16 +31,19 @@ const rangeText = ({ dateFrom, dateTo, fromShifts, toShifts }) => (
 
 const kg = (value) => `${Number(value || 0).toFixed(1)} kg`;
 
+// Reprints sit beside the original print, which they never replace.
+const reprintNote = (row) => (row.reprintCopies > 0 ? ` · reprinted ×${row.reprintCopies} (${formatTime(row.lastReprintAt)})` : '');
+
 function StatusPill({ row }) {
   if (row.status === 'carry_over' && row.stale) return <span className="whitespace-nowrap rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800" title="Older than 2 days: finish the batch or mark the rest as wastage">Check · {kg(row.pendingWeight)} left</span>;
   if (row.status === 'carry_over') return <span className="whitespace-nowrap rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800">C/O · {kg(row.pendingWeight)} left</span>;
-  if (row.status === 'carry_printed') return <span className="whitespace-nowrap rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800">C/O printed {formatTime(row.printedAt)} ×{row.printedCopies}</span>;
+  if (row.status === 'carry_printed') return <span className="whitespace-nowrap rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800">C/O printed {formatTime(row.printedAt)} ×{row.printedCopies}{reprintNote(row)}</span>;
   if (row.status === 'not_printed') return <span className="whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Not printed</span>;
   if (row.status === 'changed') {
     const grew = row.crates > row.printedCrates;
     return <span className="whitespace-nowrap rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-800">{grew ? `+${row.crates - row.printedCrates} crates since print` : 'Changed since print'}</span>;
   }
-  return <span className="whitespace-nowrap rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800">Printed {formatTime(row.printedAt)} ×{row.printedCopies}</span>;
+  return <span className="whitespace-nowrap rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800">Printed {formatTime(row.printedAt)} ×{row.printedCopies}{reprintNote(row)}</span>;
 }
 
 export default function ConingStickerRunDialog({ open, onOpenChange, onBack, range, canMarkPrinted }) {

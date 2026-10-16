@@ -47,8 +47,60 @@ test('carried-over batches print first on their own sheet, marked C/O, with copi
   assert.equal(selectedByDefault({ ...carry, status: 'carry_printed' }), false);
   assert.equal(stickerData(carry).shift, 'Night C/O');
   assert.equal(stickerData(today).shift, 'Day');
-  const slots = buildStickerSlots([today, carry], { copiesOf: suggestedCopies, perPage: 21 });
-  assert.equal(slots[0].barcode, 'ICO-9');
-  assert.ok(slots.slice(3, 21).every((s) => s === null), 'carry-overs keep their own sheet');
-  assert.equal(slots[21].barcode, 'ICO-10');
+});
+
+// The morning run: last night (12th) and this morning (13th).
+const MORNING = { dateFrom: '2026-10-12', dateTo: '2026-10-13', fromShifts: ['Night'], toShifts: ['Day'] };
+const carried = (o) => row({ date: '2026-10-10', carryOver: true, status: 'carry_over', estimatedContainers: 1, ...o });
+const order = (rows, range = MORNING) => buildStickerSlots(rows, { copiesOf: () => 1, perPage: 21, newSheetPerShift: false, range })
+  .map((s) => s.barcode);
+
+test('a carried-over batch prints in its worker\'s shift group, before his new stickers, still marked C/O', async () => {
+  const { stickerData } = await import('../coningStickerRun.js');
+  const rows = [
+    row({ barcode: 'ICO-21', operatorName: 'DEVCHAND', shift: 'Day' }),
+    row({ barcode: 'ICO-20', operatorName: 'ANIL', shift: 'Day' }),
+    carried({ barcode: 'ICO-5', operatorName: 'DEVCHAND', shift: 'Day' }),
+  ];
+  assert.deepEqual(order(rows), ['ICO-20', 'ICO-5', 'ICO-21']);
+  const slots = buildStickerSlots(rows, { copiesOf: () => 1, perPage: 21, range: MORNING });
+  assert.equal(slots.length, 3, 'one shift, one sheet: no carried-over sheet');
+  assert.equal(stickerData(rows[2]).shift, 'Day C/O');
+  assert.equal(stickerData(rows[2]).date, '2026-10-10', 'it keeps its own date');
+});
+
+test('a night worker\'s carried-over batch joins his night stickers, not the morning group', () => {
+  const rows = [
+    row({ barcode: 'ICO-30', operatorName: 'RAMESH', date: '2026-10-12', shift: 'Night' }),
+    row({ barcode: 'ICO-31', operatorName: 'ANIL', shift: 'Day' }),
+    carried({ barcode: 'ICO-6', operatorName: 'RAMESH', shift: 'Night' }),
+  ];
+  const slots = buildStickerSlots(rows, { copiesOf: () => 1, perPage: 21, range: MORNING });
+  assert.deepEqual(slots.slice(0, 2).map((s) => s.barcode), ['ICO-6', 'ICO-30']);
+  assert.equal(slots[21].barcode, 'ICO-31', 'the day shift starts its own sheet');
+});
+
+test('a worker who changed shifts gets his carried-over batch where his new stickers are', () => {
+  const rows = [
+    row({ barcode: 'ICO-40', operatorName: 'DEVCHAND', shift: 'Day' }),
+    row({ barcode: 'ICO-41', operatorName: 'MOHAN', date: '2026-10-12', shift: 'Night' }),
+    carried({ barcode: 'ICO-7', operatorName: 'DEVCHAND', shift: 'Night' }),
+  ];
+  assert.deepEqual(order(rows), ['ICO-41', 'ICO-7', 'ICO-40']);
+});
+
+test('with nothing new, a carried-over batch goes to its own shift in the run, else the last shift', () => {
+  const night = carried({ barcode: 'ICO-8', operatorName: 'RAMESH', shift: 'Night' });
+  const day = carried({ barcode: 'ICO-9', operatorName: 'ZED', shift: 'Day' });
+  const blank = carried({ barcode: 'ICO-10', operatorName: 'YASH', shift: '' });
+  const fresh = row({ barcode: 'ICO-50', operatorName: 'ANIL', shift: 'Day' });
+  const slots = buildStickerSlots([fresh, night, day, blank], { copiesOf: () => 1, perPage: 21, range: MORNING });
+  assert.equal(slots[0].barcode, 'ICO-8', 'Ramesh alone in the night group');
+  assert.deepEqual(slots.slice(21).map((s) => s.barcode), ['ICO-50', 'ICO-10', 'ICO-9'],
+    'the day group: own shift for ZED, the last shift for a batch without one');
+  const dayOnly = { dateFrom: '2026-10-13', dateTo: '2026-10-13', fromShifts: ['Day'], toShifts: ['Day'] };
+  assert.deepEqual(order([night, fresh], dayOnly), ['ICO-50', 'ICO-8'], 'a night batch in a day-only run: the last shift');
+  const days = { dateFrom: '2026-10-10', dateTo: '2026-10-13', fromShifts: ['Day'], toShifts: ['Day'] };
+  const placed = buildStickerSlots([night], { copiesOf: () => 1, perPage: 21, range: days });
+  assert.deepEqual(placed.map((s) => s.barcode), ['ICO-8']);
 });

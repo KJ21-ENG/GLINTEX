@@ -20,8 +20,9 @@ export const suggestedCopies = (row, spare = DEFAULT_SPARE) => {
   return 1;
 };
 
-// Carried-over batches first, then chronological shifts (12th Night before 13th Day), then
-// worker, so each worker's stickers sit together.
+// Order of the list on screen: carried-over batches first (their own section), then
+// chronological shifts (12th Night before 13th Day), then worker. Within one worker of a
+// printed shift group it also puts the carried-over batches first, oldest first.
 export const compareRunRows = (a, b) => (
   Number(Boolean(b.carryOver)) - Number(Boolean(a.carryOver))
   || String(a.date).localeCompare(String(b.date))
@@ -32,6 +33,71 @@ export const compareRunRows = (a, b) => (
 );
 
 export const shiftGroupKey = (row) => (row.carryOver ? 'carry' : `${row.date}|${row.shift || ''}`);
+
+// Printed groups are shifts only. A carried-over batch is printed in a shift group of the run,
+// under its worker, next to that worker's other stickers, so the sticker manager hands out one
+// bunch per worker per shift. Its sticker still says C/O and keeps its own date.
+const SHIFTS = ['Day', 'Night'];
+const groupOf = (date, shift) => ({ date, shift: shift || '' });
+const groupKey = (group) => `${group.date}|${group.shift}`;
+const compareGroups = (a, b) => (
+  String(a.date).localeCompare(String(b.date)) || (SHIFT_ORDER[a.shift] ?? 2) - (SHIFT_ORDER[b.shift] ?? 2)
+);
+const latestOf = (groups) => groups.reduce((best, group) => (best === null || compareGroups(group, best) > 0 ? group : best), null);
+const shiftsOf = (list) => SHIFTS.filter((shift) => (list || []).some((entry) => String(entry).toLowerCase() === shift.toLowerCase()));
+const dayBefore = (iso) => new Date(Date.parse(`${iso}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+
+// The latest shift of the run that is this shift: on the to date, the day before it, or the
+// from date. Nothing when the run does not hold that shift.
+const rangeShiftGroup = (range, shift) => {
+  if (!range?.dateFrom || !range?.dateTo || !SHIFTS.includes(shift)) return null;
+  const from = shiftsOf(range.fromShifts);
+  const to = shiftsOf(range.toShifts);
+  if (range.dateFrom === range.dateTo) return from.includes(shift) || to.includes(shift) ? groupOf(range.dateTo, shift) : null;
+  if (to.includes(shift)) return groupOf(range.dateTo, shift);
+  const before = dayBefore(range.dateTo);
+  if (before > range.dateFrom) return groupOf(before, shift);
+  return from.includes(shift) ? groupOf(range.dateFrom, shift) : null;
+};
+
+// The last shift of the run: the latest shift of its to date.
+const rangeLastGroup = (range) => {
+  if (!range?.dateTo) return null;
+  const shifts = shiftsOf(range.dateFrom === range.dateTo ? [...(range.fromShifts || []), ...(range.toShifts || [])] : range.toShifts);
+  return shifts.length ? groupOf(range.dateTo, shifts[shifts.length - 1]) : null;
+};
+
+// The shift group each row prints in. A carried-over batch joins the group where its worker
+// has new stickers in this print (the latest when several); without any, the run's group of
+// the batch's own shift; otherwise the run's last shift.
+export const printGroupOf = (rows, range) => {
+  const fresh = rows.filter((row) => !row.carryOver);
+  const byWorker = new Map();
+  for (const row of fresh) {
+    const worker = row.operatorName || '';
+    byWorker.set(worker, [...(byWorker.get(worker) || []), groupOf(row.date, row.shift)]);
+  }
+  const lastFresh = latestOf(fresh.map((row) => groupOf(row.date, row.shift)));
+  return (row) => {
+    if (!row.carryOver) return groupOf(row.date, row.shift);
+    return latestOf(byWorker.get(row.operatorName || '') || [])
+      || rangeShiftGroup(range, row.shift)
+      || rangeLastGroup(range)
+      || lastFresh
+      || groupOf(row.date, row.shift);
+  };
+};
+
+// Rows in print order with their shift group: shifts in time order, then worker, then within a
+// worker the carried-over batches first.
+export const printOrder = (rows, range) => {
+  const groupFor = printGroupOf(rows, range);
+  return rows.map((row) => ({ row, group: groupFor(row) })).sort((a, b) => (
+    compareGroups(a.group, b.group)
+    || String(a.row.operatorName).localeCompare(String(b.row.operatorName))
+    || compareRunRows(a.row, b.row)
+  ));
+};
 
 export const stickerData = (row) => ({
   barcode: row.barcode,
@@ -61,15 +127,16 @@ export const stickerData = (row) => ({
   perConeTargetG: row.perConeTargetG,
 });
 
-// Sticker slots in print order. `null` is a blank slot: the used part of the first sheet,
-// and the rest of a sheet before the next shift starts when shifts go on separate sheets.
-export const buildStickerSlots = (rows, { copiesOf, startAt = 1, perPage = 21, newSheetPerShift = true } = {}) => {
+// Sticker slots in print order (`printOrder`; `range` is the run's dates and shifts). `null`
+// is a blank slot: the used part of the first sheet, and the rest of a sheet before the next
+// shift starts when shifts go on separate sheets.
+export const buildStickerSlots = (rows, { copiesOf, startAt = 1, perPage = 21, newSheetPerShift = true, range = null } = {}) => {
   const slots = [];
   const skip = Math.max(0, Math.min(perPage - 1, Math.round(Number(startAt) || 1) - 1));
   for (let i = 0; i < skip; i += 1) slots.push(null);
   let lastGroup = null;
-  for (const row of [...rows].sort(compareRunRows)) {
-    const group = shiftGroupKey(row);
+  for (const { row, group: place } of printOrder(rows, range)) {
+    const group = groupKey(place);
     if (newSheetPerShift && lastGroup !== null && group !== lastGroup) {
       while (slots.length % perPage !== 0) slots.push(null);
     }

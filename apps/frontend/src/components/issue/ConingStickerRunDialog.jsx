@@ -109,8 +109,8 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
   const visibleRows = useMemo(() => rows.filter((row) => showAll || isPending(row)), [rows, showAll]);
   const selectedRows = useMemo(() => rows.filter((row) => selected.has(row.id)), [rows, selected]);
   const slots = useMemo(
-    () => buildStickerSlots(selectedRows, { copiesOf, startAt: sheet ? startAt : 1, perPage, newSheetPerShift: sheet && newSheetPerShift }),
-    [selectedRows, copiesOf, startAt, perPage, newSheetPerShift, sheet],
+    () => buildStickerSlots(selectedRows, { copiesOf, startAt: sheet ? startAt : 1, perPage, newSheetPerShift: sheet && newSheetPerShift, range }),
+    [selectedRows, copiesOf, startAt, perPage, newSheetPerShift, sheet, range],
   );
   const totalStickers = slots.filter(Boolean).length;
   const sheets = sheetCount(slots, perPage);

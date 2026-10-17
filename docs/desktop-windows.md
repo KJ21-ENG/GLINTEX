@@ -164,27 +164,21 @@ uninstalls and uploads artifacts in the private repository for **one day**. The
 higher-version fixture is excluded from delivery. Physical devices and Windows
 10 desktop acceptance remain separate. Existing Tauri workflow remains unchanged.
 
-After source edits, bump the desktop version deliberately and review root plus
-desktop-local lockfile version metadata:
+Release from the main checkout with one command. It bumps the desktop patch
+version (root plus desktop-local lockfile metadata), pushes main, has the private
+builder build and verify that exact commit, then has the production host download
+the verified artifact straight from GitHub through a short-lived link and publish it:
 
 ```sh
-npm version patch --workspace apps/desktop --no-git-tag-version --ignore-scripts
+scripts/desktop-release/release.sh "<short user-facing release notes>"
 ```
 
-Pushing source does not refresh the current private builder's pinned bundle. An
-authorized coordinator must update its `source/source.bundle` and
-`source/manifest.json` (exact source commit/tree/base and bundle SHA-256). The
-bundle must advertise `refs/heads/codex/electron-windows-desktop`. Then use **Run
-workflow**, branch **main**, exact `source_sha` and unique `run_tag`, or:
-
-```sh
-gh workflow run electron-windows.yml --repo KJ21-ENG/GLINTEX-desktop-builds --ref main -f source_sha=<40-character-SHA> -f run_tag=<unique-tag>
-gh run download <run-id> --repo KJ21-ENG/GLINTEX-desktop-builds -n "GLINTEX-Windows-x64-<SHA>-<tag>" -D <destination>
-```
-
-Review the successful run's manifest, checksums and JSON reports before private
-delivery. Workflow availability and GitHub login do not grant permission to
-refresh/push or dispatch a new release.
+`--no-bump` releases the version already on main; `--publish-run <run-id>` publishes
+a finished builder run (for example after a failed upload). The builder fetches the
+commit from the public repository only after proving main contains it, and builds the
+higher-version upgrade fixture on a parallel runner. Backend deployment stays separate.
+Workflow availability and GitHub login do not grant permission to dispatch or publish
+a new release.
 
 `windows-verify.ps1` requires a clean disposable Windows user/runner and the verified delivered-version installer via `-BootstrapInstaller` (currently1.1.0). Missing previous-release evidence fails release acceptance. The private pipeline retrieves the exact checksum-pinned fixture within its own authorized repository. The checked-in development workflow also runs the complete package audit and fails release verification unless its fixture is already staged on the runner; it does not obtain cross-repository credentials or make the private fixture public. Outside CI the verifier requires `-AllowLocalInstall`; never use it on an operational machine. Its JSON results establish what executed. The packaged `--self-test` is executed in two separate processes for baseline, installed and upgraded applications. Its isolated loopback fixture checks the actual bundled login/settings UI, HttpOnly/SameSite cookies, process-restart persistence, logout, expiry, IPC auth gates and foreign redirect rejection without production mutations. Screenshots and JSON reports are included as evidence when the run succeeds.
 
@@ -233,7 +227,7 @@ Existing 1.0.0 needs **one manual upgrade** to the current version (1.1.4) under
 
 After authorized backend deployment, set `GLINTEX_DESKTOP_RELEASE_HOST_DIRECTORY=/var/lib/glintex/desktop-releases` and `GLINTEX_DESKTOP_RELEASE_DIRECTORY=/app/desktop-releases` in the host environment. Compose mounts the folder read-only in the backend. Keep it outside every public web root, with directories 0750/files 0640 and readable by the backend service identity. Unconfigured/empty hosting advertises no fake release.
 
-Stage an exact successful private Windows delivery plus its `windows-verification.json`, then run:
+`release.sh` runs the publisher for you (`scripts/desktop-release/server-publish.sh`). To publish by hand, stage an exact successful private Windows delivery plus its `windows-verification.json`, then run:
 
 ```sh
 node apps/backend/scripts/publish-desktop-release.mjs /private/delivery /private/windows-verification.json /var/lib/glintex/desktop-releases 'Optional scale driver setup and private user-controlled updates'

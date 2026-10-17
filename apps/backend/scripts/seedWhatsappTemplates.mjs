@@ -113,6 +113,7 @@ async function seed() {
         '🏗️ *Machine:* @machineName\n' +
         '👤 *Operator:* @operatorName\n' +
         '🏷️ *Barcode:* @barcode\n' +
+        '🕒 *Shift:* @shift\n' +
         '📅 *Date:* @date'
     },
     {

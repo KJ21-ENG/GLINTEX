@@ -188,6 +188,7 @@ const WHATSAPP_EVENTS_CONFIG = {
         variables: [
             { key: 'itemName', label: 'Item Name' },
             { key: 'lotNo', label: 'Lot No' },
+            { key: 'shift', label: 'Shift' },
             { key: 'date', label: 'Date' },
             { key: 'netWeight', label: 'Net Weight' },
             { key: 'coneCount', label: 'Cones' },

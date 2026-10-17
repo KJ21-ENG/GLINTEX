@@ -100,6 +100,7 @@ class TelegramService {
       chat_id: normalizedChatId,
       text: String(text || ''),
       disable_web_page_preview: true,
+      ...(Array.isArray(opts.entities) && opts.entities.length > 0 ? { entities: opts.entities } : {}),
     });
 
     this.status = 'connected';

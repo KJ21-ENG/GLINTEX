@@ -1,7 +1,7 @@
 import prisma from '../lib/prisma.js';
 import whatsapp from '../../whatsapp/service.js';
 import telegram from '../../telegram/service.js';
-import { getTemplateByEvent, interpolateTemplate } from './whatsappTemplates.js';
+import { getTemplateByEvent, interpolateTemplate, interpolateTelegramTemplate } from './whatsappTemplates.js';
 import { resolveRecordUserFields } from './userResolver.js';
 
 const CREATOR_TEMPLATE_REGEX = /(\{\{\s*createdBy(?:Label|Name|Username|UserId)?\s*\}\})|(@createdBy(?:Label|Name|Username|UserId)?)/;
@@ -73,6 +73,14 @@ export async function buildWhatsappMessage(template, payload) {
     msg = `${msg}\nCreated by: ${creatorLabel}`;
   }
   return String(msg || '').slice(0, 1500);
+}
+
+export async function buildTelegramMessage(template, payload) {
+  const { payload: enrichedPayload, creatorLabel } = await enrichPayloadWithCreator(payload);
+  const suffix = creatorLabel && !CREATOR_TEMPLATE_REGEX.test(template || '')
+    ? `\nCreated by: ${creatorLabel}`
+    : '';
+  return interpolateTelegramTemplate(template, enrichedPayload || {}, suffix);
 }
 
 export async function appendCreatorToCaption(caption, createdByUserId) {
@@ -274,7 +282,7 @@ async function sendWhatsappRecipients(recipients, message) {
 async function sendTelegramRecipients(chatIds, message) {
   const settled = await Promise.all(chatIds.map(async (chatId) => {
     try {
-      await withTimeout(telegram.sendTextSafe(chatId, message), 15000, 'telegram_send_timeout');
+      await withTimeout(telegram.sendTextSafe(chatId, message.text, { entities: message.entities }), 15000, 'telegram_send_timeout');
       return { recipient: chatId, success: true };
     } catch (err) {
       return { recipient: chatId, success: false, error: err?.message || String(err) };
@@ -360,7 +368,8 @@ export async function sendNotification(event, payload, opts = {}) {
       if (chatIds.length === 0) {
         channelResults.telegram.reason = 'no_recipients';
       } else {
-        channelResults.telegram.results = await sendTelegramRecipients(chatIds, msg);
+        const telegramMessage = await buildTelegramMessage(template.template, payload || {});
+        channelResults.telegram.results = await sendTelegramRecipients(chatIds, telegramMessage);
         channelResults.telegram.ok = channelResults.telegram.results.some((result) => result.success);
         if (!channelResults.telegram.ok) {
           channelResults.telegram.reason = 'send_failed';

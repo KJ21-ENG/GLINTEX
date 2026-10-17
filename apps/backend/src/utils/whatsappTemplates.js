@@ -22,7 +22,7 @@ function formatDateDDMMYYYY(dateStr) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
-export function interpolateTemplate(template, ctx) {
+function interpolateVariables(template, ctx) {
   if (!template) return '';
 
   const dateKeys = ['date', 'inboundDate', 'createdAt', 'updatedAt'];
@@ -56,7 +56,40 @@ export function interpolateTemplate(template, ctx) {
     }
 
     return String(v);
-  }).slice(0, 1500); // truncate to 1500 chars
+  });
+}
+
+export function interpolateTemplate(template, ctx) {
+  return interpolateVariables(template, ctx).slice(0, 1500);
+}
+
+export function interpolateTelegramTemplate(template, ctx, suffix = '') {
+  const source = template || '';
+  // Parse only template markup, before interpolation, so stars in item names and
+  // other values stay literal. Require word boundaries and keep unmatched stars.
+  const bold = /(?<![\p{L}\p{N}_*\\])\*([^\s*](?:[^*\r\n]*[^\s*])?)\*(?![\p{L}\p{N}_*])/gu;
+  let text = '';
+  let cursor = 0;
+  const entities = [];
+  for (const match of source.matchAll(bold)) {
+    text += interpolateVariables(source.slice(cursor, match.index), ctx);
+    const value = interpolateVariables(match[1], ctx);
+    // JS string lengths and Telegram entity offsets both use UTF-16 code units.
+    if (value.length > 0) entities.push({ type: 'bold', offset: text.length, length: value.length });
+    text += value;
+    cursor = match.index + match[0].length;
+  }
+  text += interpolateVariables(source.slice(cursor), ctx) + suffix;
+  text = text.slice(0, 1500);
+  // Do not cut an emoji's surrogate pair at the notification length limit.
+  if (/[\uD800-\uDBFF]$/.test(text)) text = text.slice(0, -1);
+  return {
+    text,
+    entities: entities.filter((entity) => entity.offset < text.length).map((entity) => ({
+      ...entity,
+      length: Math.min(entity.length, text.length - entity.offset),
+    })),
+  };
 }
 
 export async function getTemplateByEvent(event) {

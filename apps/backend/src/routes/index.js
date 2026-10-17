@@ -10938,6 +10938,7 @@ router.post('/api/receive_from_coning_machine/manual', requirePermission('receiv
       sendNotification('receive_from_coning_machine_created', {
         itemName,
         lotNo: issue.lotNo,
+        shift: issue.shift || '—',
         date: date || issue.date,
         grossWeight: Number(grossWeight),
         tareWeight: Number(tareWeight),

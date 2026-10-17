@@ -7,9 +7,6 @@ const SHIFT_ORDER = { Day: 0, Night: 1, '': 2 };
 
 export const isPending = (row) => PENDING_STATUSES.includes(row.status);
 
-// Selected by default: everything not yet printed, except carry-overs old enough to check first.
-export const selectedByDefault = (row) => isPending(row) && !row.stale;
-
 // New barcode: one per issued crate plus spares. Batch that grew after printing: only the new
 // crates. Carried over: the containers its remaining material should fill, plus one spare.
 // Already printed: one, for a lost or torn sticker.
@@ -61,6 +58,15 @@ const rangeShiftGroup = (range, shift) => {
 };
 
 // The last shift of the run: the latest shift of its to date.
+// A carried-over batch belongs to the run when the run covers its own shift: a night batch's
+// leftover goods are finished on the next night, so its C/O stickers go out with the morning
+// set (yesterday Night + today Day), not in a Day-only print.
+export const carryShiftInRun = (row, range) => !range || !SHIFTS.includes(row.shift) || rangeShiftGroup(range, row.shift) !== null;
+
+// Ticked by default: everything still needing a sticker, carried-over batches included, 'Check'
+// ones too (older than 2 days), as long as the run covers the batch's own shift.
+export const selectedByDefault = (row, range) => isPending(row) && (!row.carryOver || carryShiftInRun(row, range));
+
 const rangeLastGroup = (range) => {
   if (!range?.dateTo) return null;
   const shifts = shiftsOf(range.dateFrom === range.dateTo ? [...(range.fromShifts || []), ...(range.toShifts || [])] : range.toShifts);

@@ -7,7 +7,7 @@ import { getConingStickerRun, markConingStickersPrinted } from '../../api/client
 import { LABEL_STAGE_KEYS, buildPrintableArtifact, loadTemplateVariants, printStageTemplatesBatch } from '../../utils/labelPrint';
 import { labelsPerPage } from '../../utils/label/model';
 import { MAX_PAGES } from '../../utils/label/artifact';
-import { DEFAULT_SPARE, buildStickerSlots, compareRunRows, isPending, selectedByDefault, sheetCount, shiftGroupKey, suggestedCopies } from '../../utils/coningStickerRun';
+import { DEFAULT_SPARE, buildStickerSlots, carryShiftInRun, compareRunRows, isPending, selectedByDefault, sheetCount, shiftGroupKey, suggestedCopies } from '../../utils/coningStickerRun';
 
 const STAGE = LABEL_STAGE_KEYS.CONING_ISSUE;
 const VARIANT_KEY = 'glintex.coningStickerVariant';
@@ -83,10 +83,9 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
       // Last choice on this computer, else the first sheet variant, else the design in use.
       setVariantId((current) => [current, readVariantChoice(), set.variants.find((v) => isSheet(v.template))?.id, set.activeId]
         .find((id) => id && set.variants.some((v) => v.id === id)));
-      // Ticked by default: everything still needing a sticker today, including fresh carried-over
-      // batches (C/O, up to 2 days old); 'Check' batches stay unticked until someone looks at them.
-      // The collapsed band shows how many carried-over barcodes are selected.
-      setSelected(new Set(list.filter(selectedByDefault).map((row) => row.id)));
+      // Ticked by default: everything still needing a sticker, carried-over batches of the shifts
+      // this run covers included ('Check' ones too). The collapsed band shows how many are selected.
+      setSelected(new Set(list.filter((row) => selectedByDefault(row, range)).map((row) => row.id)));
       setCarryOpen(false);
       setCopyOverrides({});
     } catch (err) {
@@ -340,7 +339,7 @@ export default function ConingStickerRunDialog({ open, onOpenChange, onBack, ran
                             )}
                             <tr className={`border-b last:border-0 hover:bg-muted/40 ${row.carryOver ? 'bg-sky-50/60' : ''} ${!selected.has(row.id) ? 'text-muted-foreground' : ''}`}>
                               <td className="p-2"><input type="checkbox" aria-label={`Select ${row.barcode}`} checked={selected.has(row.id)} onChange={(e) => toggle(row.id, e.target.checked)} className="h-4 w-4" /></td>
-                              <td className="p-2 font-semibold">{row.operatorName || '—'}{row.carryOver && <span className="block text-xs font-normal text-muted-foreground">{row.shift || 'No shift'} {formatDate(row.date)}</span>}</td>
+                              <td className="p-2 font-semibold">{row.operatorName || '—'}{row.carryOver && <span className="block text-xs font-normal text-muted-foreground">{row.shift || 'No shift'} {formatDate(row.date)}{row.status === 'carry_over' && !carryShiftInRun(row, range) ? ` · ${row.shift} batch: not a shift of this print` : ''}</span>}</td>
                               <td className="p-2">{row.machineName || '—'}</td>
                               <td className="p-2 font-mono text-xs whitespace-nowrap">{row.barcode}</td>
                               <td className="p-2">{row.itemName}{row.cut ? ` (${row.cut})` : ''}{row.twist ? ` · ${row.twist}` : ''}</td>

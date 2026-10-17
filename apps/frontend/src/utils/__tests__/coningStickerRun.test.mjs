@@ -43,7 +43,7 @@ test('carried-over batches print first on their own sheet, marked C/O, with copi
   assert.equal(suggestedCopies(carry), 3, 'two containers left plus one spare');
   assert.equal(suggestedCopies({ ...carry, estimatedContainers: null }, 2), 8, 'nothing received yet: as a new barcode');
   assert.equal(selectedByDefault(carry), true);
-  assert.equal(selectedByDefault(stale), false, 'stale carry-overs wait for a check');
+  assert.equal(selectedByDefault(stale), true, "'Check' carry-overs are ticked too");
   assert.equal(selectedByDefault({ ...carry, status: 'carry_printed' }), false);
   assert.equal(stickerData(carry).shift, 'Night C/O');
   assert.equal(stickerData(today).shift, 'Day');
@@ -103,4 +103,20 @@ test('with nothing new, a carried-over batch goes to its own shift in the run, e
   const days = { dateFrom: '2026-10-10', dateTo: '2026-10-13', fromShifts: ['Day'], toShifts: ['Day'] };
   const placed = buildStickerSlots([night], { copiesOf: () => 1, perPage: 21, range: days });
   assert.deepEqual(placed.map((s) => s.barcode), ['ICO-8']);
+});
+
+test('a carried-over batch is ticked only when the run covers its own shift', async () => {
+  const { selectedByDefault, carryShiftInRun } = await import('../coningStickerRun.js');
+  const dayOnly = { dateFrom: '2026-10-17', dateTo: '2026-10-17', fromShifts: ['Day'], toShifts: ['Day'] };
+  const morningSet = { dateFrom: '2026-10-16', dateTo: '2026-10-17', fromShifts: ['Night'], toShifts: ['Day'] };
+  const nightCarry = row({ barcode: 'ICO-1', date: '2026-10-15', shift: 'Night', carryOver: true, status: 'carry_over' });
+  const dayCarry = row({ barcode: 'ICO-2', date: '2026-10-16', shift: 'Day', carryOver: true, status: 'carry_over', stale: true });
+  const today = row({ barcode: 'ICO-3', date: '2026-10-17', shift: 'Day' });
+  assert.equal(selectedByDefault(nightCarry, dayOnly), false, 'night leftovers wait for the morning set');
+  assert.equal(carryShiftInRun(nightCarry, dayOnly), false);
+  assert.equal(selectedByDefault(dayCarry, dayOnly), true, 'day carry-over, Check included');
+  assert.equal(selectedByDefault(nightCarry, morningSet), true);
+  assert.equal(selectedByDefault(dayCarry, morningSet), true);
+  assert.equal(selectedByDefault(today, dayOnly), true, 'the shift itself is always ticked');
+  assert.equal(selectedByDefault({ ...nightCarry, shift: '' }, dayOnly), true, 'no shift: cannot tell, so ticked');
 });

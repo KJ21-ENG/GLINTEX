@@ -180,6 +180,13 @@ higher-version upgrade fixture on a parallel runner. Backend deployment stays se
 Workflow availability and GitHub login do not grant permission to dispatch or publish
 a new release.
 
+The builder keeps at most 450 MB of artifacts and a delivery is about 180 MB; a build
+that cannot fit waits for space until its 45-minute job limit cancels it. The script
+therefore frees space before each build and after each publish: it deletes a delivery
+artifact only when the version built from its commit is already published on the host
+(which keeps the installer). Unpublished deliveries and failed-build logs are kept, and
+the script warns when they leave too little room. `--cleanup` runs only this step.
+
 `windows-verify.ps1` requires a clean disposable Windows user/runner and the verified delivered-version installer via `-BootstrapInstaller` (currently1.1.0). Missing previous-release evidence fails release acceptance. The private pipeline retrieves the exact checksum-pinned fixture within its own authorized repository. The checked-in development workflow also runs the complete package audit and fails release verification unless its fixture is already staged on the runner; it does not obtain cross-repository credentials or make the private fixture public. Outside CI the verifier requires `-AllowLocalInstall`; never use it on an operational machine. Its JSON results establish what executed. The packaged `--self-test` is executed in two separate processes for baseline, installed and upgraded applications. Its isolated loopback fixture checks the actual bundled login/settings UI, HttpOnly/SameSite cookies, process-restart persistence, logout, expiry, IPC auth gates and foreign redirect rejection without production mutations. Screenshots and JSON reports are included as evidence when the run succeeds.
 
 ## Upgrade, rollback and recovery

@@ -13,3 +13,7 @@ For substantial Advanced work, create a task capsule with declared scope, preser
 
 Use the global `project-workflow` skill and CLI for selection, task capsules, checkpoints, semantic validation, repair, gaps, and approved evolution.
 <!-- project-workflow:end -->
+
+# Windows desktop releases
+
+Use `scripts/desktop-release/release.sh "<notes>"` from the main checkout (see AGENTS.md "Windows desktop releases"). The old bundle/zstd/upload-through-the-Mac flow is retired. Releasing still needs the owner's explicit go-ahead.

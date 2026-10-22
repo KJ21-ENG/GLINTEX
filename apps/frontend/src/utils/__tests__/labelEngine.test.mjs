@@ -341,3 +341,40 @@ test('factory variants render without warnings and use only their stage variable
   }
   assert.equal(getDefaultTemplate('coning_issue', 'standard').media.kind, 'roll');
 });
+
+test('holo two-sticker variant prints two complete copies of each issue on one label', () => {
+  const stage = LABEL_STAGE_KEYS.HOLO_ISSUE;
+  const template = getDefaultTemplate(stage, 'two-stickers');
+  for (const dpi of [203, 300]) {
+    const issues = ['typical', 'long'].map((sample) => {
+      // Holo issue creation and history reprints supply twistName, not twist.
+      const { twist, ...data } = buildSampleData(stage, sample);
+      return data;
+    });
+    const artifact = buildPrintableArtifact(template, issues, { stageKey: stage, dpi });
+    assert.equal(artifact.widthMm, 75);
+    assert.equal(artifact.heightMm, 125);
+    assert.equal(artifact.pages.length, issues.length, 'one physical label per issue');
+    assert.deepEqual(artifact.warnings, []);
+    issues.forEach((issue, index) => {
+      const layout = layoutLabel(template, issue, measurer, { dpi });
+      const halves = [
+        layout.elements.filter((el) => el.box.y < 62.5),
+        layout.elements.filter((el) => el.box.y > 62.5),
+      ];
+      halves.forEach((half, halfIndex) => {
+        const values = half.flatMap((el) => el.layout?.lines?.map((line) => line.text) || []).join(' ');
+        for (const value of [issue.operatorName, issue.shift, issue.itemName, issue.cut, issue.yarnName, issue.twistName, issue.bobbinType, String(issue.bobbinQty), issue.netWeight.toFixed(3), issue.machineName, '10/10/2026', 'KG']) {
+          assert.ok(values.includes(value), `${value} appears in half ${halfIndex + 1}`);
+        }
+        const qr = half.filter((el) => el.type === 'qr');
+        assert.equal(qr.length, 1, 'each half has a scannable code');
+        assert.equal(qr[0].layout.textLine.text, issue.barcode);
+        assert.ok(half.every((el) => el.box.y >= halfIndex * 62.5 && el.box.y + el.box.h <= (halfIndex + 1) * 62.5), 'elements stay inside their half');
+      });
+      assert.equal((artifact.pages[index].html.match(new RegExp(`>${issue.barcode}<`, 'g')) || []).length, 2, 'both halves identify this issue');
+      assert.doesNotMatch(artifact.pages[index].html, /@(twist|twistName)/, 'live data resolves the twist');
+      assert.ok(!artifact.pages[index].html.includes(`>${issues[1 - index].barcode}<`), 'different issues stay on separate labels');
+    });
+  }
+});

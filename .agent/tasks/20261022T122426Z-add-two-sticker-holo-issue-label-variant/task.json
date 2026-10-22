@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "task_id": "20261022T122426Z-add-two-sticker-holo-issue-label-variant",
+  "title": "Add two-sticker holo issue label variant",
+  "objective": "Offer a holo issue label variant with two matching labels on one 75 x 125 mm print, following the coning variant",
+  "provider": "codex",
+  "provider_session_id": "02359eba-de93-4e75-8874-1ab72cf468ac",
+  "owner": "user-and-agent",
+  "status": "completed",
+  "created_at": "2026-10-22T12:24:26Z",
+  "updated_at": "2026-10-22T12:33:59Z",
+  "completed_at": "2026-10-22T12:33:59Z",
+  "start_commit": "1dc07fbce8b63acaea206fff189845169d996cfb",
+  "end_commit": "1dc07fbce8b63acaea206fff189845169d996cfb",
+  "branch_at_start": "main",
+  "scope": [
+    "apps/frontend/src/utils/__tests__/labelEngine.test.mjs",
+    "apps/frontend/src/utils/__tests__/labelTemplateAccess.test.mjs",
+    "apps/frontend/src/utils/label/defaults.js",
+    "apps/frontend/src/utils/labelPrint.js",
+    "docs/label-designer.md"
+  ],
+  "baseline_worktree": {
+    ".agent/tasks/20261022T122426Z-add-two-sticker-holo-issue-label-variant/brief.md": {
+      "status": "??",
+      "fingerprint": "file:2ce8139e444f623826b1f96c8d25d30a7df55ba2919811049b4c93155844c8ff",
+      "source_path": null
+    },
+    ".agent/tasks/20261022T122426Z-add-two-sticker-holo-issue-label-variant/task.json": {
+      "status": "??",
+      "fingerprint": "file:d226be05370223b5ba6fad317874f663609e2d0552baf652ddc0601dfc8db990",
+      "source_path": null
+    }
+  },
+  "owned_files": [
+    "apps/frontend/src/pages/Settings/LabelDesigner/index.jsx",
+    "apps/frontend/src/utils/__tests__/labelEngine.test.mjs",
+    "apps/frontend/src/utils/label/defaults.js",
+    "docs/label-designer.md"
+  ],
+  "attribution_confidence": "task-baseline-scope-constrained",
+  "conflicts": [],
+  "validation": [
+    "Label engine: 23/23 passed, including complete labels, no unresolved twist placeholders, half boundaries, same-issue QR data and one page per issue at 203/300 dpi.",
+    "Coning sticker run and post-commit printing regressions: 18/18 passed.",
+    "Frontend production build passed; git diff --check passed.",
+    "Isolated Chromium browser: saved-stage add keeps current active variant, activation and print preview succeed; existing stage factory picker works; read-only add disabled without writes; real-font typical and long samples at 203/300 dpi have no warnings; no uncaught browser errors. Print PDF and screenshots retained in ignored temp_ref/holo-label-check.",
+    "Workflow strict validation has pre-existing metadata errors in task 20261005-electron-desktop: missing completed_at and unsynchronized brief. No workflow policy or historical metadata changed."
+  ],
+  "external_actions": [],
+  "pending_authorizations": [],
+  "summary": "Added Issue to holo Standard \u00b7 2 stickers factory variant: one portrait 75x125 mm label contains two complete identical issue labels separated by a cut line. Uses twistName supplied by actual creation and reprint flows. Added designer actions for missing factory variants in saved stage sets, preserving the active printing choice. Updated label documentation. Local change only; no release or production mutation.",
+  "next_action": "Review local changes; release or production deployment requires explicit owner authorization."
+}

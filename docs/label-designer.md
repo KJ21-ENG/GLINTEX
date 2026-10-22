@@ -114,6 +114,14 @@ selection handles and guides on top.
   new variant and opens it; the variant in use does not change. **Save** stores the open
   variant. **Use for printing** stores it and makes it the one in use. Rename and Delete
   live in the ⋮ menu; the variant in use and the only variant cannot be deleted.
+- **Issue to holo → Standard · 2 stickers** prints the same issue twice on one 75 × 125 mm
+  roll label, with a cut line between the halves. Each half includes worker, shift, item and
+  cut, yarn and twist, bobbin type and quantity, net weight, machine, date and a QR code.
+  It uses one copy per transaction. Select **Use for printing** to make it active.
+- Factory variants appear in the picker before a stage's variants are first saved. For stages
+  with saved variants, use **⋮ → Add Standard · 2 stickers variant** (holo) or **Add A4 sheet
+  variant** (coning) to add a missing factory design. Save any current edits first. Adding a
+  variant keeps the current printing choice.
 - Storage: `v2v:<stage>` holds `{ version: 1, activeId, variants: [{ id, name, template }] }`;
   the variant in use is also written to `v2:<stage>` in the same transaction
   (`PUT /api/sticker_templates/:stage/variants`), so every print path keeps reading one live

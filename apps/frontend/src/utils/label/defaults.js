@@ -161,7 +161,30 @@ const CONING_ISSUE_A4 = {
   ],
 };
 
+// Two copies of the same holo issue on one roll label, separated at the midpoint.
+const holoIssueHalf = (prefix, offsetY) => [
+  text(`${prefix}-worker`, 2, 2, 55, 9, '@operatorName', { fontSizePt: 14, invert: true, uppercase: true, overflow: 'shrink', minFontSizePt: 5, paddingMm: 1 }),
+  text(`${prefix}-shift`, 57, 2, 16, 9, '@shift', { fontSizePt: 12, invert: true, uppercase: true, align: 'center', overflow: 'shrink', minFontSizePt: 5 }),
+  text(`${prefix}-item`, 2, 12.5, 71, 9, '@itemName (@cut)', { fontSizePt: 10.5, minFontSizePt: 5, lineHeight: 1 }),
+  text(`${prefix}-yarn`, 2, 23, 46, 8, '@yarnName · @twistName', { fontSizePt: 10, overflow: 'shrink', minFontSizePt: 5 }),
+  text(`${prefix}-bobbin`, 2, 32, 46, 7, 'BOB @bobbinType × @bobbinQty', { fontSizePt: 10.5, minFontSizePt: 5 }),
+  text(`${prefix}-net`, 2, 40, 46, 7, 'NET WT @netWeight KG', { fontSizePt: 11, minFontSizePt: 5 }),
+  text(`${prefix}-machine`, 2, 48, 46, 10, 'M/C @machineName', { fontSizePt: 10, minFontSizePt: 5, lineHeight: 1 }),
+  { id: `${prefix}-qr`, name: nameOf(`${prefix}-qr`), type: 'qr', x: 50, y: 25, sizeMm: 22, value: '@barcode', showText: true, textSizePt: 7 },
+  text(`${prefix}-date`, 49, 54, 24, 6, '@date', { fontSizePt: 8.5, align: 'right', overflow: 'shrink', minFontSizePt: 5, paddingMm: 0.3 }),
+].map((element) => ({ ...element, y: element.y + offsetY }));
+
+const HOLO_ISSUE_TWO_STICKERS = {
+  version: 2, media: { ...MEDIA_75x125, orientation: 'portrait' }, copies: 1,
+  elements: [
+    ...holoIssueHalf('top', 0),
+    rule('cut-line', 62.5, 2, 71),
+    ...holoIssueHalf('bottom', 62.5),
+  ],
+};
+
 export const FACTORY_VARIANTS = {
+  [LABEL_STAGE_KEYS.HOLO_ISSUE]: [{ id: 'two-stickers', name: 'Standard · 2 stickers', template: HOLO_ISSUE_TWO_STICKERS }],
   [LABEL_STAGE_KEYS.CONING_ISSUE]: [{ id: 'a4-sheet', name: 'A4 sheet', template: CONING_ISSUE_A4 }],
 };
 

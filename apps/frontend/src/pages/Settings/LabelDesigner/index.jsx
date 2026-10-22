@@ -7,7 +7,7 @@ import { cn } from '../../../lib/utils';
 import { usePermission } from '../../../hooks/usePermission';
 import { useSubmitLock } from '../../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../../context/UnsavedChangesContext';
-import { LABEL_STAGE_KEYS, STAGE_GROUPS, getStageLabel, getStageVariables, loadTemplateVariants, saveTemplateVariants, newVariantId, getDefaultTemplate, printStageTemplatesBatch, hasDesktopPrinting } from '../../../utils/labelPrint';
+import { LABEL_STAGE_KEYS, STAGE_GROUPS, FACTORY_VARIANTS, getStageLabel, getStageVariables, loadTemplateVariants, saveTemplateVariants, newVariantId, getDefaultTemplate, printStageTemplatesBatch, hasDesktopPrinting } from '../../../utils/labelPrint';
 import { askForInput } from '../../../utils/inputPrompt';
 import { ActionMenu } from '../../../components/ui';
 import { buildSampleData, SAMPLE_VARIANTS } from '../../../utils/label/sampleData';
@@ -123,6 +123,7 @@ export default function LabelDesigner() {
   const currentVariant = variantSet.variants.find((v) => v.id === currentVariantId) || null;
   const activeVariant = variantSet.variants.find((v) => v.id === variantSet.activeId) || null;
   const currentInUse = Boolean(currentVariant && currentVariant.id === variantSet.activeId);
+  const missingFactoryVariants = (FACTORY_VARIANTS[stageKey] || []).filter((factory) => !variantSet.variants.some((v) => v.id === factory.id || v.name.toLowerCase() === factory.name.toLowerCase()));
   const withCurrentEdits = () => {
     const now = new Date().toISOString();
     return variantSet.variants.map((v) => (v.id === currentVariantId ? { ...v, template: normalizeTemplate(state.template), updatedAt: now } : v));
@@ -169,6 +170,13 @@ export default function LabelDesigner() {
     if (!(await persist([...variantSet.variants, variant], variantSet.activeId))) return;
     openVariant(variant);
     notify('success', `${variant.name} created from the design on screen. ${activeVariant?.name || 'The current variant'} is still the one in use.`);
+  });
+  const handleAddFactoryVariant = save(async (factory) => {
+    if (!currentVariant || variantSet.variants.length >= 20) return;
+    const variant = { id: factory.id, name: factory.name, template: getDefaultTemplate(stageKey, factory.id), updatedAt: new Date().toISOString() };
+    if (!(await persist([...variantSet.variants, variant], variantSet.activeId))) return;
+    openVariant(variant);
+    notify('success', `${variant.name} added. ${activeVariant?.name || 'The current variant'} is still the one in use.`);
   });
   const handleRenameVariant = save(async () => {
     if (!currentVariant) return;
@@ -276,6 +284,7 @@ export default function LabelDesigner() {
                 : <Button size="sm" variant="outline" className="h-8" onClick={handleUseForPrinting} disabled={!canEdit || state.loading || saving} title="Make new labels of this stage print this variant">Use for printing</Button>}
               <ActionMenu actions={[
                 { label: 'New variant from this design', icon: <CopyPlus className="w-4 h-4" />, onClick: handleNewVariant, disabled: !canEdit || state.loading || saving },
+                ...missingFactoryVariants.map((factory) => ({ label: `Add ${factory.name} variant`, icon: <CopyPlus className="w-4 h-4" />, onClick: () => handleAddFactoryVariant(factory), disabled: !canEdit || state.loading || saving || dirty || variantSet.variants.length >= 20, disabledReason: dirty ? 'Save your changes before adding a factory variant' : 'A label can have at most 20 variants' })),
                 { label: 'Rename variant', icon: <Pencil className="w-4 h-4" />, onClick: handleRenameVariant, disabled: !canEdit || state.loading || saving || state.origin !== 'saved' },
                 { label: 'Delete variant', icon: <Trash2 className="w-4 h-4" />, variant: 'destructive', onClick: () => setConfirm({ kind: 'deleteVariant' }), disabled: !canEdit || saving || currentInUse || variantSet.variants.length < 2, disabledReason: currentInUse ? 'The variant in use cannot be deleted' : 'The only variant cannot be deleted' },
               ]} />

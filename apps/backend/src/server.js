@@ -1,5 +1,4 @@
 import app from './app.js';
-import whatsapp from '../whatsapp/service.js';
 import telegram from '../telegram/service.js';
 import { ensureDefaultAdminUser } from './utils/defaultAdmin.js';
 import { initBackupScheduler } from './utils/backup.js';
@@ -8,15 +7,6 @@ import { initTelegramCronScheduler } from './utils/telegramScheduler.js';
 const PORT = process.env.PORT || 4000;
 
 let server = null;
-
-async function startWhatsapp() {
-  try {
-    await whatsapp.init();
-    console.log('Whatsapp service initialized');
-  } catch (err) {
-    console.error('Failed to initialize Whatsapp service', err);
-  }
-}
 
 async function startTelegram() {
   try {
@@ -52,7 +42,6 @@ async function start() {
   // Local feature testing can run without connecting messaging accounts or schedulers.
   const localOnly = process.env.NODE_ENV !== 'production' && process.env.LOCAL_DISABLE_INTEGRATIONS === '1';
   if (!localOnly) {
-    startWhatsapp();
     startTelegram();
     await initBackupScheduler();
     await initTelegramCronScheduler();

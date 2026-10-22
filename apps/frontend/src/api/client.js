@@ -240,7 +240,6 @@ export async function markConingWastage(input) {
 export async function revertCutterWastage(payload) { return await request('/api/receive_from_cutter_machine/revert_wastage', { method: 'POST', body: payload }); }
 export async function revertConingWastage(payload) { return await request('/api/receive_from_coning_machine/revert_wastage', { method: 'POST', body: payload }); }
 export async function revertHoloWastageRow(payload) { return await request('/api/receive_from_holo_machine/revert_wastage_row', { method: 'POST', body: payload }); }
-export async function sendDocument(formData) { return await requestFormData('/api/documents/send', formData); }
 export async function getDocumentHistory() { return await request('/api/documents/history'); }
 export async function importReceiveFromMachine(payload) { return await importReceiveFromCutterMachine(payload); }
 export async function previewReceiveFromMachine(payload) { return await previewReceiveFromCutterMachine(payload); }
@@ -379,23 +378,15 @@ export function barcodeImageUrl(code, options = {}) {
   if (options.height) params.set('height', String(options.height));
   return `${BASE}/api/barcodes/render?${params.toString()}`;
 }
-export async function whatsappStatus() { return await request('/api/whatsapp/status'); }
-export async function whatsappStart() { return await request('/api/whatsapp/start', { method: 'POST' }); }
-export async function whatsappQr() { return await request('/api/whatsapp/qrcode'); }
-export async function whatsappLogout() { return await request('/api/whatsapp/logout', { method: 'POST' }); }
-export async function whatsappSendTest(number) { return await request('/api/whatsapp/send-test', { method: 'POST', body: { number } }); }
 export async function telegramStatus() { return await request('/api/telegram/status'); }
 export async function telegramSendTest(chatId, text) { return await request('/api/telegram/send-test', { method: 'POST', body: { chatId, text } }); }
 export async function telegramResolveChats(chatIds = []) { return await request('/api/telegram/chats/resolve', { method: 'POST', body: { chatIds } }); }
 export async function getTelegramCronLogs() { return await request('/api/telegram-cron/logs'); }
 export async function testTelegramCronPrimary() { return await request('/api/telegram-cron/test-primary', { method: 'POST' }); }
 export async function testTelegramCronReminder() { return await request('/api/telegram-cron/test-reminder', { method: 'POST' }); }
-export async function listWhatsappTemplates() { return await request('/api/whatsapp/templates'); }
-export async function updateWhatsappTemplate(event, body) { return await request(`/api/whatsapp/templates/${event}`, { method: 'PUT', body }); }
-export async function sendNotificationEvent(event, payload) { return await request('/api/whatsapp/send-event', { method: 'POST', body: { event, payload } }); }
-export async function sendWhatsappEvent(event, payload) { return await sendNotificationEvent(event, payload); }
-export async function whatsappGroups() { return await request('/api/whatsapp/groups'); }
-export async function getWhatsappContacts() { return await request('/api/whatsapp/contacts'); }
+export async function listNotificationTemplates() { return await request('/api/notifications/templates'); }
+export async function updateNotificationTemplate(event, body) { return await request(`/api/notifications/templates/${event}`, { method: 'PUT', body }); }
+export async function sendNotificationEvent(event, payload) { return await request('/api/notifications/send-event', { method: 'POST', body: { event, payload } }); }
 
 // Backups
 export async function listBackups() { return await request('/api/backups'); }
@@ -503,9 +494,6 @@ export async function sendSummaryNotification(stage, type, dateFromOrObj, dateTo
     method: 'POST',
     body
   });
-}
-export async function sendSummaryWhatsApp(stage, type, dateFromOrObj, dateTo, fromShifts, toShifts) {
-  return await sendSummaryNotification(stage, type, dateFromOrObj, dateTo, fromShifts, toShifts);
 }
 async function downloadBlobResponse(path, fallbackFilename, options = {}) {
   let res;
@@ -672,7 +660,6 @@ export default {
   getReceiveCrateStats,
   markPieceWastage,
   markConingWastage,
-  sendDocument,
   getDocumentHistory,
   updateInboundItem,
   deleteLot,

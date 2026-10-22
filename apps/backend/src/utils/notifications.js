@@ -1,7 +1,6 @@
 import prisma from '../lib/prisma.js';
-import whatsapp from '../../whatsapp/service.js';
 import telegram from '../../telegram/service.js';
-import { getTemplateByEvent, interpolateTemplate, interpolateTelegramTemplate } from './whatsappTemplates.js';
+import { getTemplateByEvent, interpolateTelegramTemplate } from './notificationTemplates.js';
 import { resolveRecordUserFields } from './userResolver.js';
 
 const CREATOR_TEMPLATE_REGEX = /(\{\{\s*createdBy(?:Label|Name|Username|UserId)?\s*\}\})|(@createdBy(?:Label|Name|Username|UserId)?)/;
@@ -31,17 +30,12 @@ function normalizeChatIds(chatIds) {
   return normalized;
 }
 
-function isWhatsAppEnabled(settings) {
-  return settings?.whatsappEnabled !== false;
-}
-
 function isTelegramEnabled(settings) {
   return settings?.telegramEnabled === true;
 }
 
 export function getNotificationChannelConfig(settings = {}) {
   return {
-    whatsappEnabled: isWhatsAppEnabled(settings),
     telegramEnabled: isTelegramEnabled(settings),
   };
 }
@@ -66,15 +60,6 @@ async function enrichPayloadWithCreator(payload) {
   };
 }
 
-export async function buildWhatsappMessage(template, payload) {
-  const { payload: enrichedPayload, creatorLabel } = await enrichPayloadWithCreator(payload);
-  let msg = interpolateTemplate(template, enrichedPayload || {});
-  if (creatorLabel && !CREATOR_TEMPLATE_REGEX.test(template || '')) {
-    msg = `${msg}\nCreated by: ${creatorLabel}`;
-  }
-  return String(msg || '').slice(0, 1500);
-}
-
 export async function buildTelegramMessage(template, payload) {
   const { payload: enrichedPayload, creatorLabel } = await enrichPayloadWithCreator(payload);
   const suffix = creatorLabel && !CREATOR_TEMPLATE_REGEX.test(template || '')
@@ -91,28 +76,6 @@ export async function appendCreatorToCaption(caption, createdByUserId) {
   const base = caption ? String(caption) : '';
   const suffix = `Created by: ${creatorLabel}`;
   return (base ? `${base}\n${suffix}` : suffix).slice(0, 1500);
-}
-
-export function resolveWhatsappRecipients({ template, settings }) {
-  const recipients = [];
-  if (template?.sendToPrimary !== false && settings?.whatsappNumber) {
-    recipients.push({ type: 'number', value: settings.whatsappNumber });
-  }
-
-  const allowedGroups = Array.isArray(settings?.whatsappGroupIds)
-    ? settings.whatsappGroupIds
-    : [];
-  const templateGroups = Array.isArray(template?.groupIds) ? template.groupIds : [];
-  const groupsToSend = templateGroups.filter(id => allowedGroups.includes(id));
-  for (const gid of groupsToSend) recipients.push({ type: 'group', value: gid });
-
-  const seen = new Set();
-  return recipients.filter((recipient) => {
-    const key = `${recipient.type}:${recipient.value}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 export function resolveTelegramRecipients(settings = {}) {
@@ -234,17 +197,6 @@ export async function persistNotificationDeliveryLogs({
 } = {}) {
   try {
     const data = [];
-    if (Object.prototype.hasOwnProperty.call(channels || {}, 'whatsapp')) {
-      data.push(...buildDeliveryRowsForChannel({
-        channel: 'whatsapp',
-        channelData: channels?.whatsapp,
-        event,
-        templateEvent,
-        templateId,
-        source,
-        createdByUserId,
-      }));
-    }
     if (Object.prototype.hasOwnProperty.call(channels || {}, 'telegram')) {
       data.push(...buildDeliveryRowsForChannel({
         channel: 'telegram',
@@ -261,22 +213,6 @@ export async function persistNotificationDeliveryLogs({
   } catch (err) {
     console.error('Failed to write notification delivery logs', err);
   }
-}
-
-async function sendWhatsappRecipients(recipients, message) {
-  const settled = await Promise.all(recipients.map(async (recipient) => {
-    try {
-      if (recipient.type === 'number') {
-        await withTimeout(whatsapp.sendTextSafe(recipient.value, message), 15000, 'whatsapp_send_timeout');
-      } else {
-        await withTimeout(whatsapp.sendToChatIdSafe(recipient.value, message), 15000, 'whatsapp_send_timeout');
-      }
-      return { recipient: recipient.value, type: recipient.type, success: true };
-    } catch (err) {
-      return { recipient: recipient.value, type: recipient.type, success: false, error: err?.message || String(err) };
-    }
-  }));
-  return settled;
 }
 
 async function sendTelegramRecipients(chatIds, message) {
@@ -304,8 +240,7 @@ export async function sendNotification(event, payload, opts = {}) {
       template = {
         enabled: true,
         template: opts.fallbackTemplate,
-        sendToPrimary: true,
-        groupIds: [],
+        telegramChatIds: [],
       };
     }
 
@@ -314,12 +249,11 @@ export async function sendNotification(event, payload, opts = {}) {
       return { ok: false, reason: 'template_disabled' };
     }
 
-    const msg = await buildWhatsappMessage(template.template, payload || {});
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    const { whatsappEnabled, telegramEnabled } = getNotificationChannelConfig(settings || {});
+    const { telegramEnabled } = getNotificationChannelConfig(settings || {});
 
-    if (!whatsappEnabled && !telegramEnabled) {
-      const channels = { whatsapp: { enabled: false }, telegram: { enabled: false } };
+    if (!telegramEnabled) {
+      const channels = { telegram: { enabled: false } };
       persistNotificationDeliveryLogs({
         event,
         templateEvent: template?.event || event,
@@ -332,13 +266,6 @@ export async function sendNotification(event, payload, opts = {}) {
     }
 
     const channelResults = {
-      whatsapp: {
-        enabled: whatsappEnabled,
-        recipients: [],
-        results: [],
-        ok: false,
-        reason: null,
-      },
       telegram: {
         enabled: telegramEnabled,
         recipients: [],
@@ -347,20 +274,6 @@ export async function sendNotification(event, payload, opts = {}) {
         reason: null,
       },
     };
-
-    if (whatsappEnabled) {
-      const recipients = resolveWhatsappRecipients({ template, settings: settings || {} });
-      channelResults.whatsapp.recipients = recipients;
-      if (recipients.length === 0) {
-        channelResults.whatsapp.reason = 'no_recipients';
-      } else {
-        channelResults.whatsapp.results = await sendWhatsappRecipients(recipients, msg);
-        channelResults.whatsapp.ok = channelResults.whatsapp.results.some((result) => result.success);
-        if (!channelResults.whatsapp.ok) {
-          channelResults.whatsapp.reason = 'send_failed';
-        }
-      }
-    }
 
     if (telegramEnabled) {
       const chatIds = resolveTemplateTelegramRecipients({ template, settings: settings || {} });
@@ -377,7 +290,7 @@ export async function sendNotification(event, payload, opts = {}) {
       }
     }
 
-    const overallOk = channelResults.whatsapp.ok || channelResults.telegram.ok;
+    const overallOk = channelResults.telegram.ok;
     persistNotificationDeliveryLogs({
       event,
       templateEvent: template?.event || event,
@@ -390,14 +303,14 @@ export async function sendNotification(event, payload, opts = {}) {
       return {
         ok: false,
         reason: 'all_channels_failed',
-        recipients: channelResults.whatsapp.recipients,
+        recipients: channelResults.telegram.recipients,
         channels: channelResults,
       };
     }
 
     return {
       ok: true,
-      recipients: channelResults.whatsapp.recipients,
+      recipients: channelResults.telegram.recipients,
       channels: channelResults,
     };
   } catch (err) {

@@ -18,8 +18,5 @@
     "test:desktop": "npm run test --workspace apps/desktop",
     "package:desktop": "npm run package --workspace apps/desktop",
     "make:desktop:windows": "npm run make --workspace apps/desktop"
-  },
-  "dependencies": {
-    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
   }
 }

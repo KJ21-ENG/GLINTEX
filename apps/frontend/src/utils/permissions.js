@@ -83,7 +83,7 @@ export const MODULE_PERMISSIONS = [
   { key: 'settings', label: 'Settings', supportsEdit: true },
   { key: 'opening_stock', label: 'Opening Stock', supportsDelete: true },
   { key: 'box_transfer', label: 'Box Transfer', supportsDelete: true },
-  { key: 'send_documents', label: 'Send Documents' },
+  { key: 'send_documents', label: 'Document History' },
   { key: 'contractor_payments', label: 'Contractor Payments', supportsDelete: true },
 ];
 

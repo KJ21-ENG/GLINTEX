@@ -8,10 +8,9 @@ import { randomUUID } from 'crypto';
 import { parse } from 'csv-parse/sync';
 import prisma from '../lib/prisma.js';
 import { requireAuth, requireRole, requirePermission, requireEditPermission, requireDeletePermission, requireStickerTemplateRead, isStickerTemplateStage } from '../middleware/auth.js';
-import whatsapp from '../../whatsapp/service.js';
 import telegram from '../../telegram/service.js';
-import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/whatsappTemplates.js';
-import { appendCreatorToCaption, getNotificationChannelConfig, persistNotificationDeliveryLogs, resolveTelegramRecipients, resolveTemplateTelegramRecipients, resolveWhatsappRecipients, sendNotification } from '../utils/notifications.js';
+import { interpolateTemplate, getTemplateByEvent, listTemplates, upsertTemplate } from '../utils/notificationTemplates.js';
+import { getNotificationChannelConfig, persistNotificationDeliveryLogs, resolveTelegramRecipients, resolveTemplateTelegramRecipients, sendNotification } from '../utils/notifications.js';
 import { logCrud } from '../utils/auditLogger.js';
 import { clearSessionCookie, generateSessionToken, getSessionCookieOptions, getSessionExpiryDate, hashPassword, normalizeUsername, verifyPassword, SESSION_COOKIE_NAME } from '../utils/auth.js';
 import { ACCESS_LEVELS, buildEffectivePermissions, normalizePermissions } from '../utils/permissions.js';
@@ -2440,6 +2439,9 @@ function sanitizeSettingsForResponse(settings) {
   if (!settings || typeof settings !== 'object') return settings;
   return {
     ...settings,
+    whatsappEnabled: false,
+    whatsappNumber: null,
+    whatsappGroupIds: [],
     telegramBotToken: settings.telegramBotToken ? '********' : null,
   };
 }
@@ -6396,43 +6398,16 @@ async function dispatchMediaByChannels({
   filename,
   mimetype,
   caption = '',
-  explicitWhatsappRecipients = [],
   explicitTelegramChatIds = [],
 }) {
-  const { whatsappEnabled, telegramEnabled } = getNotificationChannelConfig(settings || {});
-  if (!whatsappEnabled && !telegramEnabled) {
-    return { ok: false, reason: 'no_enabled_channels', channels: { whatsapp: { enabled: false }, telegram: { enabled: false } } };
+  const { telegramEnabled } = getNotificationChannelConfig(settings || {});
+  if (!telegramEnabled) {
+    return { ok: false, reason: 'no_enabled_channels', channels: { telegram: { enabled: false } } };
   }
 
   const channels = {
-    whatsapp: { enabled: whatsappEnabled, recipients: [], results: [], ok: false, reason: null },
     telegram: { enabled: telegramEnabled, recipients: [], results: [], ok: false, reason: null },
   };
-
-  if (whatsappEnabled) {
-    const recipients = explicitWhatsappRecipients.length > 0
-      ? explicitWhatsappRecipients
-      : resolveWhatsappRecipients({ template, settings });
-    channels.whatsapp.recipients = recipients;
-    if (recipients.length === 0) {
-      channels.whatsapp.reason = 'no_recipients';
-    } else {
-      channels.whatsapp.results = await Promise.all(recipients.map(async (recipient) => {
-        try {
-          if (recipient.type === 'number') {
-            await whatsapp.sendMediaSafe(recipient.value, buffer, filename, mimetype, caption);
-          } else {
-            await whatsapp.sendMediaToChatIdSafe(recipient.value, buffer, filename, mimetype, caption);
-          }
-          return { recipient: recipient.value, type: recipient.type, success: true };
-        } catch (err) {
-          return { recipient: recipient.value, type: recipient.type, success: false, error: err?.message || String(err) };
-        }
-      }));
-      channels.whatsapp.ok = channels.whatsapp.results.some((result) => result.success);
-      if (!channels.whatsapp.ok) channels.whatsapp.reason = 'send_failed';
-    }
-  }
 
   if (telegramEnabled) {
     const chatIds = explicitTelegramChatIds.length > 0
@@ -6456,20 +6431,16 @@ async function dispatchMediaByChannels({
   }
 
   return {
-    ok: channels.whatsapp.ok || channels.telegram.ok,
-    reason: channels.whatsapp.ok || channels.telegram.ok ? null : 'all_channels_failed',
+    ok: channels.telegram.ok,
+    reason: channels.telegram.ok ? null : 'all_channels_failed',
     channels,
   };
 }
 
-// Whatsapp control endpoints
-router.get('/api/whatsapp/status', requirePermission('settings', PERM_READ), async (req, res) => {
-  try {
-    const status = whatsapp.getStatus();
-    res.json(status);
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
+// Older desktop clients still ask for status before loading Telegram settings.
+// This compatibility response never creates a browser or a messaging session.
+router.get('/api/whatsapp/status', requirePermission('settings', PERM_READ), (req, res) => {
+  res.json({ status: 'retired', retired: true });
 });
 
 router.get('/api/telegram/status', requirePermission('settings', PERM_READ), async (req, res) => {
@@ -6561,36 +6532,8 @@ router.post('/api/telegram-cron/test-reminder', requirePermission('settings', PE
   }
 });
 
-router.post('/api/whatsapp/start', requireRole('admin'), requirePermission('settings', PERM_WRITE), async (req, res) => {
-  try {
-    const force = req.body && (req.body.force === true || req.body.force === 'true');
-    await whatsapp.init({ force });
-    res.status(202).json({ ok: true });
-  } catch (err) {
-    console.error('Failed to start whatsapp', err);
-    res.status(500).json({ error: String(err) });
-  }
-});
-
-// List Whatsapp groups
-router.get('/api/whatsapp/groups', requireRole('admin'), requirePermission('settings', PERM_READ), async (req, res) => {
-  try {
-    const st = whatsapp.getStatus();
-    if (st.status !== 'connected' || !whatsapp.client) return res.status(409).json({ error: 'not_connected' });
-    const chats = await whatsapp.client.getChats();
-    // Filter for groups where isGroup is true AND isReadOnly is false
-    // isReadOnly is usually true if you have left the group or are restricted
-    const groups = (chats || [])
-      .filter(c => c.isGroup && c.isReadOnly === false)
-      .map(c => ({ id: c.id?._serialized || c.id || '', name: c.name || '' }));
-    res.json(groups);
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
-
 // Templates endpoints
-router.get('/api/whatsapp/templates', requirePermission('settings', PERM_READ), async (req, res) => {
+router.get(['/api/notifications/templates', '/api/whatsapp/templates'], requirePermission('settings', PERM_READ), async (req, res) => {
   try {
     const t = await listTemplates();
     res.json(t);
@@ -6694,12 +6637,11 @@ router.put('/api/sticker_templates/:stageKey', requireEditPermission('settings')
   }
 });
 
-router.put('/api/whatsapp/templates/:event', requireEditPermission('settings'), async (req, res) => {
+router.put(['/api/notifications/templates/:event', '/api/whatsapp/templates/:event'], requireEditPermission('settings'), async (req, res) => {
   try {
     const actorUserId = req.user?.id;
     const { event } = req.params;
-    const { enabled, template, sendToPrimary, groupIds, telegramChatIds } = req.body;
-    const cleanGroups = Array.isArray(groupIds) ? groupIds.filter(x => typeof x === 'string') : [];
+    const { enabled, template, telegramChatIds } = req.body;
     const cleanTelegramChatIds = Array.isArray(telegramChatIds)
       ? telegramChatIds.map((id) => String(id || '').trim()).filter(Boolean)
       : [];
@@ -6715,49 +6657,13 @@ router.put('/api/whatsapp/templates/:event', requireEditPermission('settings'), 
       {
         enabled: !!enabled,
         template: template || '',
-        sendToPrimary: sendToPrimary !== false,
-        groupIds: cleanGroups,
         telegramChatIds: uniqueTelegramChatIds,
       },
       { actorUserId }
     );
-    await logCrudWithActor(req, { entityType: 'whatsapp_template', entityId: String(t.id), action: 'upsert', payload: { event } });
+    await logCrudWithActor(req, { entityType: 'notification_template', entityId: String(t.id), action: 'upsert', payload: { event } });
     res.json(t);
   } catch (err) { res.status(500).json({ error: String(err) }); }
-});
-
-router.get('/api/whatsapp/contacts', requirePermission('send_documents', PERM_READ), async (req, res) => {
-  try {
-    const contacts = await whatsapp.getContacts();
-    // Filter out groups if needed, but for now user said "all numbers"
-    // We typically want only individual contacts for "Send Documents", but maybe user wants groups too? 
-    // The previous implementation used "Customer" which implies individuals. 
-    // Let's filter out groups by default to be safe, or include them if distinguishable.
-    // Spec said "numbers of logged in whatsapp account", usually implies contacts.
-    const individualContacts = contacts.filter(c => !c.isGroup && c.hasSavedName && /[A-Za-z]/.test(c.name || '') && !c.id.endsWith('@lid'));
-
-    // Deduplicate by normalized number (handles duplicates with country code or formatting)
-    const normalizeNumber = (value) => {
-      const digits = String(value || '').replace(/\D/g, '');
-      if (digits.length > 10 && digits.startsWith('91')) return digits.slice(-10);
-      return digits;
-    };
-    const uniqueByNumber = new Map();
-    individualContacts.forEach(c => {
-      const key = normalizeNumber(c.number);
-      if (!key) return;
-      if (!uniqueByNumber.has(key)) uniqueByNumber.set(key, c);
-    });
-    const uniqueContacts = Array.from(uniqueByNumber.values());
-
-    // Sort by name
-    uniqueContacts.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-    res.json({ contacts: uniqueContacts });
-  } catch (err) {
-    console.error('Failed to get whatsapp contacts', err);
-    res.status(500).json({ error: err.message || 'Failed to fetch contacts' });
-  }
 });
 
 router.post('/api/whatsapp/send-document', requirePermission('send_documents', PERM_WRITE), upload.single('file'), async (req, res) => {
@@ -6781,7 +6687,7 @@ router.post('/api/whatsapp/send-document', requirePermission('send_documents', P
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
-router.post('/api/whatsapp/send-event', requirePermission('settings', PERM_WRITE), async (req, res) => {
+router.post(['/api/notifications/send-event', '/api/whatsapp/send-event'], requirePermission('settings', PERM_WRITE), async (req, res) => {
   try {
     const { event, payload } = req.body;
     const payloadWithActor = { ...(payload || {}) };
@@ -6800,49 +6706,9 @@ router.post('/api/whatsapp/send-event', requirePermission('settings', PERM_WRITE
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
-router.get('/api/whatsapp/qrcode', requireRole('admin'), requirePermission('settings', PERM_READ), async (req, res) => {
-  try {
-    const qr = whatsapp.getQrDataUrl();
-    res.json({ qr });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
-
-// SSE endpoint for real-time whatsapp events (qr/status)
-router.get('/api/whatsapp/events', requirePermission('settings', PERM_READ), (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  const emitter = whatsapp.getEmitter();
-  const onStatus = (data) => res.write(`event: status\ndata: ${JSON.stringify(data)}\n\n`);
-  const onQr = (data) => res.write(`event: qr\ndata: ${JSON.stringify(data)}\n\n`);
-  emitter.on('status', onStatus);
-  emitter.on('qr', onQr);
-  req.on('close', () => {
-    emitter.off('status', onStatus);
-    emitter.off('qr', onQr);
-  });
-});
-
-router.post('/api/whatsapp/logout', requireRole('admin'), requirePermission('settings', PERM_WRITE), async (req, res) => {
-  try {
-    await whatsapp.logout();
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
-
-router.post('/api/whatsapp/send-test', requirePermission('settings', PERM_WRITE), async (req, res) => {
-  try {
-    const number = req.body.number || '916353131826';
-    await whatsapp.sendText(number, 'Hii');
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Failed to send test message', err);
-    res.status(500).json({ error: String(err) });
-  }
+// Retired connection, contact, and direct-send endpoints cannot restart WhatsApp.
+router.all('/api/whatsapp/*', (req, res) => {
+  res.status(410).json({ error: 'WhatsApp integration has been removed. Use Telegram notifications.' });
 });
 
 router.post('/api/lots', requirePermission('inbound', PERM_WRITE), async (req, res) => {
@@ -11029,7 +10895,7 @@ router.post('/api/receive_from_coning_machine/mark_wastage', requirePermission('
       return { issue, currentTotal, netIssuedWeight, remaining, updated: after, event: eventRow };
     });
 
-    // 6. Send WhatsApp notification
+    // 6. Send Telegram notification
     try {
       const itemRec = issue.itemId ? await prisma.item.findUnique({ where: { id: issue.itemId } }) : null;
       const itemName = itemRec ? itemRec.name || '' : '';
@@ -14495,9 +14361,6 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
     const {
       logoDataUrl,
       faviconDataUrl,
-      whatsappEnabled,
-      whatsappNumber,
-      whatsappGroupIds,
       telegramEnabled,
       telegramBotToken,
       telegramChatIds,
@@ -14518,9 +14381,6 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
     const hasBrandGold = Object.prototype.hasOwnProperty.call(body, 'brandGold') || Object.prototype.hasOwnProperty.call(body, 'gold');
     const hasLogoDataUrl = Object.prototype.hasOwnProperty.call(body, 'logoDataUrl');
     const hasFaviconDataUrl = Object.prototype.hasOwnProperty.call(body, 'faviconDataUrl');
-    const hasWhatsAppEnabled = Object.prototype.hasOwnProperty.call(body, 'whatsappEnabled');
-    const hasWhatsAppNumber = Object.prototype.hasOwnProperty.call(body, 'whatsappNumber');
-    const hasWhatsAppGroupIds = Object.prototype.hasOwnProperty.call(body, 'whatsappGroupIds');
     const hasTelegramEnabled = Object.prototype.hasOwnProperty.call(body, 'telegramEnabled');
     const hasTelegramBotToken = Object.prototype.hasOwnProperty.call(body, 'telegramBotToken');
     const hasTelegramChatIds = Object.prototype.hasOwnProperty.call(body, 'telegramChatIds');
@@ -14545,17 +14405,6 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
     if (hasAutoSelectTwistForMachine && !req.user?.isAdmin) {
       return res.status(403).json({ error: 'forbidden' });
     }
-    // Normalize incoming whatsappNumber: accept 10-digit numbers without country code
-    function normalizeForStore(num) {
-      if (!num) return null;
-      const digits = String(num).replace(/[^0-9]/g, '');
-      if (!digits) return null;
-      let d = digits.replace(/^0+/, '');
-      if (d.length === 10) d = `91${d}`;
-      return d;
-    }
-    const normalizedWhatsAppNumber = normalizeForStore(whatsappNumber);
-    const cleanGroupIds = Array.isArray(whatsappGroupIds) ? whatsappGroupIds.filter(x => typeof x === 'string') : undefined;
     const cleanTelegramChatIds = hasTelegramChatIds
       ? parseTelegramChatIds(telegramChatIds)
       : undefined;
@@ -14578,18 +14427,16 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
     if (hasBackupTime && !normalizedBackupTime) {
       return res.status(400).json({ error: 'backupTime must be in HH:mm format (00:00-23:59)' });
     }
-    // Try to upsert including whatsappNumber if DB supports it, otherwise fallback without it
+    // Persist notification settings while preserving compatibility with older schemas.
     try {
       const updateData = {
+        whatsappEnabled: false,
         ...actorUpdateFields(actorUserId),
       };
       if (hasBrandPrimary) updateData.brandPrimary = brandPrimary || '#2E4CA6';
       if (hasBrandGold) updateData.brandGold = brandGold || '#D4AF37';
       if (hasLogoDataUrl) updateData.logoDataUrl = logoDataUrl || null;
       if (hasFaviconDataUrl) updateData.faviconDataUrl = faviconDataUrl || null;
-      if (hasWhatsAppEnabled) updateData.whatsappEnabled = !!whatsappEnabled;
-      if (hasWhatsAppNumber) updateData.whatsappNumber = normalizedWhatsAppNumber || null;
-      if (hasWhatsAppGroupIds && cleanGroupIds !== undefined) updateData.whatsappGroupIds = cleanGroupIds;
       if (hasTelegramEnabled) updateData.telegramEnabled = !!telegramEnabled;
       if (hasTelegramBotToken && normalizedTelegramToken !== undefined) updateData.telegramBotToken = normalizedTelegramToken || null;
       if (hasTelegramChatIds && cleanTelegramChatIds !== undefined) updateData.telegramChatIds = cleanTelegramChatIds;
@@ -14614,10 +14461,8 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
         logoDataUrl: hasLogoDataUrl ? (logoDataUrl || null) : null,
         ...actorCreateFields(actorUserId),
       };
-      createData.whatsappEnabled = hasWhatsAppEnabled ? !!whatsappEnabled : true;
       if (hasFaviconDataUrl) createData.faviconDataUrl = faviconDataUrl || null;
-      if (hasWhatsAppNumber) createData.whatsappNumber = normalizedWhatsAppNumber || null;
-      if (hasWhatsAppGroupIds) createData.whatsappGroupIds = cleanGroupIds || [];
+      createData.whatsappEnabled = false;
       createData.telegramEnabled = hasTelegramEnabled ? !!telegramEnabled : false;
       if (hasTelegramBotToken && normalizedTelegramToken !== undefined) createData.telegramBotToken = normalizedTelegramToken || null;
       if (hasTelegramChatIds) createData.telegramChatIds = cleanTelegramChatIds || [];
@@ -14666,8 +14511,8 @@ router.put('/api/settings', requireEditPermission('settings'), async (req, res) 
       });
       return res.json(sanitizeSettingsForResponse(settings));
     } catch (innerErr) {
-      // Fallback: column may not exist yet (migration not applied). Persist without whatsappNumber
-      console.warn('Failed to upsert with whatsappNumber, retrying without it:', innerErr.message || innerErr);
+      // Compatibility fallback for older schemas.
+      console.warn('Failed to upsert full settings, retrying compatible fields:', innerErr.message || innerErr);
       const fallbackUpdate = { ...actorUpdateFields(actorUserId) };
       if (hasBrandPrimary) fallbackUpdate.brandPrimary = brandPrimary || '#2E4CA6';
       if (hasBrandGold) fallbackUpdate.brandGold = brandGold || '#D4AF37';
@@ -20878,8 +20723,8 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
 
     // Get settings and resolve channel routing
     const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    const { whatsappEnabled, telegramEnabled } = getNotificationChannelConfig(settings || {});
-    if (!whatsappEnabled && !telegramEnabled) {
+    const { telegramEnabled } = getNotificationChannelConfig(settings || {});
+    if (!telegramEnabled) {
       return res.json({
         ok: false,
         reason: 'no_enabled_channels',
@@ -20931,7 +20776,7 @@ router.post('/api/summary/:stage/:type/send', async (req, res) => {
   }
 });
 
-// GET /api/summary/:stage/:type/download - Generate PDF and download directly (no WhatsApp send)
+// GET /api/summary/:stage/:type/download - Generate PDF and download directly (no notification send)
 router.get('/api/summary/:stage/:type/download', async (req, res) => {
   try {
     const { stage, type } = req.params;
@@ -21454,133 +21299,9 @@ router.get('/api/boiler/steamed', requirePermission('boiler', PERM_READ), async 
   }
 });
 
-// ========== DOCUMENT SEND VIA WHATSAPP ==========
-
-// Configure multer for memory storage (no disk persistence)
-const documentUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 16 * 1024 * 1024 }, // 16MB max
-  fileFilter: (req, file, cb) => {
-    const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'];
-    if (allowedMimes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only images and PDFs are allowed.'));
-    }
-  }
-});
-
-// Send document via enabled notification channels
-router.post('/api/documents/send', requireAuth, requirePermission('send_documents', PERM_WRITE), documentUpload.single('file'), async (req, res) => {
-  try {
-    const { customerId, phone, caption, customerName } = req.body;
-    const file = req.file;
-    const settings = await prisma.settings.findUnique({ where: { id: 1 } });
-    const { whatsappEnabled } = getNotificationChannelConfig(settings || {});
-
-    if (!file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-    if (!whatsappEnabled) {
-      return res.status(400).json({ error: 'WhatsApp notifications are disabled' });
-    }
-    const resolvedPhone = String(phone || '').trim();
-    if (!resolvedPhone) {
-      return res.status(400).json({ error: 'Phone number is required' });
-    }
-
-    const finalCaption = await appendCreatorToCaption(caption || '', req.user?.id || null);
-    await whatsapp.sendMediaSafe(
-      resolvedPhone,
-      file.buffer,
-      file.originalname,
-      file.mimetype,
-      finalCaption
-    );
-    persistNotificationDeliveryLogs({
-      event: 'documents_send',
-      templateEvent: null,
-      templateId: null,
-      source: 'documents_send',
-      channels: {
-        whatsapp: {
-          enabled: true,
-          recipients: [{ type: 'number', value: resolvedPhone }],
-          results: [{ recipient: resolvedPhone, type: 'number', success: true }],
-          ok: true,
-          reason: null,
-        },
-      },
-      createdByUserId: req.user?.id || null,
-    }).catch(() => { });
-
-    // Resolve or create customer after successful dispatch
-    let customer = null;
-    if (customerId) {
-      customer = await prisma.customer.findUnique({ where: { id: customerId } });
-    }
-    if (!customer) {
-      customer = await prisma.customer.findFirst({ where: { phone: resolvedPhone } });
-    }
-    if (!customer) {
-      customer = await prisma.customer.create({
-        data: {
-          name: (customerName || resolvedPhone || '').trim() || 'Unknown',
-          phone: resolvedPhone || null
-        }
-      });
-    }
-
-    // Save metadata only (no file content)
-    const docMessage = await prisma.documentMessage.create({
-      data: {
-        customerId: customer.id,
-        phone: resolvedPhone,
-        filename: file.originalname,
-        mimetype: file.mimetype,
-        fileSize: file.size,
-        caption: caption || null,
-        createdByUserId: req.user?.id || null,
-      },
-      include: { customer: true }
-    });
-
-    res.json({
-      ok: true,
-      message: docMessage,
-      channels: {
-        whatsapp: {
-          enabled: true,
-          recipients: [{ type: 'number', value: resolvedPhone }],
-          results: [{ recipient: resolvedPhone, type: 'number', success: true }],
-          ok: true,
-          reason: null,
-        },
-      },
-    });
-  } catch (err) {
-    console.error('Failed to send document', err);
-    const failedPhone = String(req.body?.phone || '').trim();
-    if (failedPhone) {
-      persistNotificationDeliveryLogs({
-        event: 'documents_send',
-        templateEvent: null,
-        templateId: null,
-        source: 'documents_send',
-        channels: {
-          whatsapp: {
-            enabled: true,
-            recipients: [{ type: 'number', value: failedPhone }],
-            results: [{ recipient: failedPhone, type: 'number', success: false, error: err?.message || String(err) }],
-            ok: false,
-            reason: 'send_failed',
-          },
-        },
-        createdByUserId: req.user?.id || null,
-      }).catch(() => { });
-    }
-    res.status(500).json({ error: err.message || 'Failed to send document' });
-  }
+// Historical customer document sends remain available after WhatsApp retirement.
+router.post('/api/documents/send', requireAuth, requirePermission('send_documents', PERM_WRITE), (req, res) => {
+  res.status(410).json({ error: 'Direct WhatsApp document sending has been removed. Use Telegram summary notifications.' });
 });
 
 // Get document send history

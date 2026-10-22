@@ -4,11 +4,10 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 
 import prisma from '../../lib/prisma.js';
-import whatsapp from '../../../whatsapp/service.js';
 import telegram from '../../../telegram/service.js';
-import { buildTelegramMessage, buildWhatsappMessage, sendNotification } from '../notifications.js';
+import { buildTelegramMessage, sendNotification } from '../notifications.js';
 import { runPrimarySequence } from '../telegramScheduler.js';
-import { interpolateTelegramTemplate, interpolateTemplate } from '../whatsappTemplates.js';
+import { interpolateTelegramTemplate, interpolateTemplate } from '../notificationTemplates.js';
 
 // Prisma model delegates are proxies without method property descriptors.
 function stubPrisma(t, target, method, implementation) {
@@ -18,7 +17,7 @@ function stubPrisma(t, target, method, implementation) {
 }
 
 const event = 'receive_from_coning_machine_created';
-const seed = readFileSync(new URL('../../../scripts/seedWhatsappTemplates.mjs', import.meta.url), 'utf8');
+const seed = readFileSync(new URL('../../../scripts/seedNotificationTemplates.mjs', import.meta.url), 'utf8');
 // Evaluate just the default's string expression; never import or run the seed.
 const expression = seed.split(`event: '${event}'`)[1].match(/template: ([\s\S]+?)\n    },/)[1];
 const template = runInNewContext(expression);
@@ -33,14 +32,8 @@ function boldSections(message) {
   return message.entities.map(({ offset, length }) => message.text.slice(offset, offset + length));
 }
 
-test('Coning Receive default renders Shift before Date and preserves WhatsApp markup', async () => {
-  const whatsappMessage = await buildWhatsappMessage(template, payload);
+test('Coning Receive renders Shift before Date with Telegram bold entities', async () => {
   const message = await buildTelegramMessage(template, payload);
-  assert.equal(whatsappMessage, '*Coning Receive Confirmation*\n\n'
-    + `📦 *Item:* ${payload.itemName}\n`
-    + '🔢 *Lot:* 167\n⚖️ *Net Weight:* *12.346 kg*\n🍦 *Cones:* 24\n'
-    + '🏗️ *Machine:* C-1\n👤 *Operator:* Ravi\n🏷️ *Barcode:* RCO-42-C001\n'
-    + '🕒 *Shift:* Night\n📅 *Date:* 16/10/2026');
   assert.equal(message.text, 'Coning Receive Confirmation\n\n'
     + `📦 Item: ${payload.itemName}\n`
     + '🔢 Lot: 167\n⚖️ Net Weight: 12.346 kg\n🍦 Cones: 24\n'
@@ -99,9 +92,9 @@ test('Creator labels stay literal and explicit creator variables do not get dupl
   assert.deepEqual(boldSections(explicit), ['By:', 'Ravi *Lead* & <team> (ravi)']);
 });
 
-test('Notification delivery sends native entities to Telegram and unchanged text to WhatsApp', async (t) => {
+test('Notification delivery preserves Telegram entities and ignores legacy WhatsApp configuration', async (t) => {
   const requests = [];
-  const whatsappSends = [];
+  const deliveryRows = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     requests.push({ url, body: JSON.parse(options.body) });
     return { ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) };
@@ -115,17 +108,17 @@ test('Notification delivery sends native entities to Telegram and unchanged text
     whatsappEnabled: true, whatsappNumber: 'fixture-number', whatsappGroupIds: ['wa-allowed'],
     telegramEnabled: true, telegramChatIds: ['tg-allowed'], telegramBotToken: 'fixture-token',
   }));
-  stubPrisma(t, prisma.notificationDeliveryLog, 'createMany', async () => ({ count: 3 }));
-  t.mock.method(whatsapp, 'sendTextSafe', async (...args) => whatsappSends.push(args));
-  t.mock.method(whatsapp, 'sendToChatIdSafe', async (...args) => whatsappSends.push(args));
+  stubPrisma(t, prisma.notificationDeliveryLog, 'createMany', async ({ data }) => { deliveryRows.push(...data); return { count: data.length }; });
   // Keep notification timeout promises from holding the test process open.
   const setTimeout = globalThis.setTimeout;
   t.mock.method(globalThis, 'setTimeout', (...args) => setTimeout(...args).unref());
 
   const result = await sendNotification(event, payload);
   assert.equal(result.ok, true);
-  const expectedWhatsapp = await buildWhatsappMessage(template, payload);
-  assert.deepEqual(whatsappSends, [['fixture-number', expectedWhatsapp], ['wa-allowed', expectedWhatsapp]]);
+  assert.deepEqual(Object.keys(result.channels), ['telegram']);
+  assert.equal(deliveryRows.length, 1);
+  assert.equal(deliveryRows[0].channel, 'telegram');
+  assert.equal(deliveryRows[0].status, 'success');
   assert.equal(requests.length, 1, 'template routing still intersects the allow-list');
   assert.match(requests[0].url, /\/botfixture-token\/sendMessage$/);
   const body = requests[0].body;
@@ -155,4 +148,19 @@ test('Ordinary Telegram and cron sends remain plain even when text has stars and
   for (const body of requests) {
     assert.deepEqual(body, { chat_id: 'fixture-chat', text, disable_web_page_preview: true });
   }
+});
+
+
+test('Disabled Telegram never falls back to retired WhatsApp settings', async (t) => {
+  const rows = [];
+  stubPrisma(t, prisma.whatsappTemplate, 'findUnique', async () => ({ id: 7, event, enabled: true, template, telegramChatIds: ['tg-allowed'] }));
+  stubPrisma(t, prisma.settings, 'findUnique', async () => ({ whatsappEnabled: true, whatsappNumber: 'legacy', telegramEnabled: false }));
+  stubPrisma(t, prisma.notificationDeliveryLog, 'createMany', async ({ data }) => { rows.push(...data); return { count: data.length }; });
+  t.mock.method(globalThis, 'fetch', async () => { assert.fail('No channel should send'); });
+  const result = await sendNotification(event, payload);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'no_enabled_channels');
+  assert.deepEqual(Object.keys(result.channels), ['telegram']);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].reason, 'channel_disabled');
 });

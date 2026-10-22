@@ -65,9 +65,9 @@ Environment knobs:
 Persistent data:
 
 - Database storage lives in the `postgres-data` named volume.
-- WhatsApp auth sessions persist in the `backend-whatsapp-auth` volume so you only need to scan the QR code once per environment.
+- Telegram handles production notifications; WhatsApp and its browser runtime are retired.
 
-Use `docker compose logs -f backend` to watch the API (and WhatsApp) logs, and `docker compose down -v` if you need to reset all state.
+Use `docker compose logs -f backend` to watch the API logs, and `docker compose down -v` if you need to reset all state.
 
 ## Build
 

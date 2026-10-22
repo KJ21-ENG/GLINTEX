@@ -1,2 +1,7 @@
 # Private installers are mounted at runtime, never baked into a backend image.
 scripts/private-desktop-releases
+
+node_modules
+.env
+.wwebjs_auth
+.wwebjs_cache

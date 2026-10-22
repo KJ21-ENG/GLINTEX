@@ -50,7 +50,7 @@ export async function fixture(rolePermissions = { 'receive.cutter': 2 }, roleKey
   vm.runInContext(section("router.post('/api/auth/login'", "router.post('/api/auth/bootstrap'"), context);
   router.use(context.requireAuth);
   vm.runInContext(section("router.get('/api/auth/me'", '// ===== Admin: Users & Roles ====='), context);
-  vm.runInContext(section('// Sticker template endpoints', "router.put('/api/whatsapp/templates/:event'"), context);
+  vm.runInContext(section('// Sticker template endpoints', "router.put(['/api/notifications/templates/:event'"), context);
   router.post('/fixture/receive', context.requirePermission('receive.cutter', 2), (_, res) => res.json({ ok: true }));
   router.post('/fixture/settings', context.requirePermission('settings', 2), (_, res) => res.json({ ok: true }));
   const app = express(); app.use(express.json(), cookieParser(), router);

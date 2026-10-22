@@ -42,7 +42,7 @@ const NAV_ITEMS = [
   { key: "opening-stock", label: "Opening Stock", icon: ClipboardPlus, permissions: ["opening_stock"] },
   { key: "box-transfer", label: "Box Transfer", icon: ArrowRightLeft, permissions: ["box_transfer"] },
   { key: "boiler", label: "Boiler (Steaming)", icon: Flame, process: "holo", permissions: ["boiler"] },
-  { key: "send-documents", label: "Send Documents", icon: FileText, permissions: ["send_documents"] },
+  { key: "send-documents", label: "Document History", icon: FileText, permissions: ["send_documents"] },
   { key: "masters", label: "Masters", icon: Database, permissions: ["masters"] },
   { key: "contractor-payments", label: "Contractor Payments", icon: Wallet, permissions: ["contractor_payments"] },
   { key: "reports", label: "Reports", icon: BarChart3, permissions: ["reports"] },

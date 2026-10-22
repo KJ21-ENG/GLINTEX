@@ -9,5 +9,7 @@ The repo contains `docker-compose.yml` and `docker-compose.prod.yml` orchestrati
 ## Infrastructure
 The backend connects directly to PostgreSQL and hosts the Google API OAuth endpoints for Drive Syncing. Port `3000` is default for backend processing while Frontend Vite serves UI static bundles routing internally.
 
-## Web JS 
-Whatsapp-web.js maintains session tokens locally. Directory `.wwebjs_auth` must not be cleared unexpectedly. 
+## Notifications
+Telegram is the messaging integration. WhatsApp and its Chromium runtime were retired on 2026-10-22.
+Existing notification templates and delivery/document history remain in their original database tables.
+Legacy template API aliases serve Telegram configuration for existing desktop clients; retired WhatsApp connection and sending controls return HTTP 410.

@@ -1,31 +1,12 @@
-# Build image for the backend API with puppeteer/whatsapp support
+# Backend API and Telegram notifications; no browser runtime required.
 # Base stays on Debian bookworm: bullseye is EOL and its security pool no longer
 # serves the packages this image installs.
 FROM node:20-bookworm AS base
 
-# Install Chromium and libraries required by whatsapp-web.js/puppeteer
-# Also install postgresql-client-17 for pg_dump backups (must match server version)
+# PostgreSQL client 17 is required for database backups.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    chromium \
     ca-certificates \
-    fonts-liberation \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libasound2 \
-    libdrm2 \
-    libgbm1 \
-    libgtk-3-0 \
-    libnss3 \
-    libx11-xcb1 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxkbcommon0 \
-    libxrandr2 \
-    libxrender1 \
-    libxshmfence1 \
-    libxss1 \
     wget \
     gnupg \
     lsb-release \
@@ -51,12 +32,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package*.json ./
 COPY prisma ./prisma
 COPY src ./src
-COPY whatsapp ./whatsapp
 COPY telegram ./telegram
 COPY scripts ./scripts
-COPY backups ./backups
 
-RUN mkdir -p /app/.wwebjs_auth && chown -R node:node /app
+RUN mkdir -p /app/backups /app/logs && chown -R node:node /app
 USER node
 
 ENV PORT=4000

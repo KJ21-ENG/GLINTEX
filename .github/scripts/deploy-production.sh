@@ -282,7 +282,7 @@ if ((agent_enabled)); then
 fi
 
 docker run --rm --entrypoint sh "$candidate_backend_image" -ec \
-  'test -f /app/backups/.release-context; test "$(find /app/backups -mindepth 1 -type f | wc -l)" -eq 1' \
+  'test "$(find /app/backups -mindepth 1 -type f | wc -l)" -eq 0' \
   </dev/null
 "${build_compose[@]}" run --rm --no-deps -T backend \
   npx prisma validate </dev/null

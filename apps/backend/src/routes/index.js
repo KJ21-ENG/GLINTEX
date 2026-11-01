@@ -2656,6 +2656,7 @@ async function buildHoloSourceLookupPayload(row) {
       itemName,
       vchNo: row.vchNo,
       barcode: row.barcode,
+      cutterOperatorName: cutterOperatorNameOf(row),
       legacyBarcode: row.notes || null,
       notes: row.notes || '',
       bobbinId: row.bobbinId || null,
@@ -2837,6 +2838,22 @@ async function buildConingSourceLookupPayload(row, sourceStage = 'holo') {
   };
 }
 
+const cutterOperatorSelect = { operator: { select: { name: true } } };
+const cutterOperatorNameOf = (row) => row?.operator?.name || row?.employee || '';
+
+// A holo issue can draw on several lots, but barcode history follows only one of them, so the
+// cutter operators are listed on the issue: Reports is where a "Multiple Operators" label is read.
+async function holoIssueCutterOperators(issue) {
+  const rowIds = parseJsonArraySafe(issue?.receivedRowRefs).map((ref) => ref?.rowId).filter(Boolean);
+  if (rowIds.length === 0) return null;
+  const rows = await prisma.receiveFromCutterMachineRow.findMany({
+    where: { id: { in: rowIds }, isDeleted: false },
+    select: { employee: true, ...cutterOperatorSelect },
+  });
+  const names = new Set(rows.map((row) => cutterOperatorNameOf(row).trim()).filter(Boolean));
+  return names.size > 0 ? [...names].join(', ') : null;
+}
+
 async function buildHoloIssueLookupPayload(issue) {
   const refs = parseJsonArraySafe(issue?.receivedRowRefs);
   const allSourceIds = Array.from(new Set(
@@ -2854,6 +2871,7 @@ async function buildHoloIssueLookupPayload(issue) {
           bobbin: { select: { id: true, name: true, weight: true } },
           box: { select: { id: true, name: true, weight: true } },
           cutMaster: { select: { id: true, name: true } },
+          ...cutterOperatorSelect,
         },
       })
       : [],
@@ -2900,6 +2918,7 @@ async function buildHoloIssueLookupPayload(issue) {
       date: row.date,
       barcode: row.barcode || ref.barcode || null,
       vchNo: row.vchNo,
+      cutterOperatorName: cutterOperatorNameOf(row),
       pieceId: row.pieceId,
       lotNo: piece?.lotNo || issue.lotNo || '',
       itemId: piece?.itemId || issue.itemId || null,
@@ -9990,6 +10009,7 @@ router.get('/api/issue_to_holo_machine/source-row/lookup', requirePermission('is
       bobbin: { select: { id: true, name: true, weight: true } },
       box: { select: { id: true, name: true, weight: true } },
       cutMaster: { select: { id: true, name: true } },
+      ...cutterOperatorSelect,
     };
     const barcodeRows = await prisma.receiveFromCutterMachineRow.findMany({
       where: {
@@ -16596,6 +16616,7 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
       const nodeData = {
         issueId: issue.id, lotNo: issue.lotNo,
         machineName: issue.machine?.name || null, operatorName: issue.operator?.name || null,
+        cutterOperators: await holoIssueCutterOperators(issue),
         yarnName: resolved.yarnName || null, twistName: resolved.twistName || null,
         cutName: resolved.cutName || null,
         yarnKg: resolved.yarnKg != null ? resolved.yarnKg : (Number.isFinite(Number(issue.yarnKg)) ? Number(issue.yarnKg) : null),
@@ -17250,6 +17271,7 @@ router.get('/api/reports/barcode-history/:barcode', requirePermission('reports',
           lotNo: issue.lotNo,
           machineName: issue.machine?.name || null,
           operatorName: issue.operator?.name || null,
+          cutterOperators: await holoIssueCutterOperators(issue),
           yarnName: resolved.yarnName || null,
           twistName: resolved.twistName || null,
           cutName: resolved.cutName || null,

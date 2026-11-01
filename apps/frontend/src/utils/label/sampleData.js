@@ -4,7 +4,7 @@ import { getStageVariables } from './stages.js';
 const TYPICAL = {
   lotNo: '182', itemName: 'POLYESTER METALLIC SILVER', firmName: 'GLINTEX', supplierName: 'SHREE RAM POLYFILMS',
   pieceId: '182-4', seq: '4', weight: 12.345, date: '2026-10-10', barcode: 'RCO-240-003-C001', barcodeNumber: 'RCO-240-003-C001',
-  inboundDate: '2026-10-02', cut: '1/64', count: 6, totalWeight: 72.4, machineName: 'CUTTER 3', operatorName: 'RAMESH KUMAR',
+  inboundDate: '2026-10-02', cut: '1/64', count: 6, totalWeight: 72.4, machineName: 'CUTTER 3', operatorName: 'RAMESH KUMAR', cutterWorkerName: 'RAM NIVAS',
   netWeight: 11.82, grossWeight: 12.475, tareWeight: 0.655, bobbinQty: 20, bobbinName: 'PLASTIC 20', boxName: 'BOX 7',
   cutName: '1/64', helperName: 'SURESH', shift: 'DAY', totalRolls: 8, bobbinType: 'PLASTIC', yarnKg: 1.25, twistName: '120',
   twist: '120 TPM', yarnName: 'POLYESTER 150D', rollCount: 2, rollType: 'HOLO', coneType: 'PAPER CONE', wrapperName: 'THELI 5 KG',
@@ -16,7 +16,7 @@ const LONG = {
   ...TYPICAL,
   itemName: 'POLYESTER METALLIC SILVER EXTRA LONG MATERIAL NAME WITH SPECIFICATION',
   supplierName: 'SHREE RAM POLYFILMS AND PACKAGING PRIVATE LIMITED',
-  operatorName: 'RAMESHCHANDRA MAHESHBHAI PATEL',
+  operatorName: 'RAMESHCHANDRA MAHESHBHAI PATEL', cutterWorkerName: 'RAMESHCHANDRA MAHESHBHAI PATEL',
   machineName: 'CUTTER MACHINE 12 (NEW)', yarnName: 'POLYESTER 150D/48F BRIGHT',
   barcode: 'RCO-240123-003-C012', barcodeNumber: 'RCO-240123-003-C012', issueBarcode: 'ICO-240123-003',
   wrapperName: 'THELI 5 KG PRINTED', coneType: 'PLASTIC CONE LARGE', netWeight: 1234.567, grossWeight: 1235.222, totalWeight: 2469.134,

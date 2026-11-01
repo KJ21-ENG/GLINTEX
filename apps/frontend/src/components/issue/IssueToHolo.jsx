@@ -4,6 +4,7 @@ import { Button, Input, Select, Card, CardContent, CardHeader, CardTitle, Label,
 import { formatKg, todayISO } from '../../utils';
 import * as api from '../../api';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate } from '../../utils/labelPrint';
+import { formatCutterWorkers } from '../../utils/label/cutterWorkers';
 import { BarcodeScanDialog } from '../scanner/BarcodeScanDialog';
 import { useSubmitLock } from '../../hooks/useSubmitLock';
 import { useUnsavedGuard } from '../../context/UnsavedChangesContext';
@@ -188,6 +189,7 @@ export function IssueToHolo() {
             setCrates(prev => [...prev, {
                 rowId: source.rowId,
                 barcode: source.barcode || normalized,
+                cutterOperatorName: source.row.cutterOperatorName,
                 lotNo: source.lotNo,
                 pieceId: source.pieceId,
                 itemId: source.itemId,
@@ -264,6 +266,7 @@ export function IssueToHolo() {
                     itemName: snapshot.itemName,
                     machineName: snapshot.machineName,
                     operatorName: snapshot.operatorName,
+                    cutterWorkerName: snapshot.cutterWorkerName,
                     shift: snapshot.shift,
                     totalRolls: snapshot.totalRolls,
                     totalWeight: snapshot.totalWeight,
@@ -300,6 +303,7 @@ export function IssueToHolo() {
             itemName: firstCrate.itemName || (db.items || []).find((item) => item.id === lotSummary.itemId)?.name || '',
             machineName: (db.machines || []).find((machine) => machine.id === form.machineId)?.name || '',
             operatorName: (db.operators || []).find((operator) => operator.id === form.operatorId)?.name || '',
+            cutterWorkerName: formatCutterWorkers(crates.map((crate) => crate.cutterOperatorName)),
             twistName: (db.twists || []).find((twist) => twist.id === form.twistId)?.name || '',
             yarnName: (db.yarns || []).find((yarn) => yarn.id === form.yarnId)?.name || '',
             bobbinType: firstCrate.bobbinName || '',

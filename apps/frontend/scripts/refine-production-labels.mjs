@@ -119,6 +119,7 @@ T.holo_issue = { version: 2, media: L75, copies: 2, elements: [
   ...pair('L', 2, 11.5, 'CUT', '@cut'),
   ...pair('L', 3, 11.5, 'BOB', '@bobbinType'),
   ...pair('L', 4, 11.5, 'NET WT', '@netWeight', { ...big, value: { h: 7 } }),
+  ...pair('L', 5, 11.5, 'C. WORKER', '@cutterWorkerName', { id: 'cutter-worker' }),
   ...pair('R', 0, 11.5, 'SHIFT', '@shift'),
   ...pair('R', 1, 11.5, 'YARN', '@yarnName'),
   ...pair('R', 2, 11.5, 'TWIST', '@twistName'),

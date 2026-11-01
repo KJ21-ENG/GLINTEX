@@ -107,6 +107,7 @@ export const STAGE_VARIABLES = {
     { key: 'yarnName', label: 'Yarn' },
     { key: 'machineName', label: 'Machine' },
     { key: 'operatorName', label: 'Operator' },
+    { key: 'cutterWorkerName', label: 'C. Worker' },
     { key: 'shift', label: 'Shift' },
     { key: 'date', label: 'Date' },
     { key: 'barcode', label: 'Issue Barcode' },

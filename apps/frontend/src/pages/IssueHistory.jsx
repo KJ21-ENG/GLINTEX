@@ -11,6 +11,7 @@ import { HighlightMatch } from '../components/common/HighlightMatch';
 import { WastageNoteDialog } from '../components/stock/WastageNoteDialog';
 import { InfoPopover } from '../components/common/InfoPopover';
 import { LABEL_STAGE_KEYS, printStageTemplate, loadTemplate, printStageTemplatesBatch } from '../utils/labelPrint';
+import { formatCutterWorkers } from '../utils/label/cutterWorkers';
 import { exportHistoryToExcel } from '../services';
 import { useSubmitLock } from '../hooks/useSubmitLock';
 import { UserBadge } from '../components/common/UserBadge';
@@ -906,6 +907,7 @@ export function IssueHistory({ db, canEdit = false, canDelete = false }) {
           itemName: names.itemName === '—' ? (exactRow.itemName || '') : names.itemName,
           machineName: exactRow.machineName || db.machines?.find(m => m.id === exactRow.machineId)?.name || '',
           operatorName: exactRow.operatorName || db.operators?.find(o => o.id === exactRow.operatorId)?.name || '',
+          cutterWorkerName: formatCutterWorkers(sources.map((source) => source.cutterOperatorName)),
           yarnName: names.yarnName === '—' ? (exactRow.yarnName || '') : names.yarnName,
           twistName: names.twistName === '—' ? (exactRow.twistName || '') : names.twistName,
           bobbinType,

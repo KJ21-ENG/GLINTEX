@@ -352,11 +352,11 @@ function TreeNode({
                         !['pieceId', 'issueId', 'receiveId', 'dispatchId'].includes(key)
                       )
                       .map(([key, value]) => (
-                        <div key={key} className="bg-muted/50 p-1.5 rounded">
+                        <div key={key} className={cn("bg-muted/50 p-1.5 rounded", key === 'cutterOperators' && "col-span-2")}>
                           <div className="text-muted-foreground text-[10px] capitalize">
                             {key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase())}
                           </div>
-                          <div className="font-medium truncate text-[11px]">
+                          <div className={cn("font-medium text-[11px]", key === 'cutterOperators' ? "break-words" : "truncate")}>
                             {typeof value === 'number' && key.toLowerCase().includes('weight')
                               ? formatKg(value)
                               : String(value || '—')}

@@ -12,6 +12,7 @@ import { DEFAULT_STAGE_TEMPLATES, FACTORY_VARIANTS, CALIBRATION_TEMPLATE, getDef
 import { LABEL_STAGE_KEYS, STAGE_VARIABLES } from '../label/stages.js';
 import { buildSampleData } from '../label/sampleData.js';
 import { fontFamilyCss } from '../label/model.js';
+import { formatCutterWorkers } from '../label/cutterWorkers.js';
 
 const measurer = createEstimateMeasurer();
 
@@ -377,4 +378,21 @@ test('holo two-sticker variant prints two complete copies of each issue on one l
       assert.ok(!artifact.pages[index].html.includes(`>${issues[1 - index].barcode}<`), 'different issues stay on separate labels');
     });
   }
+});
+
+test('C. Worker: one in full, two cut to three letters, more than two named Multiple Operators', () => {
+  assert.equal(formatCutterWorkers(['Ram Nivas']), 'Ram Nivas');
+  assert.equal(formatCutterWorkers(['Ram Nivas', 'ram nivas ', null, 'No Operator']), 'ram nivas');
+  assert.equal(formatCutterWorkers(['Ram Nivas', 'Shankar']), 'RAM.., SHA..');
+  assert.equal(formatCutterWorkers(['Om Prakash', 'Shankar']), 'OM.., SHA..');
+  assert.equal(formatCutterWorkers(['Ram Nivas', 'Shankar', 'Upendra']), 'Multiple Operators');
+  assert.equal(formatCutterWorkers([null, '']), '');
+});
+
+test('every factory Issue to Holo design prints the C. Worker field', () => {
+  const designs = [DEFAULT_STAGE_TEMPLATES[LABEL_STAGE_KEYS.HOLO_ISSUE], ...FACTORY_VARIANTS[LABEL_STAGE_KEYS.HOLO_ISSUE].map((variant) => variant.template)];
+  for (const design of designs) {
+    assert.ok(design.elements.some((element) => /@cutterWorkerName/.test(element.text || '')));
+  }
+  assert.ok(STAGE_VARIABLES[LABEL_STAGE_KEYS.HOLO_ISSUE].some((variable) => variable.key === 'cutterWorkerName'));
 });

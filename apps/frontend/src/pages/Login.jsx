@@ -2,12 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
+import { resolvePostLoginPath } from '../utils/landing';
 
 export function Login() {
   const { loading, user, needsBootstrap, error: authError, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = useMemo(() => location.state?.from?.pathname || '/app/inbound', [location.state]);
+  const from = useMemo(() => location.state?.from?.pathname || '/app', [location.state]);
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -42,7 +43,7 @@ export function Login() {
   }, []);
 
   if (!loading && user) {
-    return <Navigate to={from} replace />;
+    return <Navigate to={resolvePostLoginPath(user, from)} replace />;
   }
 
   async function handleSubmit(e) {
@@ -50,8 +51,8 @@ export function Login() {
     setSubmitting(true);
     setError(null);
     try {
-      await login({ username, password });
-      navigate(from, { replace: true });
+      const nextUser = await login({ username, password });
+      navigate(resolvePostLoginPath(nextUser, from), { replace: true });
     } catch (err) {
       setError(err?.message || 'Login failed');
     } finally {

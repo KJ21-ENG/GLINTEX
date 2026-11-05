@@ -1,6 +1,7 @@
 import React from "react";
 import { createBrowserRouter, redirect } from "react-router-dom";
 import ProtectedAppLayout from "./ProtectedAppLayout.jsx";
+import AppLanding from "./AppLanding.jsx";
 
 // We will import the pages directly. 
 // Note: They will be broken until refactored in the next steps, 
@@ -34,7 +35,7 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        loader: () => redirect("/app/inbound"),
+        element: <AppLanding />,
       },
       {
         path: "scale-test",
@@ -164,11 +165,11 @@ export const router = createBrowserRouter([
   },
   {
     path: "/",
-    loader: () => redirect("/app/inbound"),
+    loader: () => redirect("/app"),
   },
   {
     path: "*",
-    loader: () => redirect("/app/inbound"),
+    loader: () => redirect("/app"),
   },
 ]);
 
